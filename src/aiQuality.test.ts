@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { assessAiQuality } from './aiQuality'
+import type { DatasetReadiness } from './aiEvaluation'
 
-const passing = () => assessAiQuality(
+const readyDataset: DatasetReadiness = {
+  ready: true,
+  total: 320,
+  confirmed: 320,
+  testExamples: 64,
+  categories: 10,
+  missingRequirements: [],
+}
+
+const passing = (dataset: DatasetReadiness = readyDataset) => assessAiQuality(
   {
     macroF1: .87,
     highConfidencePrecision: .94,
@@ -26,6 +36,7 @@ const passing = () => assessAiQuality(
     uncertaintyCoverage: .84,
     refusesInsufficientHistory: true,
   },
+  dataset,
 )
 
 describe('AI production quality gates', () => {
@@ -34,6 +45,13 @@ describe('AI production quality gates', () => {
     expect(report.productionReady).toBe(true)
     expect(report.score).toBeGreaterThanOrEqual(80)
     expect(report.failed).toEqual([])
+  })
+
+  it('blocks promotion when the evaluation dataset is incomplete', () => {
+    const report = passing({ ...readyDataset, ready: false, total: 120, missingRequirements: ['Mindestens 300 Beispiele'] })
+    expect(report.productionReady).toBe(false)
+    expect(report.score).toBeLessThan(80)
+    expect(report.failed).toContain('Evaluationsdatensatz vollständig und menschlich bestätigt')
   })
 
   it('blocks promotion when accuracy, runtime, or forecasting evidence is weak', () => {
@@ -62,6 +80,7 @@ describe('AI production quality gates', () => {
         uncertaintyCoverage: .5,
         refusesInsufficientHistory: false,
       },
+      readyDataset,
     )
 
     expect(report.productionReady).toBe(false)
