@@ -3,6 +3,7 @@ import { BrainCircuit, Check, LoaderCircle, ScanSearch, ShieldCheck, Sparkles, W
 import { classifyTransaction, generateInsights, HUGGING_FACE_MODEL, type AiSuggestion } from './ai'
 import { formatMoney } from './finance'
 import type { Transaction } from './types'
+import './ai.css'
 
 interface AiPanelProps {
   transactions: Transaction[]
