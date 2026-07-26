@@ -1,3 +1,5 @@
+import { normalizeSignedAmount } from './cobol-engine.js'
+
 const GC_BASE = 'https://bankaccountdata.gocardless.com/api/v2'
 const PAYPAL_SANDBOX = 'https://api-m.sandbox.paypal.com'
 const PAYPAL_LIVE = 'https://api-m.paypal.com'
@@ -8,6 +10,12 @@ async function jsonFetch(url, options = {}) {
   const body = text ? JSON.parse(text) : {}
   if (!response.ok) throw new Error(`${response.status} ${body.detail ?? body.error_description ?? body.error ?? 'Provider request failed'}`)
   return body
+}
+
+function decimalToCents(value) {
+  const cents = Math.round(Number(value) * 100)
+  if (!Number.isSafeInteger(cents)) throw new Error('Provider returned an invalid monetary amount.')
+  return cents
 }
 
 export async function gocardlessToken(env) {
@@ -48,15 +56,17 @@ export async function syncGoCardless(credential, env) {
     ])
     const account = details.account ?? {}
     const balance = balances.balances?.find((item) => item.balanceAmount?.currency === 'EUR')?.balanceAmount?.amount ?? '0'
-    accounts.push({ externalId: accountId, name: account.name || account.product || account.iban || 'Bankkonto', type: 'checking', balanceCents: Math.round(Number(balance) * 100), currency: 'EUR' })
+    accounts.push({ externalId: accountId, name: account.name || account.product || account.iban || 'Bankkonto', type: 'checking', balanceCents: decimalToCents(balance), currency: 'EUR' })
     for (const [pending, rows] of [[false, tx.transactions?.booked ?? []], [true, tx.transactions?.pending ?? []]]) {
       for (const item of rows) {
         if (item.transactionAmount?.currency !== 'EUR') continue
+        const signedCents = decimalToCents(item.transactionAmount.amount)
+        await normalizeSignedAmount(signedCents, env)
         transactions.push({
           externalId: item.transactionId || `${accountId}:${item.bookingDate || item.valueDate}:${item.transactionAmount.amount}:${item.remittanceInformationUnstructured || ''}`,
           externalAccountId: accountId,
           description: item.creditorName || item.debtorName || item.remittanceInformationUnstructured || item.additionalInformation || 'Banktransaktion',
-          amountCents: Math.round(Number(item.transactionAmount.amount) * 100), currency: 'EUR',
+          amountCents: signedCents, currency: 'EUR',
           bookingDate: item.bookingDate || item.valueDate || new Date().toISOString().slice(0, 10), pending,
         })
       }
@@ -101,9 +111,10 @@ export async function syncPayPal(credential, env) {
   for (const row of report.transaction_details ?? []) {
     const info = row.transaction_info ?? {}
     if (info.transaction_amount?.currency_code !== 'EUR') continue
-    const amountCents = Math.round(Number(info.transaction_amount.value) * 100)
-    balanceCents += amountCents
-    transactions.push({ externalId: info.transaction_id, externalAccountId: 'paypal-eur', description: info.transaction_subject || info.transaction_note || info.transaction_event_code || 'PayPal', amountCents, currency: 'EUR', bookingDate: String(info.transaction_initiation_date || '').slice(0, 10), pending: info.transaction_status === 'P' })
+    const signedCents = decimalToCents(info.transaction_amount.value)
+    await normalizeSignedAmount(signedCents, env)
+    balanceCents += signedCents
+    transactions.push({ externalId: info.transaction_id, externalAccountId: 'paypal-eur', description: info.transaction_subject || info.transaction_note || info.transaction_event_code || 'PayPal', amountCents: signedCents, currency: 'EUR', bookingDate: String(info.transaction_initiation_date || '').slice(0, 10), pending: info.transaction_status === 'P' })
   }
   return { accounts: [{ externalId: 'paypal-eur', name: 'PayPal EUR', type: 'cash', balanceCents, currency: 'EUR' }], transactions, credential }
 }
