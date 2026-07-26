@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AiSuggestion } from './ai'
-import { buildAiReviewSummary, isTrustedSuggestion, matchesAiReviewFilter } from './aiReview'
+import { buildAiReviewSummary, isTrustedSuggestion, matchesAiReviewFilter, requiresHumanReview } from './aiReview'
 
 const suggestion = (overrides: Partial<AiSuggestion> = {}): AiSuggestion => ({
   category: 'Lebensmittel',
@@ -16,16 +16,19 @@ const suggestion = (overrides: Partial<AiSuggestion> = {}): AiSuggestion => ({
 })
 
 describe('AI review queue', () => {
-  it('separates trusted automation from human review', () => {
+  it('separates trusted automation from every human-review case', () => {
     const trusted = suggestion()
-    const review = suggestion({ confidence: 52, needsReview: true })
+    const modelReview = suggestion({ confidence: 52, needsReview: true })
+    const belowAutomationThreshold = suggestion({ confidence: 72, needsReview: false })
     expect(isTrustedSuggestion(trusted)).toBe(true)
-    expect(isTrustedSuggestion(review)).toBe(false)
-    expect(matchesAiReviewFilter(review, 'review')).toBe(true)
+    expect(isTrustedSuggestion(modelReview)).toBe(false)
+    expect(requiresHumanReview(belowAutomationThreshold)).toBe(true)
+    expect(matchesAiReviewFilter(modelReview, 'review')).toBe(true)
+    expect(matchesAiReviewFilter(belowAutomationThreshold, 'review')).toBe(true)
     expect(matchesAiReviewFilter(trusted, 'trusted')).toBe(true)
   })
 
-  it('summarizes confidence, recurring candidates, and anomalies', () => {
+  it('summarizes confidence, recurring candidates, anomalies, and policy review cases', () => {
     const summary = buildAiReviewSummary({
       a: suggestion(),
       b: suggestion({ confidence: 60, needsReview: true, recurringProbability: 82 }),
@@ -34,7 +37,7 @@ describe('AI review queue', () => {
     expect(summary).toEqual({
       analyzed: 3,
       trusted: 1,
-      needsReview: 1,
+      needsReview: 2,
       recurringCandidates: 1,
       anomalies: 1,
       averageConfidence: 73,
