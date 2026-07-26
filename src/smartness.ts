@@ -1,4 +1,5 @@
 import { assessAiRuntimeReadiness } from './aiRuntimeReadiness'
+import type { AiQualityReport } from './aiQuality'
 import type { AppState } from './types'
 
 export interface SmartnessDimension {
@@ -13,19 +14,21 @@ export interface SmartnessAssessment {
   level: 'basic' | 'adaptive' | 'advanced'
   dimensions: SmartnessDimension[]
   nextMilestone: string
+  evidenceComplete: boolean
 }
 
 function clamp(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)))
 }
 
-export function assessSmartness(state: AppState, learnedDecisions: number): SmartnessAssessment {
+export function assessSmartness(state: AppState, learnedDecisions: number, quality?: AiQualityReport): SmartnessAssessment {
   const transactions = state.transactions.length
   const categories = new Set(state.transactions.map((item) => item.category).filter(Boolean)).size
   const recurring = state.transactions.filter((item) => item.recurring).length
   const months = new Set(state.transactions.map((item) => item.date.slice(0, 7))).size
   const goals = state.goals.length
   const runtime = assessAiRuntimeReadiness()
+  const evidenceComplete = Boolean(quality?.productionReady)
 
   const dimensions: SmartnessDimension[] = [
     {
@@ -44,13 +47,15 @@ export function assessSmartness(state: AppState, learnedDecisions: number): Smar
       key: 'prediction',
       label: 'Prognosefähigkeit',
       score: clamp(15 + months * 9 + Math.min(transactions, 60) * .5),
-      evidence: months >= 6 ? 'Mehrmonatige Muster sind auswertbar' : 'Für stabile Prognosen fehlen noch mehrere Monate Historie',
+      evidence: months >= 6 ? 'Mehrmonatige Muster sind auswertbar; eine Produktionsfreigabe erfordert zusätzlich Backtests.' : 'Für stabile Prognosen fehlen noch mehrere Monate Historie',
     },
     {
       key: 'models',
       label: 'Modellbetrieb',
-      score: runtime.score,
-      evidence: runtime.warnings.length ? `${runtime.evidence} ${runtime.warnings.join(' ')}` : runtime.evidence,
+      score: quality ? Math.round((runtime.score + quality.score) / 2) : Math.min(runtime.score, 72),
+      evidence: quality
+        ? `${runtime.evidence} Gemessene Qualitätsgates: ${quality.passed.length} bestanden, ${quality.failed.length} offen.`
+        : `${runtime.evidence} Genauigkeits-, Laufzeit- und Forecast-Messwerte fehlen noch.`,
     },
     {
       key: 'explainability',
@@ -66,18 +71,21 @@ export function assessSmartness(state: AppState, learnedDecisions: number): Smar
     },
   ]
 
-  const overall = clamp(dimensions.reduce((sum, item) => sum + item.score, 0) / dimensions.length)
+  const rawOverall = clamp(dimensions.reduce((sum, item) => sum + item.score, 0) / dimensions.length)
+  const overall = evidenceComplete ? rawOverall : Math.min(rawOverall, 79)
   const level = overall >= 80 ? 'advanced' : overall >= 55 ? 'adaptive' : 'basic'
   const weakest = [...dimensions].sort((a, b) => a.score - b.score)[0]
-  const nextMilestone = weakest.key === 'data'
-    ? 'Mehr bestätigte, unterschiedlich kategorisierte Buchungen erfassen.'
-    : weakest.key === 'prediction'
-      ? 'Mindestens sechs Monate Transaktionshistorie sammeln.'
-      : weakest.key === 'personalization'
-        ? 'Weitere KI-Vorschläge bestätigen oder korrigieren.'
-        : weakest.key === 'models'
-          ? 'Modell-Ladezeiten, Speicherverbrauch und Fehlerquoten auf Zielgeräten messen.'
-          : 'Qualitätsmetriken mit realen Nutzungsszenarien validieren.'
+  const nextMilestone = !evidenceComplete
+    ? 'Einen eingefrorenen Testsatz, Laufzeitmessungen und Forecast-Backtests gegen die Produktionsgates ausführen.'
+    : weakest.key === 'data'
+      ? 'Mehr bestätigte, unterschiedlich kategorisierte Buchungen erfassen.'
+      : weakest.key === 'prediction'
+        ? 'Mindestens sechs Monate Transaktionshistorie sammeln.'
+        : weakest.key === 'personalization'
+          ? 'Weitere KI-Vorschläge bestätigen oder korrigieren.'
+          : weakest.key === 'models'
+            ? 'Modell-Ladezeiten, Speicherverbrauch und Fehlerquoten auf Zielgeräten messen.'
+            : 'Qualitätsmetriken mit realen Nutzungsszenarien validieren.'
 
-  return { overall, level, dimensions, nextMilestone }
+  return { overall, level, dimensions, nextMilestone, evidenceComplete }
 }
