@@ -1,7 +1,8 @@
+import { assessAiRuntimeReadiness } from './aiRuntimeReadiness'
 import type { AppState } from './types'
 
 export interface SmartnessDimension {
-  key: 'data' | 'personalization' | 'prediction' | 'explainability' | 'safety'
+  key: 'data' | 'personalization' | 'prediction' | 'models' | 'explainability' | 'safety'
   label: string
   score: number
   evidence: string
@@ -24,6 +25,7 @@ export function assessSmartness(state: AppState, learnedDecisions: number): Smar
   const recurring = state.transactions.filter((item) => item.recurring).length
   const months = new Set(state.transactions.map((item) => item.date.slice(0, 7))).size
   const goals = state.goals.length
+  const runtime = assessAiRuntimeReadiness()
 
   const dimensions: SmartnessDimension[] = [
     {
@@ -43,6 +45,12 @@ export function assessSmartness(state: AppState, learnedDecisions: number): Smar
       label: 'Prognosefähigkeit',
       score: clamp(15 + months * 9 + Math.min(transactions, 60) * .5),
       evidence: months >= 6 ? 'Mehrmonatige Muster sind auswertbar' : 'Für stabile Prognosen fehlen noch mehrere Monate Historie',
+    },
+    {
+      key: 'models',
+      label: 'Modellbetrieb',
+      score: runtime.score,
+      evidence: runtime.warnings.length ? `${runtime.evidence} ${runtime.warnings.join(' ')}` : runtime.evidence,
     },
     {
       key: 'explainability',
@@ -67,7 +75,9 @@ export function assessSmartness(state: AppState, learnedDecisions: number): Smar
       ? 'Mindestens sechs Monate Transaktionshistorie sammeln.'
       : weakest.key === 'personalization'
         ? 'Weitere KI-Vorschläge bestätigen oder korrigieren.'
-        : 'Qualitätsmetriken mit realen Nutzungsszenarien validieren.'
+        : weakest.key === 'models'
+          ? 'Modell-Ladezeiten, Speicherverbrauch und Fehlerquoten auf Zielgeräten messen.'
+          : 'Qualitätsmetriken mit realen Nutzungsszenarien validieren.'
 
   return { overall, level, dimensions, nextMilestone }
 }
