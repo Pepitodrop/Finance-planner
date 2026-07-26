@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { AlertTriangle, BrainCircuit, Check, CheckCheck, Filter, LoaderCircle, RefreshCw, ScanSearch, ShieldCheck, Sparkles, WandSparkles } from 'lucide-react'
 import { classifyTransaction, generateInsights, HUGGING_FACE_MODEL, type AiSuggestion } from './ai'
-import { buildAiReviewSummary, isTrustedSuggestion, matchesAiReviewFilter, type AiReviewFilter } from './aiReview'
+import { buildAiReviewSummary, isTrustedSuggestion, matchesAiReviewFilter, requiresHumanReview, type AiReviewFilter } from './aiReview'
 import { formatMoney } from './finance'
 import type { Transaction } from './types'
 import './ai.css'
@@ -110,8 +110,9 @@ export function AiPanel({ transactions, onApply }: AiPanelProps) {
         <div className="ai-result-list">
           {visibleTransactions.map((transaction) => {
             const suggestion = suggestions[transaction.id]
+            const reviewRequired = suggestion ? requiresHumanReview(suggestion) : false
             return (
-              <div className={`ai-result ${suggestion?.needsReview ? 'review-required' : ''}`} key={transaction.id}>
+              <div className={`ai-result ${reviewRequired ? 'review-required' : ''}`} key={transaction.id}>
                 <div className="ai-result-main">
                   <strong>{transaction.description}</strong>
                   <span>{formatMoney(transaction.amountCents)} · aktuell: {transaction.category}</span>
@@ -120,7 +121,7 @@ export function AiPanel({ transactions, onApply }: AiPanelProps) {
                   <div className="ai-prediction"><b>{suggestion.merchant}</b><span>{suggestion.category} · {suggestion.confidence}% sicher</span><em>{suggestion.source}</em></div>
                   <div className="ai-scores"><span>Wiederkehrend {suggestion.recurringProbability}%</span><span className={suggestion.anomalyScore >= 70 ? 'warning' : ''}>Anomalie {suggestion.anomalyScore}%</span></div>
                   <div className="ai-explanation"><p>{suggestion.explanation}</p>{suggestion.alternatives.length > 1 && <div className="ai-alternatives">Alternativen: {suggestion.alternatives.slice(1, 4).map((alternative) => <span key={alternative.category}>{alternative.category} {alternative.confidence}%</span>)}</div>}</div>
-                  <div className="ai-decision"><span className={suggestion.needsReview ? 'review-badge' : 'trusted-badge'}>{suggestion.needsReview ? 'Bitte prüfen' : 'Verlässlich'}</span><button className="secondary" onClick={() => onApply(transaction.id, suggestion)}><Check size={15} /> Übernehmen</button></div>
+                  <div className="ai-decision"><span className={reviewRequired ? 'review-badge' : 'trusted-badge'}>{reviewRequired ? 'Bitte prüfen' : 'Verlässlich'}</span><button className="secondary" onClick={() => onApply(transaction.id, suggestion)}><Check size={15} /> Übernehmen</button></div>
                 </> : <span className="ai-waiting">Noch nicht analysiert</span>}
               </div>
             )
