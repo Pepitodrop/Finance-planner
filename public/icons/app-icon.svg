@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Finance Planner</title>
+  <rect width="512" height="512" rx="112" fill="#0b1020"/>
+  <path d="M118 190h276v48H118zm28 72h220v48H146zm42 72h136v48H188z" fill="#63e6be"/>
+  <circle cx="372" cy="354" r="54" fill="#ffd166"/>
+  <path d="M372 324v60m-24-30h48" stroke="#0b1020" stroke-width="20" stroke-linecap="round"/>
+</svg>
