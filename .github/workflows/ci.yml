@@ -5,20 +5,31 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   web:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
+      - run: npm install --no-fund --no-audit
+      - run: npm test
       - run: npm run build
+      - run: npm audit --omit=dev --audit-level=high
 
   cobol:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y gnucobol
-      - run: cobc -m core/cobol/finance_projection.cob
+      - run: cobc -Wall -Wextra -m core/cobol/finance_projection.cob
