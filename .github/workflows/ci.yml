@@ -25,8 +25,29 @@ jobs:
         run: npm install --no-fund --no-audit --silent
       - name: Unit tests
         run: npm test -- --reporter=dot
-      - name: TypeScript diagnostics
-        run: npx tsc -b --pretty false
+      - name: Capture TypeScript diagnostics
+        id: typescript
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          npx tsc -b --pretty false > typescript-diagnostics.txt 2>&1
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Upload TypeScript diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: typescript-diagnostics
+          path: typescript-diagnostics.txt
+          if-no-files-found: error
+          retention-days: 3
+      - name: Enforce TypeScript result
+        if: steps.typescript.outputs.exit_code != '0'
+        run: |
+          cat typescript-diagnostics.txt
+          exit 1
       - name: Production bundle
         run: npx vite build
       - name: Production dependency audit
