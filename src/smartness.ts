@@ -1,9 +1,10 @@
 import { assessAiRuntimeReadiness } from './aiRuntimeReadiness'
 import type { AiQualityReport } from './aiQuality'
+import type { BankConnectionReadiness } from './bankConnection'
 import type { AppState } from './types'
 
 export interface SmartnessDimension {
-  key: 'data' | 'personalization' | 'prediction' | 'models' | 'explainability' | 'safety'
+  key: 'data' | 'personalization' | 'prediction' | 'models' | 'bank' | 'explainability' | 'safety'
   label: string
   score: number
   evidence: string
@@ -21,7 +22,12 @@ function clamp(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)))
 }
 
-export function assessSmartness(state: AppState, learnedDecisions: number, quality?: AiQualityReport): SmartnessAssessment {
+export function assessSmartness(
+  state: AppState,
+  learnedDecisions: number,
+  quality?: AiQualityReport,
+  bank?: BankConnectionReadiness,
+): SmartnessAssessment {
   const transactions = state.transactions.length
   const categories = new Set(state.transactions.map((item) => item.category).filter(Boolean)).size
   const recurring = state.transactions.filter((item) => item.recurring).length
@@ -58,6 +64,14 @@ export function assessSmartness(state: AppState, learnedDecisions: number, quali
         : `${runtime.evidence} Genauigkeits-, Laufzeit- und Forecast-Messwerte fehlen noch.`,
     },
     {
+      key: 'bank',
+      label: 'Bankdatenqualität',
+      score: bank?.score ?? 5,
+      evidence: bank
+        ? `${bank.passed.length} Bankintegrationsprüfungen bestanden, ${bank.failed.length} offen.`
+        : 'Noch keine verifizierte, consent-basierte Bankverbindung vorhanden.',
+    },
+    {
       key: 'explainability',
       label: 'Erklärbarkeit',
       score: 82,
@@ -77,15 +91,17 @@ export function assessSmartness(state: AppState, learnedDecisions: number, quali
   const weakest = [...dimensions].sort((a, b) => a.score - b.score)[0]
   const nextMilestone = !evidenceComplete
     ? 'Einen eingefrorenen Testsatz, Laufzeitmessungen und Forecast-Backtests gegen die Produktionsgates ausführen.'
-    : weakest.key === 'data'
-      ? 'Mehr bestätigte, unterschiedlich kategorisierte Buchungen erfassen.'
-      : weakest.key === 'prediction'
-        ? 'Mindestens sechs Monate Transaktionshistorie sammeln.'
-        : weakest.key === 'personalization'
-          ? 'Weitere KI-Vorschläge bestätigen oder korrigieren.'
-          : weakest.key === 'models'
-            ? 'Modell-Ladezeiten, Speicherverbrauch und Fehlerquoten auf Zielgeräten messen.'
-            : 'Qualitätsmetriken mit realen Nutzungsszenarien validieren.'
+    : weakest.key === 'bank'
+      ? 'Eine aktive Bank-Consent-Strecke mit frischem, idempotentem Transaktionssync validieren.'
+      : weakest.key === 'data'
+        ? 'Mehr bestätigte, unterschiedlich kategorisierte Buchungen erfassen.'
+        : weakest.key === 'prediction'
+          ? 'Mindestens sechs Monate Transaktionshistorie sammeln.'
+          : weakest.key === 'personalization'
+            ? 'Weitere KI-Vorschläge bestätigen oder korrigieren.'
+            : weakest.key === 'models'
+              ? 'Modell-Ladezeiten, Speicherverbrauch und Fehlerquoten auf Zielgeräten messen.'
+              : 'Qualitätsmetriken mit realen Nutzungsszenarien validieren.'
 
   return { overall, level, dimensions, nextMilestone, evidenceComplete }
 }
