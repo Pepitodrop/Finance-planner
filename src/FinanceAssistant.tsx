@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
-import { BrainCircuit, ChartNoAxesCombined, Check, LoaderCircle, MessageCircleQuestion, Route, Send, ShieldCheck, X } from 'lucide-react'
+import { BrainCircuit, ChartNoAxesCombined, Check, Gauge, LoaderCircle, MessageCircleQuestion, Route, Send, ShieldCheck, X } from 'lucide-react'
 import { ASSISTANT_MODEL, runAssistant, type AssistantMode } from './assistant'
 import { behaviorSummary } from './behavior'
 import { createFinancialAgentPlan, decideAgentAction, type AgentPlan } from './financialAgent'
+import { assessSmartness } from './smartness'
 import type { AppState } from './types'
 
 export function FinanceAssistant({ state }: { state: AppState }) {
@@ -13,6 +14,7 @@ export function FinanceAssistant({ state }: { state: AppState }) {
   const initialPlan = useMemo(() => createFinancialAgentPlan(state), [state])
   const [plan, setPlan] = useState<AgentPlan>(initialPlan)
   const learned = behaviorSummary()
+  const smartness = useMemo(() => assessSmartness(state, learned.learnedDecisions), [state, learned.learnedDecisions])
 
   const run = async () => {
     setLoading(true)
@@ -44,6 +46,12 @@ export function FinanceAssistant({ state }: { state: AppState }) {
         <div className="learning-stats"><div><strong>{learned.nodes}</strong><span>Knoten</span></div><div><strong>{learned.edges}</strong><span>Beziehungen</span></div><div><strong>{learned.learnedDecisions}</strong><span>Bestätigungen</span></div></div>
         <p className="muted">Jede übernommene Händler-, Kategorie- und Wiederholungsentscheidung verstärkt lokale Graph-Beziehungen. Das Modell passt spätere Vorschläge daran an.</p>
       </article>
+    </section>
+    <section className="panel">
+      <div className="panel-header"><div><p className="eyebrow">Messbare Smartness</p><h2>KI-Qualität: {smartness.overall}%</h2></div><Gauge size={20}/></div>
+      <p className="muted">Stufe: {smartness.level}. Der Wert misst Datengrundlage, Personalisierung, Prognosefähigkeit, Erklärbarkeit und Sicherheit getrennt.</p>
+      <div className="learning-stats">{smartness.dimensions.map((dimension) => <div key={dimension.key} title={dimension.evidence}><strong>{dimension.score}%</strong><span>{dimension.label}</span></div>)}</div>
+      <p><strong>Nächster Qualitätsschritt:</strong> {smartness.nextMilestone}</p>
     </section>
     <section className="panel assistant-answer"><div className="panel-header"><div><p className="eyebrow">Ergebnis</p><h2>Antwort des Finanzassistenten</h2></div></div><div className="answer-text">{answer || 'Starte eine Analyse, stelle eine Frage oder lasse einen Finanzplan erstellen.'}</div></section>
     <section className="panel">
