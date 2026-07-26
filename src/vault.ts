@@ -142,9 +142,23 @@ export async function persistEncryptedState(state: AppState): Promise<void> {
   await persistSessionPayload()
 }
 
-export async function changeVaultPassword(newPassword: string): Promise<void> {
+export async function changeVaultPassword(currentPassword: string, newPassword: string): Promise<void> {
   if (!sessionPayload || !sessionKey) throw new Error('Der Vault ist nicht entsperrt.')
   if (newPassword.length < 12) throw new Error('Das neue Passwort muss mindestens 12 Zeichen lang sein.')
+  const raw = localStorage.getItem(VAULT_KEY)
+  if (!raw) throw new Error('Der verschlüsselte Datenspeicher fehlt.')
+  const current = parseEnvelope(raw)
+  const verificationKey = await deriveKey(currentPassword, base64ToBytes(current.salt), current.iterations)
+  try {
+    await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: base64ToBytes(current.iv) },
+      verificationKey,
+      base64ToBytes(current.ciphertext),
+    )
+  } catch {
+    throw new Error('Das aktuelle Vault-Passwort ist falsch.')
+  }
+
   const salt = crypto.getRandomValues(new Uint8Array(16))
   const newKey = await deriveKey(newPassword, salt, PBKDF2_ITERATIONS)
   const envelope = await encryptPayload(sessionPayload, newKey, salt, PBKDF2_ITERATIONS)
