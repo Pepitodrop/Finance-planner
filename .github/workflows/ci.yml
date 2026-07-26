@@ -53,6 +53,24 @@ jobs:
       - name: Production dependency audit
         run: npm audit --omit=dev --audit-level=high
 
+  connector-server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Backend tests
+        working-directory: server
+        run: npm test
+      - name: Syntax validation
+        run: |
+          node --check server/src/server.js
+          node --check server/src/providers.js
+          node --check server/src/crypto-store.js
+          node --check server/src/security.js
+
   cobol:
     runs-on: ubuntu-latest
     timeout-minutes: 10
