@@ -1,0 +1,14 @@
+.row-actions { display: inline-flex; gap: 6px; }
+.row-actions button { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid #2a354f; border-radius: 9px; color: #aab6cc; background: #151d30; }
+.row-actions button:hover { color: #fff; border-color: #536baf; }
+.row-actions button:last-child:hover { color: #ff9ba5; border-color: rgba(255, 117, 132, .55); }
+.undo-toast { position: fixed; z-index: 30; right: 24px; bottom: 24px; display: flex; align-items: center; gap: 16px; max-width: min(440px, calc(100vw - 32px)); padding: 13px 15px; border: 1px solid #33405e; border-radius: 14px; color: #e8edf8; background: #141d31; box-shadow: 0 20px 60px #0008; }
+.undo-toast button { display: inline-flex; align-items: center; gap: 7px; border: 0; color: #aebdff; background: transparent; font-weight: 750; }
+.security-form-panel { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(320px, 1.2fr); gap: 24px; margin-bottom: 14px; max-width: 1200px; }
+.security-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: end; }
+.security-fields label, .backup-password-panel label { display: grid; gap: 7px; color: #aeb9cf; font-size: 12px; font-weight: 650; }
+.security-fields input, .backup-password-panel input { width: 100%; border: 1px solid #2a354f; border-radius: 11px; padding: 11px 12px; color: #eef2fb; background: #0c1221; outline: none; }
+.security-fields input:focus, .backup-password-panel input:focus { border-color: #667fff; }
+.security-fields button { min-height: 43px; }
+@media (max-width: 900px) { .security-form-panel { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .row-actions { grid-column: 2 / -1; justify-self: end; } .undo-toast { right: 16px; bottom: 88px; left: 16px; } .security-fields { grid-template-columns: 1fr; } }
