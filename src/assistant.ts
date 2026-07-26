@@ -1,5 +1,6 @@
 import { formatMoney, monthlyProjection, totalBalance } from './finance'
 import type { AppState } from './types'
+import { getSecureValue, removeSecureValue, setSecureValue } from './vault'
 
 export const PRIMARY_ASSISTANT_MODEL = 'onnx-community/Qwen2.5-0.5B-Instruct'
 export const FALLBACK_ASSISTANT_MODEL = 'Xenova/flan-t5-small'
@@ -16,24 +17,42 @@ interface AssistantMemoryItem {
   createdAt: string
 }
 
-const MEMORY_KEY = 'finance-planner-assistant-memory-v1'
+const SECURE_MEMORY_KEY = 'assistant-memory-v1'
+const LEGACY_MEMORY_KEY = 'finance-planner-assistant-memory-v1'
 let generatorPromise: Promise<{ generator: Generator; model: string }> | null = null
 
+function validMemory(value: unknown): value is AssistantMemoryItem[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'object' && item !== null
+    && ['analysis', 'question', 'planning'].includes(String((item as AssistantMemoryItem).mode))
+    && typeof (item as AssistantMemoryItem).question === 'string'
+    && typeof (item as AssistantMemoryItem).answer === 'string'
+    && typeof (item as AssistantMemoryItem).createdAt === 'string')
+}
+
 function loadMemory(): AssistantMemoryItem[] {
+  const encrypted = getSecureValue<unknown>(SECURE_MEMORY_KEY, undefined)
+  if (validMemory(encrypted)) return encrypted
+  const legacy = localStorage.getItem(LEGACY_MEMORY_KEY)
+  if (!legacy) return []
   try {
-    return JSON.parse(localStorage.getItem(MEMORY_KEY) ?? '[]') as AssistantMemoryItem[]
+    const parsed: unknown = JSON.parse(legacy)
+    if (!validMemory(parsed)) return []
+    setSecureValue(SECURE_MEMORY_KEY, parsed)
+    localStorage.removeItem(LEGACY_MEMORY_KEY)
+    return parsed
   } catch {
     return []
   }
 }
 
 function saveMemory(item: AssistantMemoryItem): void {
-  const next = [item, ...loadMemory()].slice(0, 20)
-  localStorage.setItem(MEMORY_KEY, JSON.stringify(next))
+  setSecureValue(SECURE_MEMORY_KEY, [item, ...loadMemory()].slice(0, 20))
+  localStorage.removeItem(LEGACY_MEMORY_KEY)
 }
 
 export function clearAssistantMemory(): void {
-  localStorage.removeItem(MEMORY_KEY)
+  removeSecureValue(SECURE_MEMORY_KEY)
+  localStorage.removeItem(LEGACY_MEMORY_KEY)
 }
 
 export function assistantMemoryCount(): number {
@@ -56,18 +75,10 @@ async function getGenerator(): Promise<{ generator: Generator; model: string }> 
   if (!generatorPromise) {
     generatorPromise = (async () => {
       try {
-        const options: Record<string, unknown> = supportsWebGpu()
-          ? { device: 'webgpu', dtype: 'q4' }
-          : { dtype: 'q4' }
-        return {
-          generator: await loadPipeline('text-generation', PRIMARY_ASSISTANT_MODEL, options),
-          model: PRIMARY_ASSISTANT_MODEL,
-        }
+        const options: Record<string, unknown> = supportsWebGpu() ? { device: 'webgpu', dtype: 'q4' } : { dtype: 'q4' }
+        return { generator: await loadPipeline('text-generation', PRIMARY_ASSISTANT_MODEL, options), model: PRIMARY_ASSISTANT_MODEL }
       } catch {
-        return {
-          generator: await loadPipeline('text2text-generation', FALLBACK_ASSISTANT_MODEL, { dtype: 'q8' }),
-          model: FALLBACK_ASSISTANT_MODEL,
-        }
+        return { generator: await loadPipeline('text2text-generation', FALLBACK_ASSISTANT_MODEL, { dtype: 'q8' }), model: FALLBACK_ASSISTANT_MODEL }
       }
     })()
   }
@@ -108,7 +119,6 @@ function exactAnswer(state: AppState, question: string): string | null {
   const recurring = expenses.filter((item) => item.recurring)
   const expenseTotal = expenses.reduce((sum, item) => sum + item.amountCents, 0)
   const incomeTotal = income.reduce((sum, item) => sum + item.amountCents, 0)
-
   if (/gesamtvermögen|wie viel.*habe ich|kontostand/.test(normalized)) return `Dein aktuell erfasstes Gesamtvermögen beträgt ${formatMoney(totalBalance(state))}.`
   if (/feste.*zahlung|wiederkehr|vertrag|abos?/.test(normalized)) return `Deine bestätigten wiederkehrenden Ausgaben betragen ${formatMoney(recurring.reduce((sum, item) => sum + item.amountCents, 0))}.`
   if (/einnahmen/.test(normalized) && /ausgaben/.test(normalized)) return `Erfasste Einnahmen: ${formatMoney(incomeTotal)}. Erfasste Ausgaben: ${formatMoney(expenseTotal)}. Netto: ${formatMoney(incomeTotal - expenseTotal)}.`
@@ -136,25 +146,16 @@ export async function runAssistant(mode: AssistantMode, state: AppState, questio
       return exact
     }
   }
-
   const context = buildFinancialContext(state)
   const instruction = mode === 'analysis'
     ? 'Erstelle eine vorsichtige persönliche Finanzanalyse mit Mustern, Risiken, Einsparpotenzial und drei priorisierten Maßnahmen. Rechne nicht selbst neu, sondern nutze nur die angegebenen Zahlen.'
     : mode === 'planning'
       ? `Erstelle einen realistischen Plan für: ${question || 'meine finanzielle Situation verbessern'}. Gliedere in Sofort, diesen Monat, 3 Monate und 12 Monate. Nutze konkrete Euro-Beträge, kennzeichne Annahmen und nenne messbare Kontrollpunkte.`
       : `Beantworte ausschließlich aus dem Kontext. Nenne zuerst die direkte Antwort, dann die verwendeten Daten und Unsicherheiten. Frage: ${question}`
-
   try {
     const loaded = await getGenerator()
     const prompt = `System: Du bist ein vorsichtiger deutschsprachiger persönlicher Finanzassistent. Keine erfundenen Daten, keine Garantien, keine Steuer- oder Anlageentscheidung ohne Hinweis auf professionelle Prüfung.\nAufgabe: ${instruction}\nFinanzkontext: ${context}\nAntwort:`
-    const output = await loaded.generator(prompt, {
-      max_new_tokens: mode === 'question' ? 220 : 360,
-      temperature: 0.15,
-      top_p: 0.9,
-      repetition_penalty: 1.12,
-      do_sample: false,
-      return_full_text: false,
-    })
+    const output = await loaded.generator(prompt, { max_new_tokens: mode === 'question' ? 220 : 360, temperature: 0.15, top_p: 0.9, repetition_penalty: 1.12, do_sample: false, return_full_text: false })
     const answer = output[0]?.generated_text?.trim() || fallbackAnswer(mode, state, question)
     saveMemory({ mode, question, answer, createdAt: new Date().toISOString() })
     return answer
