@@ -1,3 +1,5 @@
+import type { DatasetReadiness } from './aiEvaluation'
+
 export interface ClassificationMetrics {
   macroF1: number
   highConfidencePrecision: number
@@ -40,8 +42,10 @@ export function assessAiQuality(
   classification: ClassificationMetrics,
   runtime: RuntimeMetrics,
   forecast: ForecastMetrics,
+  dataset: DatasetReadiness,
 ): AiQualityReport {
   const checks: Array<[string, boolean]> = [
+    ['Evaluationsdatensatz vollständig und menschlich bestätigt', dataset.ready],
     ['Macro-F1 mindestens 0,85', classification.macroF1 >= .85],
     ['Präzision bei hoher Konfidenz mindestens 0,92', classification.highConfidencePrecision >= .92],
     ['Manuelle Prüfquote höchstens 25 %', classification.reviewRate <= .25],
@@ -71,7 +75,8 @@ export function assessAiQuality(
   ) / 6
   const runtimeScore = 100 * passed.filter((item) => item.includes('Inferenz') || item.includes('Kaltstart') || item.includes('Laufzeit') || item.includes('Offline') || item.includes('Cache')).length / 5
   const forecastScore = 100 * passed.filter((item) => item.includes('Forecast') || item.includes('Backtest') || item.includes('Unsicherheits')).length / 4
-  const score = Math.round(classificationScore * .5 + runtimeScore * .3 + forecastScore * .2)
+  const measuredScore = Math.round(classificationScore * .5 + runtimeScore * .3 + forecastScore * .2)
+  const score = dataset.ready ? measuredScore : Math.min(measuredScore, 79)
 
   return { score, productionReady: failed.length === 0 && score >= 80, passed, failed }
 }
