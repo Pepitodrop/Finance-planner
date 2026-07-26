@@ -15,13 +15,17 @@ export function isTrustedSuggestion(suggestion: AiSuggestion): boolean {
   return suggestion.confidence >= 80 && !suggestion.needsReview && suggestion.category !== 'Sonstiges'
 }
 
+export function requiresHumanReview(suggestion: AiSuggestion): boolean {
+  return !isTrustedSuggestion(suggestion)
+}
+
 export function buildAiReviewSummary(suggestions: Record<string, AiSuggestion>): AiReviewSummary {
   const values = Object.values(suggestions)
   const analyzed = values.length
   return {
     analyzed,
     trusted: values.filter(isTrustedSuggestion).length,
-    needsReview: values.filter((item) => item.needsReview).length,
+    needsReview: values.filter(requiresHumanReview).length,
     recurringCandidates: values.filter((item) => item.recurringProbability >= 75).length,
     anomalies: values.filter((item) => item.anomalyScore >= 70).length,
     averageConfidence: analyzed
@@ -34,7 +38,7 @@ export function matchesAiReviewFilter(suggestion: AiSuggestion | undefined, filt
   if (filter === 'all') return true
   if (!suggestion) return false
   if (filter === 'trusted') return isTrustedSuggestion(suggestion)
-  if (filter === 'review') return suggestion.needsReview
+  if (filter === 'review') return requiresHumanReview(suggestion)
   if (filter === 'recurring') return suggestion.recurringProbability >= 75
   return suggestion.anomalyScore >= 70
 }
