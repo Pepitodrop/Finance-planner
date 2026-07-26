@@ -33,6 +33,15 @@ describe('bank connection readiness', () => {
     expect(report.productionReady).toBe(false)
     expect(report.failed.length).toBeGreaterThanOrEqual(3)
   })
+
+  it('rejects future-dated sync timestamps', () => {
+    const report = assessBankConnectionReadiness({
+      ...readyState,
+      lastSuccessfulSyncAt: '2026-07-27T12:00:00.000Z',
+    }, new Date('2026-07-26T12:00:00.000Z'))
+    expect(report.productionReady).toBe(false)
+    expect(report.failed).toContain('Successful sync within 24 hours')
+  })
 })
 
 describe('bank transaction import', () => {
