@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { assessSmartness } from './smartness'
+import type { AiQualityReport } from './aiQuality'
 import type { AppState } from './types'
 
 const state = (transactionCount: number, months = 1): AppState => ({
@@ -17,6 +18,13 @@ const state = (transactionCount: number, months = 1): AppState => ({
   })),
 })
 
+const verifiedQuality: AiQualityReport = {
+  score: 92,
+  productionReady: true,
+  passed: ['accuracy', 'runtime', 'forecast'],
+  failed: [],
+}
+
 describe('AI smartness assessment', () => {
   it('improves with more history and confirmed learning', () => {
     const early = assessSmartness(state(5), 1)
@@ -30,7 +38,16 @@ describe('AI smartness assessment', () => {
     const assessment = assessSmartness(state(0), 0)
     expect(assessment.dimensions.find((item) => item.key === 'safety')?.score).toBeGreaterThanOrEqual(80)
     expect(assessment.dimensions.find((item) => item.key === 'explainability')?.score).toBeGreaterThanOrEqual(80)
-    expect(assessment.dimensions.find((item) => item.key === 'models')?.score).toBeGreaterThanOrEqual(90)
+    expect(assessment.dimensions.find((item) => item.key === 'models')?.score).toBeGreaterThanOrEqual(60)
+  })
+
+  it('cannot report advanced smartness without measured production evidence', () => {
+    const unverified = assessSmartness(state(100, 12), 30)
+    const verified = assessSmartness(state(100, 12), 30, verifiedQuality)
+    expect(unverified.overall).toBeLessThan(80)
+    expect(unverified.evidenceComplete).toBe(false)
+    expect(verified.evidenceComplete).toBe(true)
+    expect(verified.overall).toBeGreaterThanOrEqual(80)
   })
 
   it('returns a concrete next milestone', () => {
