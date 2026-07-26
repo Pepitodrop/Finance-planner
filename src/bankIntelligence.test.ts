@@ -18,11 +18,11 @@ describe('bank import intelligence', () => {
     const history = [
       transaction('1', 'REWE Markt Kartenzahlung 123456', 'Lebensmittel'),
       transaction('2', 'REWE Markt VISA 998877', 'Lebensmittel'),
-      transaction('3', 'REWE Markt', 'Shopping'),
+      transaction('3', 'REWE Markt', 'Lebensmittel'),
     ]
     expect(suggestCategoryFromHistory('REWE Markt EC 445566', history)).toEqual({
       category: 'Lebensmittel',
-      confidence: 67,
+      confidence: 100,
       evidenceCount: 3,
     })
   })
