@@ -1,170 +1,94 @@
 # Finance Planner
 
-An offline-first, cross-platform personal finance dashboard for tracking income, expenses, savings goals, recurring payments, contracts, and long-term financial projections.
+An offline-first personal finance dashboard inspired by the original Base44 prototype, but implemented as an independent open-source application in this GitHub repository.
 
-The project is designed to use **COBOL as the primary financial calculation language**, while modern platform layers provide the web, mobile, desktop, banking, and AI integrations.
+## Current MVP
 
-## Vision
+The first implementation includes:
 
-Finance Planner should help users understand their current financial position, identify recurring obligations, create realistic savings plans, and model future scenarios without requiring their private financial data to be uploaded to a cloud service.
-
-## Planned capabilities
-
+- Responsive React and TypeScript dashboard
+- Account and balance overview
 - Income and expense tracking
-- Account and net-worth overview
-- Monthly and annual cash-flow projections
-- Savings goals and emergency-fund planning
-- Recurring-payment detection
-- Subscription and contract overview
-- Upcoming-payment calendar
-- Scenario planning for salary, inflation, interest, and major purchases
-- CSV, CAMT, and MT940 imports
-- Optional consent-based bank synchronization
-- Local AI-assisted transaction categorization
-- Merchant normalization and anomaly detection
-- Encrypted local storage, backup, export, and restore
-- Web, Android, iOS, Windows, macOS, and Linux clients
+- New transaction form
+- Local browser persistence
+- Savings goals
+- Recurring-payment and contract overview
+- Twelve-month balance projection
+- Expense-category analysis
+- German `de-DE` formatting in euros
+- Initial GnuCOBOL fixed-point projection module
+- GitHub Actions builds for the web client and COBOL core
+
+## Run locally
+
+Requirements:
+
+- Node.js 22+
+- npm
+- Optional: GnuCOBOL for the financial core
+
+```bash
+npm install
+npm run dev
+```
+
+Open the URL printed by Vite.
+
+Production build:
+
+```bash
+npm run build
+npm run preview
+```
+
+Compile the COBOL module:
+
+```bash
+cobc -m core/cobol/finance_projection.cob
+```
 
 ## Architecture
 
 ```text
-core/
-  cobol/          Deterministic financial calculations and projections
-  ffi/            Stable interface around the COBOL modules
-
-apps/
-  client/         Shared cross-platform user interface
-
-services/
-  bank-sync/      Optional PSD2/Open Banking adapters
-  ai/             Local model inference and evaluation
-
-packages/
-  domain/         Shared schemas, validation, money, and date types
-
-infra/
-  CI, packaging, signing, containers, and release automation
-
-docs/
-  Architecture decisions, privacy model, threat model, and model cards
+src/                    React/TypeScript web MVP
+core/cobol/             Deterministic fixed-point financial calculations
+.github/workflows/      CI for web and COBOL
 ```
 
-## Technology direction
+The current web application stores its state in `localStorage`, so it remains usable without a server after loading. The next milestone will migrate local data to encrypted SQLite and introduce Tauri for Windows, macOS, Linux, Android, and iOS packaging.
 
-### Financial core
+## Product principles
 
-The financial engine should be implemented with **GnuCOBOL** and fixed-point decimal arithmetic. COBOL owns deterministic rules such as:
+1. Money is represented as integer cents.
+2. Financial projections are deterministic.
+3. Manual offline use works without external accounts.
+4. AI is advisory and never performs authoritative calculations.
+5. Bank synchronization will use consent-based Open Banking APIs.
+6. User data remains local by default.
 
-- Income and expense aggregation
-- Savings schedules
-- Cash-flow forecasts
-- Net-worth projections
-- Debt repayment calculations
-- Interest and inflation scenarios
+## Roadmap
 
-Binary floating-point values must not be used for monetary calculations.
+### Next
 
-### Cross-platform application
+- Encrypted SQLite storage
+- Editable accounts and savings goals
+- CSV import/export
+- Automatic recurring-payment inference
+- Tauri desktop and mobile shell
+- COBOL C ABI and native bindings
 
-The current product prototype is built with Base44. The longer-term client architecture should support:
+### Later
 
-- Web dashboard
-- Android and iOS applications
-- Windows, macOS, and Linux desktop applications
-- Offline-first local operation
-
-A shared React/TypeScript application with a native wrapper such as Tauri is the preferred direction where Base44 alone cannot provide native or offline capabilities.
-
-### Local AI
-
-AI is advisory and must not replace deterministic financial logic. Suitable uses include:
-
-- Transaction categorization
-- Merchant recognition
-- Recurring-payment and contract detection
-- Duplicate-payment warnings
-- Unusual-spending flags
-- Human-readable explanations
-
-Models should be open source, run locally where practical, expose confidence scores, and always allow user corrections.
-
-### Banking
-
-Bank synchronization must use consent-based PSD2/Open Banking integrations. The application must never scrape or store online-banking passwords.
-
-Offline manual use remains fully functional. Bank synchronization is an optional online operation, after which downloaded data remains locally available.
-
-## Core design principles
-
-1. COBOL owns financial calculations and projection rules.
-2. Money uses fixed-point decimal representations.
-3. Manual offline use remains available without bank or AI services.
-4. Financial data is private and local by default.
-5. AI output is explainable, confidence-scored, and correctable.
-6. Bank and AI providers are replaceable adapters.
-7. User-entered corrections override automated predictions.
-8. Security, exportability, and recoverability are first-class requirements.
-
-## Initial roadmap
-
-### Phase 1 — Foundation
-
-- Define the domain model
-- Establish the repository structure
-- Add CI and coding standards
-- Implement encrypted local storage
-- Document the privacy and threat models
-
-### Phase 2 — Finance MVP
-
-- Accounts and balances
-- Income and expense tracking
-- Categories and budgets
-- Savings goals
-- Twelve-month cash-flow projection
-- CSV import and export
-
-### Phase 3 — Intelligence
-
-- Recurring-payment detection
-- Subscription and contract overview
-- Local transaction categorization
-- Merchant correction rules
-- Duplicate and anomaly detection
-
-### Phase 4 — Banking
-
-- Provider-neutral banking interface
-- Mock connector
-- PSD2 sandbox integration
-- OAuth consent flow
-- Balance and transaction synchronization
-- Pending and booked transaction reconciliation
-
-### Phase 5 — Distribution
-
-- Mobile and desktop packaging
+- Local Hugging Face / ONNX transaction categorization
+- PSD2/Open Banking adapters
+- Contract cancellation reminders
+- Scenario comparison for salary, inflation, interest, and major purchases
 - Encrypted backup and restore
-- Signed installers
-- Automated releases
-- Security review
-- Version 1.0 release
 
-## Current status
+## Security
 
-- Base44 prototype exists
-- Product architecture and implementation backlog are being defined
-- GitHub repository initialization is in progress
-- COBOL engine and native clients are not yet implemented
-
-## Development
-
-Development instructions will be added after the initial project structure and build tooling are committed.
-
-## Security notice
-
-This project is intended to process sensitive financial data. Until a formal security review has been completed, it must not be treated as production-ready financial software.
+This is an early MVP and has not undergone a formal security review. Do not use it as the sole record of important financial information.
 
 ## License
 
-No license has been selected yet. Until a license file is added, all rights are reserved by the repository owner.
+No license has been selected yet. Until a license is added, all rights are reserved by the repository owner.
