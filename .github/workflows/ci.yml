@@ -55,12 +55,18 @@ jobs:
 
   connector-server:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Install GnuCOBOL
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gnucobol
+      - name: Compile authoritative COBOL engine
+        run: |
+          mkdir -p build
+          cobc -Wall -Wextra -x -o build/transaction-rules core/cobol/transaction_rules.cob
       - name: Backend tests
         working-directory: server
         run: npm test
@@ -68,6 +74,7 @@ jobs:
         run: |
           node --check server/src/server.js
           node --check server/src/providers.js
+          node --check server/src/cobol-engine.js
           node --check server/src/crypto-store.js
           node --check server/src/security.js
 
@@ -77,4 +84,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq gnucobol
-      - run: cobc -Wall -Wextra -m core/cobol/finance_projection.cob
+      - name: Compile COBOL financial modules
+        run: |
+          mkdir -p build
+          cobc -Wall -Wextra -m core/cobol/finance_projection.cob
+          cobc -Wall -Wextra -x -o build/transaction-rules core/cobol/transaction_rules.cob
+      - name: Verify COBOL transaction rules
+        run: |
+          test "$(build/transaction-rules NORMALIZE -1299)" = "OK|expense|1299"
+          test "$(build/transaction-rules NORMALIZE 250000)" = "OK|income|250000"
+          test "$(build/transaction-rules APPLY 100000 1299 expense)" = "OK|98701"
+          test "$(build/transaction-rules APPLY 98701 5000 income)" = "OK|103701"
