@@ -20,7 +20,7 @@ export interface AgentPlan {
 }
 
 function stableId(type: AgentActionType, suffix: string): string {
-  return `${type}:${suffix.toLocaleLowerCase('de-DE').replace(/[^a-z0-9]+/g, '-')}`
+  return `${type}:${suffix.toLocaleLowerCase('de-DE').replace(/[^\p{L}\p{N}]+/gu, '-')}`
 }
 
 export function createFinancialAgentPlan(state: AppState): AgentPlan {
@@ -35,7 +35,7 @@ export function createFinancialAgentPlan(state: AppState): AgentPlan {
     id: stableId('review-recurring', String(recurringTotal)),
     type: 'review-recurring',
     title: 'Wiederkehrende Ausgaben prüfen',
-    rationale: `Bestätigte feste Zahlungen summieren sich auf ${(recurringTotal / 100).toFixed(2)} €.` ,
+    rationale: `Bestätigte feste Zahlungen summieren sich auf ${(recurringTotal / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}.`,
     amountCents: recurringTotal,
     priority: 2,
     requiresApproval: true,
