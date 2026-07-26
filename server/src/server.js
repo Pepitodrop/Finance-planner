@@ -6,14 +6,24 @@ import { startGoCardless, startPayPal, syncGoCardless, syncPayPal } from './prov
 
 const env = process.env
 const port = Number(env.PORT || 8787)
+const host = env.HOST || '127.0.0.1'
 const origin = env.APP_ORIGIN || 'http://localhost:5173'
 const sessionSecret = env.SESSION_SECRET || ''
+if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be an integer between 1 and 65535.')
+if (!['127.0.0.1', '0.0.0.0', '::'].includes(host)) throw new Error('HOST must be 127.0.0.1, 0.0.0.0, or ::.')
 if (sessionSecret.length < 32) throw new Error('SESSION_SECRET must contain at least 32 characters.')
 const store = new EncryptedStore(env.CONNECTOR_STORE_PATH || './data/connectors.enc.json', env.CONNECTOR_MASTER_KEY || '')
 await store.load()
 
 function send(response, status, payload, headers = {}) {
-  response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers })
+  response.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+    ...headers,
+  })
   response.end(JSON.stringify(payload))
 }
 
@@ -102,7 +112,7 @@ const server = createServer(async (request, response) => {
       return response.end()
     }
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
-    if (request.method === 'GET' && url.pathname === '/health') return send(response, 200, { status: 'ok' })
+    if (request.method === 'GET' && url.pathname === '/health') return send(response, 200, { status: 'ok', service: 'finance-planner-connector', version: '0.1.0' })
     if (request.method === 'POST' && url.pathname === '/api/session/local') {
       if (env.AUTH_MODE !== 'local') return send(response, 404, { error: 'Not found.' })
       const token = createSession('local-user', sessionSecret, 86400)
@@ -133,4 +143,4 @@ const server = createServer(async (request, response) => {
   }
 })
 
-server.listen(port, '127.0.0.1', () => console.log(`Connector server listening on http://127.0.0.1:${port}`))
+server.listen(port, host, () => console.log(`Connector server listening on http://${host}:${port}`))
