@@ -26,10 +26,11 @@ describe('AI smartness assessment', () => {
       .toBeGreaterThan(early.dimensions.find((item) => item.key === 'prediction')?.score ?? 0)
   })
 
-  it('keeps safety and explainability independent from data volume', () => {
+  it('keeps safety, explainability, and model operations independently measurable', () => {
     const assessment = assessSmartness(state(0), 0)
     expect(assessment.dimensions.find((item) => item.key === 'safety')?.score).toBeGreaterThanOrEqual(80)
     expect(assessment.dimensions.find((item) => item.key === 'explainability')?.score).toBeGreaterThanOrEqual(80)
+    expect(assessment.dimensions.find((item) => item.key === 'models')?.score).toBeGreaterThanOrEqual(90)
   })
 
   it('returns a concrete next milestone', () => {
