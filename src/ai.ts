@@ -11,7 +11,8 @@ export interface AiSuggestion {
   anomalyScore: number
 }
 
-type Extractor = (input: string | string[], options?: Record<string, unknown>) => Promise<{ data: Float32Array | number[] }>
+type ModelOutput = { data: Float32Array | number[] }
+type Extractor = (input: string | string[], options?: Record<string, unknown>) => Promise<ModelOutput>
 
 const categoryExamples: Record<string, string[]> = {
   Lebensmittel: ['Supermarkt Lebensmittel REWE Edeka Lidl Aldi Kaufland', 'Bäckerei Essen Getränke Drogerie'],
@@ -25,10 +26,6 @@ const categoryExamples: Record<string, string[]> = {
   Einkommen: ['Gehalt Lohn Werkstudent Honorar Erstattung Zinsen', 'Einkommen Arbeitgeber Auszahlung'],
   Sparen: ['Sparplan Rücklage Tagesgeld Depot Investment ETF', 'Übertrag auf Sparkonto'],
 }
-
-const merchantRules: Array<[RegExp, string]> = [
-  [/\b(rewe|edeka|lidl|aldi|kaufland)\b/i, (match) => match[0].toUpperCase() as never],
-] as never
 
 let extractorPromise: Promise<Extractor> | null = null
 let prototypePromise: Promise<Map<string, number[]>> | null = null
@@ -45,21 +42,24 @@ function normalizeMerchant(description: string): string {
     [/\bnetflix\b/i, 'Netflix'], [/\bspotify\b/i, 'Spotify'], [/\bamazon\b/i, 'Amazon'],
     [/\bdeutsche bahn|\bdb vertrieb/i, 'Deutsche Bahn'], [/\bpaypal\b/i, 'PayPal'],
   ]
-  return known.find(([pattern]) => pattern.test(description))?.[1] ?? cleaned.split(' ').slice(0, 4).join(' ') || description
+  const knownMerchant = known.find(([pattern]) => pattern.test(description))?.[1]
+  return knownMerchant ?? (cleaned.split(' ').slice(0, 4).join(' ') || description)
 }
 
 async function getExtractor(): Promise<Extractor> {
   if (!extractorPromise) {
     extractorPromise = (async () => {
       const moduleUrl = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.2'
-      const transformers = await import(/* @vite-ignore */ moduleUrl) as { pipeline: (task: string, model: string, options?: Record<string, unknown>) => Promise<Extractor> }
+      const transformers = await import(/* @vite-ignore */ moduleUrl) as {
+        pipeline: (task: string, model: string, options?: Record<string, unknown>) => Promise<Extractor>
+      }
       return transformers.pipeline('feature-extraction', HUGGING_FACE_MODEL, { dtype: 'q8' })
     })()
   }
   return extractorPromise
 }
 
-function toVector(output: { data: Float32Array | number[] }): number[] {
+function toVector(output: ModelOutput): number[] {
   return Array.from(output.data)
 }
 
@@ -69,9 +69,11 @@ function cosine(a: number[], b: number[]): number {
   let normB = 0
   const length = Math.min(a.length, b.length)
   for (let index = 0; index < length; index += 1) {
-    dot += a[index] * b[index]
-    normA += a[index] ** 2
-    normB += b[index] ** 2
+    const left = a[index] ?? 0
+    const right = b[index] ?? 0
+    dot += left * right
+    normA += left ** 2
+    normB += right ** 2
   }
   return dot / (Math.sqrt(normA) * Math.sqrt(normB) || 1)
 }
@@ -119,40 +121,36 @@ function estimateAnomaly(amountCents: number, category: string, transactions: Tr
   const peers = transactions.filter((transaction) => transaction.type === 'expense' && transaction.category === category)
   if (peers.length < 2) return 0.15
   const mean = peers.reduce((sum, transaction) => sum + transaction.amountCents, 0) / peers.length
-  const deviation = Math.abs(amountCents - mean) / Math.max(mean, 1)
-  return Math.min(0.99, deviation / 2)
+  return Math.min(0.99, Math.abs(amountCents - mean) / Math.max(mean, 1) / 2)
 }
 
 export async function classifyTransaction(description: string, amountCents: number, transactions: Transaction[]): Promise<AiSuggestion> {
   const ruleCategory = ruleBasedCategory(description)
   let category = ruleCategory ?? 'Sonstiges'
-  let semanticScore = ruleCategory ? 0.92 : 0
+  let semanticScore = ruleCategory ? 0.92 : 0.45
 
   try {
     const extractor = await getExtractor()
     const prototypes = await getPrototypes()
     const output = await extractor(description, { pooling: 'mean', normalize: true })
     const vector = toVector(output)
-    const ranked = [...prototypes.entries()]
+    const best = [...prototypes.entries()]
       .map(([name, prototype]) => ({ name, score: cosine(vector, prototype) }))
-      .sort((a, b) => b.score - a.score)
-    if (!ruleCategory || ranked[0].score > 0.72) {
-      category = ranked[0].name
-      semanticScore = ranked[0].score
+      .sort((a, b) => b.score - a.score)[0]
+    if (best && (!ruleCategory || best.score > 0.72)) {
+      category = best.name
+      semanticScore = best.score
     }
   } catch {
-    semanticScore = ruleCategory ? 0.9 : 0.45
+    // Offline/rules fallback keeps the app usable before the model has been cached.
   }
 
-  const merchant = normalizeMerchant(description)
   const recurringProbability = estimateRecurring(description, transactions)
   const anomalyScore = estimateAnomaly(amountCents, category, transactions)
-  const confidence = Math.round(Math.max(0.45, Math.min(0.99, semanticScore)) * 100)
-
   return {
     category,
-    merchant,
-    confidence,
+    merchant: normalizeMerchant(description),
+    confidence: Math.round(Math.max(0.45, Math.min(0.99, semanticScore)) * 100),
     recurringProbability: Math.round(recurringProbability * 100),
     anomalyScore: Math.round(anomalyScore * 100),
     explanation: ruleCategory
@@ -168,10 +166,11 @@ export function generateInsights(transactions: Transaction[]): string[] {
   const categoryTotals = new Map<string, number>()
   expenses.forEach((transaction) => categoryTotals.set(transaction.category, (categoryTotals.get(transaction.category) ?? 0) + transaction.amountCents))
   const topCategory = [...categoryTotals.entries()].sort((a, b) => b[1] - a[1])[0]
+  const euro = (cents: number) => (cents / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })
 
   return [
-    recurring.length ? `${recurring.length} feste Zahlungen verursachen zusammen ${(recurring.reduce((sum, item) => sum + item.amountCents, 0) / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })} pro Monat.` : 'Noch keine wiederkehrenden Zahlungen bestätigt.',
-    topCategory ? `Die größte Ausgabenkategorie ist ${topCategory[0]} mit ${(topCategory[1] / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}.` : 'Noch nicht genug Ausgaben für eine Kategorienanalyse.',
-    biggest ? `Die größte einzelne Ausgabe ist „${biggest.description}“ mit ${(biggest.amountCents / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}.` : 'Noch keine Ausgaben vorhanden.',
+    recurring.length ? `${recurring.length} feste Zahlungen verursachen zusammen ${euro(recurring.reduce((sum, item) => sum + item.amountCents, 0))} pro Monat.` : 'Noch keine wiederkehrenden Zahlungen bestätigt.',
+    topCategory ? `Die größte Ausgabenkategorie ist ${topCategory[0]} mit ${euro(topCategory[1])}.` : 'Noch nicht genug Ausgaben für eine Kategorienanalyse.',
+    biggest ? `Die größte einzelne Ausgabe ist „${biggest.description}“ mit ${euro(biggest.amountCents)}.` : 'Noch keine Ausgaben vorhanden.',
   ]
 }
