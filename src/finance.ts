@@ -1,3 +1,4 @@
+import { detectRecurringPayments } from './recurringDetection'
 import type { AppState, Transaction } from './types'
 
 export const formatMoney = (cents: number) =>
@@ -71,7 +72,5 @@ export function categoryBreakdown(transactions: Transaction[]) {
 }
 
 export function recurringPayments(transactions: Transaction[]) {
-  return transactions
-    .filter((transaction) => transaction.recurring && transaction.type === 'expense')
-    .sort((a, b) => b.amountCents - a.amountCents)
+  return detectRecurringPayments(transactions).map((candidate) => candidate.transaction)
 }
