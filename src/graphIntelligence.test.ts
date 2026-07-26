@@ -1,10 +1,16 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { behaviorBanditScore } from './graphIntelligence'
 import type { BehaviorEdge } from './behavior'
 
 describe('behavior graph intelligence', () => {
-  it('rewards repeated confirmed behavior', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-26T12:00:00Z'))
+  })
+
+  afterEach(() => vi.useRealTimers())
+
+  it('rewards repeated confirmed behavior', () => {
     const base: BehaviorEdge = {
       merchant: 'rewe',
       category: 'Lebensmittel',
@@ -14,11 +20,9 @@ describe('behavior graph intelligence', () => {
       lastUpdated: '2026-07-25T12:00:00Z',
     }
     expect(behaviorBanditScore({ ...base, confirmations: 10 })).toBeGreaterThan(behaviorBanditScore(base))
-    vi.useRealTimers()
   })
 
   it('decays stale evidence without deleting it', () => {
-    vi.setSystemTime(new Date('2026-07-26T12:00:00Z'))
     const recent: BehaviorEdge = {
       merchant: 'netflix',
       category: 'Verträge',
@@ -29,6 +33,5 @@ describe('behavior graph intelligence', () => {
     }
     const stale = { ...recent, lastUpdated: '2024-07-25T12:00:00Z' }
     expect(behaviorBanditScore(recent)).toBeGreaterThan(behaviorBanditScore(stale))
-    vi.useRealTimers()
   })
 })
