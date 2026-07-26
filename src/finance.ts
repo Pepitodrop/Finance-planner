@@ -7,8 +7,12 @@ export function totalBalance(state: AppState): number {
   return state.accounts.reduce((sum, account) => sum + account.balanceCents, 0)
 }
 
-export function currentMonthTotals(transactions: Transaction[]) {
-  const currentMonth = '2026-07'
+function monthKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
+export function currentMonthTotals(transactions: Transaction[], referenceDate = new Date()) {
+  const currentMonth = monthKey(referenceDate)
   return transactions
     .filter((transaction) => transaction.date.startsWith(currentMonth))
     .reduce(
@@ -21,29 +25,36 @@ export function currentMonthTotals(transactions: Transaction[]) {
     )
 }
 
-export function monthlyProjection(state: AppState, months = 12) {
-  const recurring = state.transactions.filter((transaction) => transaction.recurring)
-  const recurringIncome = recurring
-    .filter((transaction) => transaction.type === 'income')
-    .reduce((sum, transaction) => sum + transaction.amountCents, 0)
-  const recurringExpenses = recurring
-    .filter((transaction) => transaction.type === 'expense')
-    .reduce((sum, transaction) => sum + transaction.amountCents, 0)
+function averageMonthlyCashFlow(transactions: Transaction[]): { incomeCents: number; expenseCents: number } {
+  if (!transactions.length) return { incomeCents: 0, expenseCents: 0 }
+  const grouped = new Map<string, { incomeCents: number; expenseCents: number }>()
+  for (const transaction of transactions) {
+    const key = transaction.date.slice(0, 7)
+    const totals = grouped.get(key) ?? { incomeCents: 0, expenseCents: 0 }
+    if (transaction.type === 'income') totals.incomeCents += transaction.amountCents
+    else totals.expenseCents += transaction.amountCents
+    grouped.set(key, totals)
+  }
+  const months = [...grouped.values()]
+  return {
+    incomeCents: Math.round(months.reduce((sum, item) => sum + item.incomeCents, 0) / months.length),
+    expenseCents: Math.round(months.reduce((sum, item) => sum + item.expenseCents, 0) / months.length),
+  }
+}
 
-  const discretionaryExpenses = state.transactions
-    .filter((transaction) => transaction.type === 'expense' && !transaction.recurring)
-    .reduce((sum, transaction) => sum + transaction.amountCents, 0)
-
-  const monthlyNet = recurringIncome - recurringExpenses - discretionaryExpenses
+export function monthlyProjection(state: AppState, months = 12, referenceDate = new Date()) {
+  const average = averageMonthlyCashFlow(state.transactions)
+  const monthlyNet = average.incomeCents - average.expenseCents
   const startingBalance = totalBalance(state)
 
-  return Array.from({ length: months }, (_, index) => ({
-    month: new Intl.DateTimeFormat('de-DE', { month: 'short', year: '2-digit' }).format(
-      new Date(2026, 7 + index, 1),
-    ),
-    balance: (startingBalance + monthlyNet * (index + 1)) / 100,
-    net: monthlyNet / 100,
-  }))
+  return Array.from({ length: Math.max(0, months) }, (_, index) => {
+    const date = new Date(referenceDate.getFullYear(), referenceDate.getMonth() + index + 1, 1)
+    return {
+      month: new Intl.DateTimeFormat('de-DE', { month: 'short', year: '2-digit' }).format(date),
+      balance: (startingBalance + monthlyNet * (index + 1)) / 100,
+      net: monthlyNet / 100,
+    }
+  })
 }
 
 export function categoryBreakdown(transactions: Transaction[]) {
@@ -51,10 +62,7 @@ export function categoryBreakdown(transactions: Transaction[]) {
   transactions
     .filter((transaction) => transaction.type === 'expense')
     .forEach((transaction) => {
-      categoryMap.set(
-        transaction.category,
-        (categoryMap.get(transaction.category) ?? 0) + transaction.amountCents,
-      )
+      categoryMap.set(transaction.category, (categoryMap.get(transaction.category) ?? 0) + transaction.amountCents)
     })
 
   return Array.from(categoryMap.entries())
