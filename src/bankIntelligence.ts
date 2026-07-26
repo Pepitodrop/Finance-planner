@@ -43,7 +43,7 @@ export function assessBankImportQuality(transactions: Transaction[], smartCatego
   const missingCategory = transactions.filter((item) => !item.category || item.category === 'Unkategorisiert').length
   const weakDescriptions = transactions.filter((item) => item.description.length < 4).length
   const invalidDates = transactions.filter((item) => Number.isNaN(Date.parse(item.date))).length
-  const needsReview = missingCategory + weakDescriptions + invalidDates
+  const needsReview = transactions.filter((item) => !item.category || item.category === 'Unkategorisiert' || item.description.length < 4 || Number.isNaN(Date.parse(item.date))).length
   const penalty = Math.round((missingCategory * 35 + weakDescriptions * 20 + invalidDates * 45) / transactions.length)
   const score = Math.max(0, Math.min(100, 100 - penalty))
   const warnings: string[] = []
