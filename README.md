@@ -20,18 +20,26 @@ An offline-first personal finance dashboard implemented as an independent open-s
 
 ### Behavior learning graph
 
-Every manually entered classification and every accepted AI recommendation strengthens a local merchant–category relationship. The personal graph stores merchant and category nodes, weighted relationships, confirmation counts, and recurring-payment votes. Future recommendations prefer the user's confirmed behavior over generic model output.
+Every manually entered classification and every accepted AI recommendation strengthens a local merchant-category relationship. The personal graph stores merchant and category nodes, weighted relationships, confirmation counts, and recurring-payment votes. Future recommendations prefer the user's confirmed behavior over generic model output.
 
 The behavior graph remains in local browser storage and does not require a hosted Graph ML API.
 
-### Finance analysis, question answering, and planning
+### Adaptive finance assistant
 
-`Xenova/flan-t5-small` runs locally through quantized ONNX inference and powers:
+The assistant now uses an adaptive free local model stack:
+
+1. `onnx-community/Qwen2.5-0.5B-Instruct` is the primary instruction model. It runs quantized in the browser and uses WebGPU when supported.
+2. `Xenova/flan-t5-small` is the low-resource fallback when the larger model or WebGPU path cannot load.
+3. Deterministic exact-answer routing handles balances, recurring costs, cash flow, and largest expenses without asking a language model to calculate money.
+4. A small local conversation memory keeps the latest assistant interactions and includes relevant history in later analysis and planning.
+
+The assistant supports:
 
 - personal finance analysis
 - natural-language questions about stored financial data
 - goal-based savings and cash-flow plans
 - prioritized next steps with explicit assumptions
+- persistent local conversational context
 
 The assistant receives a compact local financial context. It does not directly modify balances, execute transactions, or replace deterministic calculations.
 
@@ -41,6 +49,7 @@ The assistant receives a compact local financial context. It does not directly m
 - no Hugging Face token required
 - transaction data is not sent to a hosted model API
 - models are downloaded once and can be cached by the browser
+- WebGPU acceleration is used when available, with CPU/WASM fallback
 - deterministic rules remain available if a model cannot load
 - authoritative money calculations use integer cents and deterministic logic
 
@@ -85,6 +94,7 @@ core/cobol/             Deterministic fixed-point financial calculations
 - stronger periodicity detection using transaction dates and amount tolerances
 - editable behavior-learning rules and graph inspection
 - evaluation dataset for German banking descriptions
+- receipt, invoice, and contract document extraction
 - Tauri desktop and mobile packaging
 - COBOL C ABI bindings
 
