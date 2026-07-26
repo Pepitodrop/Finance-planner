@@ -1,0 +1,43 @@
+import { useState } from 'react'
+import { BrainCircuit, ChartNoAxesCombined, LoaderCircle, MessageCircleQuestion, Route, Send, ShieldCheck } from 'lucide-react'
+import { ASSISTANT_MODEL, runAssistant, type AssistantMode } from './assistant'
+import { behaviorSummary } from './behavior'
+import type { AppState } from './types'
+
+export function FinanceAssistant({ state }: { state: AppState }) {
+  const [mode, setMode] = useState<AssistantMode>('analysis')
+  const [question, setQuestion] = useState('Wie kann ich meine Sparziele schneller erreichen?')
+  const [answer, setAnswer] = useState('')
+  const [loading, setLoading] = useState(false)
+  const learned = behaviorSummary()
+
+  const run = async () => {
+    setLoading(true)
+    try { setAnswer(await runAssistant(mode, state, question)) }
+    finally { setLoading(false) }
+  }
+
+  return <div className="assistant-page">
+    <section className="panel assistant-hero">
+      <div><p className="eyebrow">Lokales generatives Modell</p><h2>Analyse, Fragen und Finanzplanung</h2><p>Das Modell arbeitet mit einer kompakten Zusammenfassung deiner lokalen Daten. Geldberechnungen bleiben deterministisch.</p></div>
+      <div className="ai-model"><BrainCircuit size={18}/><div><strong>{ASSISTANT_MODEL}</strong><span>Transformers.js · quantisiertes ONNX · ohne API-Key</span></div></div>
+    </section>
+    <section className="assistant-grid">
+      <article className="panel">
+        <div className="assistant-modes">
+          <button className={mode === 'analysis' ? 'active' : ''} onClick={() => setMode('analysis')}><ChartNoAxesCombined size={17}/> Analyse</button>
+          <button className={mode === 'question' ? 'active' : ''} onClick={() => setMode('question')}><MessageCircleQuestion size={17}/> Fragen</button>
+          <button className={mode === 'planning' ? 'active' : ''} onClick={() => setMode('planning')}><Route size={17}/> Planung</button>
+        </div>
+        <label>Deine Frage oder dein Ziel<textarea value={question} onChange={(event) => setQuestion(event.target.value)} rows={5}/></label>
+        <button className="primary" onClick={run} disabled={loading}>{loading ? <LoaderCircle className="spin" size={18}/> : <Send size={18}/>} {loading ? 'Modell arbeitet …' : 'Assistent starten'}</button>
+      </article>
+      <article className="panel">
+        <div className="panel-header"><div><p className="eyebrow">Verhaltenslernen</p><h2>Persönlicher Graph</h2></div><ShieldCheck size={20}/></div>
+        <div className="learning-stats"><div><strong>{learned.nodes}</strong><span>Knoten</span></div><div><strong>{learned.edges}</strong><span>Beziehungen</span></div><div><strong>{learned.learnedDecisions}</strong><span>Bestätigungen</span></div></div>
+        <p className="muted">Jede übernommene Händler-, Kategorie- und Wiederholungsentscheidung verstärkt lokale Graph-Beziehungen. Das Modell passt spätere Vorschläge daran an.</p>
+      </article>
+    </section>
+    <section className="panel assistant-answer"><div className="panel-header"><div><p className="eyebrow">Ergebnis</p><h2>Antwort des Finanzassistenten</h2></div></div><div className="answer-text">{answer || 'Starte eine Analyse, stelle eine Frage oder lasse einen Finanzplan erstellen.'}</div></section>
+  </div>
+}
