@@ -10,8 +10,7 @@
        01  WS-RESULT                PIC S9(15) VALUE 0.
        01  WS-ABS-AMOUNT            PIC 9(15) VALUE 0.
        01  WS-TYPE                  PIC X(7) VALUE SPACES.
-       01  WS-DISPLAY-NUMBER        PIC -9(15).
-       01  WS-STATUS                PIC 9 VALUE 0.
+       01  WS-DISPLAY-NUMBER        PIC -Z(14)9.
 
        PROCEDURE DIVISION.
            ACCEPT WS-MODE FROM ARGUMENT-VALUE
