@@ -29,11 +29,12 @@ export function buildSyncPreview(state: AppState, payload: SyncPayload): SyncPre
     const description = normalizeDescription(external.description)
     const learned = external.category?.trim() ? null : suggestCategoryFromHistory(description, state.transactions)
     const category = external.category?.trim() || learned?.category || 'Unkategorisiert'
-    if (learned) smartCategorized += 1
     const transaction: Transaction = { id: `connector:${payload.connection.provider}:${external.externalId}`, accountId, description, category, type: external.amountCents >= 0 ? 'income' : 'expense', amountCents: Math.abs(external.amountCents), date: external.bookingDate, recurring: false }
     const fingerprint = transactionFingerprint(transaction)
     if (known.has(fingerprint) || state.transactions.some((item) => item.id === transaction.id)) { duplicateCount += 1; continue }
-    known.add(fingerprint); transactionsToImport.push(transaction)
+    known.add(fingerprint)
+    transactionsToImport.push(transaction)
+    if (learned) smartCategorized += 1
   }
   return { accountsToCreate, transactionsToImport, duplicateCount, pendingCount, quality: assessBankImportQuality(transactionsToImport, smartCategorized) }
 }
