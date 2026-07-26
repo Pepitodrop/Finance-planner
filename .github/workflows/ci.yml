@@ -23,8 +23,29 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: npm install --no-fund --no-audit --silent
-      - name: Unit tests
-        run: npm test -- --reporter=dot
+      - name: Capture unit-test diagnostics
+        id: tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          npm test -- --reporter=verbose > unit-test-diagnostics.txt 2>&1
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Upload unit-test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-diagnostics
+          path: unit-test-diagnostics.txt
+          if-no-files-found: error
+          retention-days: 3
+      - name: Enforce unit-test result
+        if: steps.tests.outputs.exit_code != '0'
+        run: |
+          cat unit-test-diagnostics.txt
+          exit 1
       - name: Capture TypeScript diagnostics
         id: typescript
         continue-on-error: true
@@ -53,10 +74,60 @@ jobs:
       - name: Production dependency audit
         run: npm audit --omit=dev --audit-level=high
 
+  connector-server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install GnuCOBOL
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gnucobol
+      - name: Compile authoritative COBOL engine
+        run: |
+          mkdir -p build
+          cobc -Wall -Wextra -x -o build/transaction-rules core/cobol/transaction_rules.cob
+      - name: Backend tests
+        working-directory: server
+        run: npm test
+      - name: Syntax validation
+        run: |
+          node --check server/src/server.js
+          node --check server/src/providers.js
+          node --check server/src/cobol-engine.js
+          node --check server/src/crypto-store.js
+          node --check server/src/security.js
+
   cobol:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq gnucobol
-      - run: cobc -Wall -Wextra -m core/cobol/finance_projection.cob
+      - name: Compile COBOL financial modules
+        run: |
+          mkdir -p build
+          cobc -Wall -Wextra -m core/cobol/finance_projection.cob
+          cobc -Wall -Wextra -x -o build/transaction-rules core/cobol/transaction_rules.cob
+      - name: Verify COBOL transaction rules
+        run: |
+          test "$(build/transaction-rules NORMALIZE -1299)" = "OK|expense|1299"
+          test "$(build/transaction-rules NORMALIZE 250000)" = "OK|income|250000"
+          test "$(build/transaction-rules APPLY 100000 1299 expense)" = "OK|98701"
+          test "$(build/transaction-rules APPLY 98701 5000 income)" = "OK|103701"
+
+  containers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production images
+        run: |
+          docker build -f Dockerfile.web -t finance-planner-web:ci .
+          docker build -f Dockerfile.server -t finance-planner-connector:ci .
+      - name: Validate Compose configuration
+        env:
+          SESSION_SECRET: ci-session-secret-with-at-least-32-characters
+          CONNECTOR_MASTER_KEY: ci-master-key-with-at-least-32-characters
+        run: docker compose config --quiet

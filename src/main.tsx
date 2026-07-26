@@ -7,6 +7,7 @@ import './styles.css'
 import './ai.css'
 import './assistant.css'
 import './usability.css'
+import './connectors.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

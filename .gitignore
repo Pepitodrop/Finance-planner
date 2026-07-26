@@ -5,3 +5,5 @@ dist
 *.dylib
 .DS_Store
 .env
+server/data/
+server/*.env
