@@ -1,1 +1,22 @@
-{"name":"Finance Planner","short_name":"Finance","description":"Offline-first personal finance dashboard with local AI.","start_url":"/","display":"standalone","background_color":"#080c18","theme_color":"#0b1020","lang":"de-DE","categories":["finance","productivity"],"icons":[]}
+{
+  "id": "/",
+  "name": "Finance Planner",
+  "short_name": "Finance",
+  "description": "Offline-first personal finance dashboard with local AI.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#080c18",
+  "theme_color": "#0b1020",
+  "lang": "de-DE",
+  "categories": ["finance", "productivity"],
+  "icons": [
+    {
+      "src": "/icons/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
