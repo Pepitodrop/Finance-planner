@@ -41,15 +41,19 @@ export interface BankTransactionRecord {
 const REQUIRED_SCOPES: BankScope[] = ['accounts', 'balances', 'transactions']
 
 export function assessBankConnectionReadiness(state: BankSyncState, now = new Date()): BankConnectionReadiness {
-  const lastSyncAgeHours = state.lastSuccessfulSyncAt
-    ? (now.getTime() - new Date(state.lastSuccessfulSyncAt).getTime()) / 3_600_000
-    : Number.POSITIVE_INFINITY
+  const lastSyncTimestamp = state.lastSuccessfulSyncAt
+    ? new Date(state.lastSuccessfulSyncAt).getTime()
+    : Number.NaN
+  const lastSyncAgeHours = (now.getTime() - lastSyncTimestamp) / 3_600_000
+  const hasValidFreshSync = Number.isFinite(lastSyncTimestamp)
+    && lastSyncAgeHours >= 0
+    && lastSyncAgeHours <= 24
   const checks: Array<[string, boolean]> = [
     ['Consent is active', state.consent.status === 'active'],
     ['Consent is not expired', new Date(state.consent.expiresAt).getTime() > now.getTime()],
     ['Required PSD2 scopes granted', REQUIRED_SCOPES.every((scope) => state.consent.scopes.includes(scope))],
     ['At least one account connected', state.connectedAccounts > 0],
-    ['Successful sync within 24 hours', lastSyncAgeHours <= 24],
+    ['Successful sync within 24 hours', hasValidFreshSync],
     ['Pagination completed', state.paginationComplete],
     ['Idempotent imports verified', state.idempotencyVerified],
     ['Retry policy configured', state.retryPolicyConfigured],
