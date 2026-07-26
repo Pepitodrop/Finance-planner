@@ -15,7 +15,7 @@ let prototypePromise: Promise<Map<string, number[]>> | null = null
 function normalizeMerchant(description: string): string {
   const cleaned = description.replace(/\b(ec|visa|mastercard|lastschrift|kartenzahlung|zahlung|sepa|gmbh|ag|kg)\b/gi, ' ').replace(/\d{3,}/g, ' ').replace(/[^\p{L}\p{N}&+.-]+/gu, ' ').trim()
   const known: Array<[RegExp, string]> = [[/\brewe\b/i, 'REWE'], [/\bedeka\b/i, 'EDEKA'], [/\blidl\b/i, 'Lidl'], [/\baldi\b/i, 'ALDI'], [/\bnetflix\b/i, 'Netflix'], [/\bspotify\b/i, 'Spotify'], [/\bamazon\b/i, 'Amazon'], [/\bdeutsche bahn|\bdb vertrieb/i, 'Deutsche Bahn'], [/\bpaypal\b/i, 'PayPal']]
-  return known.find(([pattern]) => pattern.test(description))?.[1] ?? cleaned.split(' ').slice(0, 4).join(' ') || description
+  return known.find(([pattern]) => pattern.test(description))?.[1] ?? (cleaned.split(' ').slice(0, 4).join(' ') || description)
 }
 async function getExtractor(): Promise<Extractor> { if (!extractorPromise) extractorPromise = (async () => { const moduleUrl = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.2'; const transformers = await import(/* @vite-ignore */ moduleUrl) as { pipeline: (task: string, model: string, options?: Record<string, unknown>) => Promise<Extractor> }; return transformers.pipeline('feature-extraction', HUGGING_FACE_MODEL, { dtype: 'q8' }) })(); return extractorPromise }
 function toVector(output: { data: Float32Array | number[] }): number[] { return Array.from(output.data) }
