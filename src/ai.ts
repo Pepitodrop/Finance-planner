@@ -1,3 +1,4 @@
+import { loadAiModel } from './aiModels'
 import { predictFromBehavior } from './behavior'
 import type { Transaction } from './types'
 
@@ -12,9 +13,11 @@ export interface AiSuggestion {
   anomalyScore: number
   alternatives: Array<{ category: string; confidence: number }>
   needsReview: boolean
-  source: 'behavior' | 'rules' | 'hugging-face' | 'fallback'
+  source: 'behavior' | 'rules' | 'hugging-face' | 'zero-shot' | 'ensemble' | 'fallback'
 }
 
+interface RankedCategory { name: string; score: number }
+interface ZeroShotResult { labels?: string[]; scores?: number[] }
 type Extractor = (input: string | string[], options?: Record<string, unknown>) => Promise<{ data: Float32Array | number[] }>
 
 const categoryExamples: Record<string, string[]> = {
@@ -30,6 +33,7 @@ const categoryExamples: Record<string, string[]> = {
   Sparen: ['Sparplan Rücklage Tagesgeld Depot Investment ETF', 'Übertrag auf Sparkonto'],
 }
 
+const categoryNames = Object.keys(categoryExamples)
 let extractorPromise: Promise<Extractor> | null = null
 let prototypePromise: Promise<Map<string, number[]>> | null = null
 
@@ -40,11 +44,7 @@ function normalizeMerchant(description: string): string {
 }
 
 async function getExtractor(): Promise<Extractor> {
-  if (!extractorPromise) extractorPromise = (async () => {
-    const moduleUrl = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.2'
-    const transformers = await import(/* @vite-ignore */ moduleUrl) as { pipeline: (task: string, model: string, options?: Record<string, unknown>) => Promise<Extractor> }
-    return transformers.pipeline('feature-extraction', HUGGING_FACE_MODEL, { dtype: 'q8' })
-  })()
+  if (!extractorPromise) extractorPromise = loadAiModel('semantic-multilingual') as Promise<Extractor>
   return extractorPromise
 }
 
@@ -94,6 +94,29 @@ export function calibrateSemanticConfidence(best: number, second: number): numbe
   return Math.round((absolute * 0.65 + separation * 0.35) * 100)
 }
 
+export function resolveEnsembleDecision(semantic: { category: string; confidence: number }, zeroShot: { category: string; confidence: number } | null): { category: string; confidence: number; source: 'hugging-face' | 'zero-shot' | 'ensemble'; needsReview: boolean } {
+  if (!zeroShot) return { ...semantic, source: 'hugging-face', needsReview: semantic.confidence < 60 }
+  if (semantic.category === zeroShot.category) {
+    const confidence = Math.min(96, Math.round(semantic.confidence * .55 + zeroShot.confidence * .45 + 8))
+    return { category: semantic.category, confidence, source: 'ensemble', needsReview: confidence < 65 }
+  }
+  const winner = semantic.confidence >= zeroShot.confidence ? semantic : zeroShot
+  const margin = Math.abs(semantic.confidence - zeroShot.confidence)
+  return { category: winner.category, confidence: Math.min(winner.confidence, 57), source: winner === semantic ? 'hugging-face' : 'zero-shot', needsReview: margin < 20 || winner.confidence < 72 }
+}
+
+async function classifyZeroShot(description: string): Promise<{ category: string; confidence: number } | null> {
+  try {
+    const classifier = await loadAiModel('zero-shot')
+    const output = await classifier(description, { candidate_labels: categoryNames, hypothesis_template: 'Diese Buchung gehört zur Kategorie {}.' }) as ZeroShotResult
+    const label = output.labels?.[0]
+    const score = output.scores?.[0]
+    return label && typeof score === 'number' ? { category: label, confidence: Math.round(score * 100) } : null
+  } catch {
+    return null
+  }
+}
+
 export async function classifyTransaction(description: string, amountCents: number, transactions: Transaction[]): Promise<AiSuggestion> {
   const learned = predictFromBehavior(description)
   const ruleCategory = ruleBasedCategory(description)
@@ -101,29 +124,44 @@ export async function classifyTransaction(description: string, amountCents: numb
   let confidence = learned?.confidence ?? (ruleCategory ? 92 : 35)
   let alternatives: Array<{ category: string; confidence: number }> = []
   let source: AiSuggestion['source'] = learned ? 'behavior' : ruleCategory ? 'rules' : 'fallback'
+  let ensembleNeedsReview = false
 
   try {
     const extractor = await getExtractor()
     const prototypes = await getPrototypes()
     const vector = toVector(await extractor(description, { pooling: 'mean', normalize: true }))
-    const ranked = [...prototypes.entries()].map(([name, prototype]) => ({ name, score: cosine(vector, prototype) })).sort((a, b) => b.score - a.score)
+    const ranked: RankedCategory[] = [...prototypes.entries()].map(([name, prototype]) => ({ name, score: cosine(vector, prototype) })).sort((a, b) => b.score - a.score)
     const semanticConfidence = calibrateSemanticConfidence(ranked[0]?.score ?? 0, ranked[1]?.score ?? 0)
     alternatives = ranked.slice(0, 3).map((item, index) => ({ category: item.name, confidence: index === 0 ? semanticConfidence : Math.max(1, Math.round(item.score * 100)) }))
-    if (!learned && !ruleCategory && semanticConfidence >= 58) { category = ranked[0].name; confidence = semanticConfidence; source = 'hugging-face' }
+
+    if (!learned && !ruleCategory) {
+      const semantic = { category: ranked[0]?.name ?? 'Sonstiges', confidence: semanticConfidence }
+      const zeroShot = semanticConfidence >= 35 && semanticConfidence < 75 ? await classifyZeroShot(description) : null
+      const decision = resolveEnsembleDecision(semantic, zeroShot)
+      category = decision.category
+      confidence = decision.confidence
+      source = decision.source
+      ensembleNeedsReview = decision.needsReview
+      if (zeroShot && !alternatives.some((item) => item.category === zeroShot.category)) alternatives.push(zeroShot)
+    }
     if (!learned && ruleCategory && ranked[0]?.name === ruleCategory) confidence = Math.min(98, Math.max(confidence, semanticConfidence + 5))
   } catch {
     confidence = Math.max(confidence, ruleCategory ? 90 : 35)
   }
 
-  const needsReview = confidence < 60 || category === 'Sonstiges'
+  const needsReview = ensembleNeedsReview || confidence < 60 || category === 'Sonstiges'
   const recurringProbability = learned ? Math.max(learned.recurringProbability / 100, estimateRecurring(description, transactions)) : estimateRecurring(description, transactions)
   const explanation = learned
     ? `Dein persönlicher Verhaltensgraph bevorzugt „${category}“: ${learned.evidence}.`
     : source === 'rules'
       ? `Ein belastbarer Buchungstext-Regelsatz passt zu „${category}“; das Hugging-Face-Modell dient nur als Plausibilitätsprüfung.`
-      : source === 'hugging-face'
-        ? `Das mehrsprachige Hugging-Face-Modell erkennt „${category}“ mit ausreichendem Abstand zur zweitbesten Kategorie.`
-        : 'Die Signale sind nicht eindeutig. Bitte Kategorie bestätigen, damit der persönliche Verhaltensgraph lernen kann.'
+      : source === 'ensemble'
+        ? `Zwei unterschiedliche Hugging-Face-Modelle stimmen unabhängig für „${category}“ überein.`
+        : source === 'zero-shot'
+          ? `Das Zero-Shot-Modell bevorzugt „${category}“, aber die Modellsignale sind nicht vollständig einig.`
+          : source === 'hugging-face'
+            ? `Das mehrsprachige Embedding-Modell erkennt „${category}“ anhand semantischer Ähnlichkeit.`
+            : 'Die Signale sind nicht eindeutig. Bitte Kategorie bestätigen, damit der persönliche Verhaltensgraph lernen kann.'
 
   return {
     category,
@@ -131,7 +169,7 @@ export async function classifyTransaction(description: string, amountCents: numb
     confidence: Math.max(1, Math.min(99, confidence)),
     recurringProbability: Math.round(recurringProbability * 100),
     anomalyScore: robustAnomalyScore(amountCents, category, transactions),
-    alternatives,
+    alternatives: alternatives.sort((a, b) => b.confidence - a.confidence).slice(0, 4),
     needsReview,
     source,
     explanation,
