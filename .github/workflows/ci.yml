@@ -21,15 +21,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install --no-fund --no-audit
-      - run: npm test
-      - run: npm run build
-      - run: npm audit --omit=dev --audit-level=high
+      - name: Install dependencies
+        run: npm install --no-fund --no-audit --silent
+      - name: Unit tests
+        run: npm test -- --reporter=dot
+      - name: TypeScript diagnostics
+        run: npx tsc -b --pretty false
+      - name: Production bundle
+        run: npx vite build
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
 
   cobol:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y gnucobol
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq gnucobol
       - run: cobc -Wall -Wextra -m core/cobol/finance_projection.cob
