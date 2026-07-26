@@ -1,7 +1,8 @@
-import { useState } from 'react'
-import { BrainCircuit, ChartNoAxesCombined, LoaderCircle, MessageCircleQuestion, Route, Send, ShieldCheck } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { BrainCircuit, ChartNoAxesCombined, Check, LoaderCircle, MessageCircleQuestion, Route, Send, ShieldCheck, X } from 'lucide-react'
 import { ASSISTANT_MODEL, runAssistant, type AssistantMode } from './assistant'
 import { behaviorSummary } from './behavior'
+import { createFinancialAgentPlan, decideAgentAction, type AgentPlan } from './financialAgent'
 import type { AppState } from './types'
 
 export function FinanceAssistant({ state }: { state: AppState }) {
@@ -9,13 +10,19 @@ export function FinanceAssistant({ state }: { state: AppState }) {
   const [question, setQuestion] = useState('Wie kann ich meine Sparziele schneller erreichen?')
   const [answer, setAnswer] = useState('')
   const [loading, setLoading] = useState(false)
+  const initialPlan = useMemo(() => createFinancialAgentPlan(state), [state])
+  const [plan, setPlan] = useState<AgentPlan>(initialPlan)
   const learned = behaviorSummary()
 
   const run = async () => {
     setLoading(true)
-    try { setAnswer(await runAssistant(mode, state, question)) }
-    finally { setLoading(false) }
+    try {
+      setAnswer(await runAssistant(mode, state, question))
+      setPlan(createFinancialAgentPlan(state))
+    } finally { setLoading(false) }
   }
+
+  const decide = (actionId: string, decision: 'approved' | 'rejected') => setPlan((current) => decideAgentAction(current, actionId, decision))
 
   return <div className="assistant-page">
     <section className="panel assistant-hero">
@@ -39,5 +46,10 @@ export function FinanceAssistant({ state }: { state: AppState }) {
       </article>
     </section>
     <section className="panel assistant-answer"><div className="panel-header"><div><p className="eyebrow">Ergebnis</p><h2>Antwort des Finanzassistenten</h2></div></div><div className="answer-text">{answer || 'Starte eine Analyse, stelle eine Frage oder lasse einen Finanzplan erstellen.'}</div></section>
+    <section className="panel">
+      <div className="panel-header"><div><p className="eyebrow">Approval-gated Agent</p><h2>Vorgeschlagene nächste Schritte</h2></div><span className="pill">Datenqualität: {plan.dataQuality}</span></div>
+      <p className="muted">Der Agent darf analysieren und Vorschläge priorisieren. Er führt niemals Zahlungen, Überweisungen oder Kontenänderungen ohne ausdrückliche Bestätigung aus.</p>
+      <div className="transaction-list">{plan.actions.map((action) => <div className="transaction-row" key={action.id}><div><strong>{action.title}</strong><span>{action.rationale}{action.amountCents ? ` · ${(action.amountCents / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}` : ''}</span></div><span className="pill">{action.status}</span>{action.status === 'proposed' && <div className="row-actions"><button aria-label="Vorschlag genehmigen" onClick={() => decide(action.id, 'approved')}><Check size={16}/></button><button aria-label="Vorschlag ablehnen" onClick={() => decide(action.id, 'rejected')}><X size={16}/></button></div>}</div>)}</div>
+    </section>
   </div>
 }
