@@ -37,6 +37,27 @@ describe('connector sync', () => {
     expect(second.duplicateCount).toBe(2)
   })
 
+  it('does not count a learned category for a rejected duplicate', () => {
+    const history: AppState = {
+      ...state,
+      accounts: [...state.accounts, { id: 'connector:gocardless:bank-account-1', name: 'Testbank', type: 'checking', balanceCents: 0, currency: 'EUR' }],
+      transactions: [
+        ...state.transactions,
+        { id: 'history-2', accountId: 'manual', description: 'REWE', category: 'Lebensmittel', type: 'expense', amountCents: 2000, date: '2026-07-19' },
+        { id: 'connector:gocardless:duplicate', accountId: 'connector:gocardless:bank-account-1', description: 'REWE', category: 'Lebensmittel', type: 'expense', amountCents: 2500, date: '2026-07-20' },
+      ],
+    }
+    const duplicatePayload: SyncPayload = {
+      connection: payload.connection,
+      accounts: payload.accounts,
+      transactions: [{ externalId: 'duplicate', externalAccountId: 'bank-account-1', description: 'REWE', amountCents: -2500, currency: 'EUR', bookingDate: '2026-07-20' }],
+    }
+    const preview = buildSyncPreview(history, duplicatePayload)
+    expect(preview.transactionsToImport).toHaveLength(0)
+    expect(preview.duplicateCount).toBe(1)
+    expect(preview.quality.smartCategorized).toBe(0)
+  })
+
   it('creates stable content fingerprints', () => {
     const transaction: Transaction = { id: '1', accountId: 'a', description: '  REWE   Markt ', category: 'x', type: 'expense', amountCents: 1000, date: '2026-07-01' }
     expect(transactionFingerprint(transaction)).toBe('a|2026-07-01|1000|rewe markt')
