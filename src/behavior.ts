@@ -1,6 +1,8 @@
 import type { Transaction } from './types'
+import { getSecureValue, setSecureValue } from './vault'
 
-const STORAGE_KEY = 'finance-planner-behavior-graph-v1'
+const SECURE_KEY = 'behavior-graph-v1'
+const LEGACY_STORAGE_KEY = 'finance-planner-behavior-graph-v1'
 
 export interface BehaviorEdge {
   merchant: string
@@ -22,22 +24,40 @@ function merchantKey(value: string): string {
   return value.toLocaleLowerCase('de-DE').replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
 }
 
+function validEdges(value: unknown): value is BehaviorEdge[] {
+  return Array.isArray(value) && value.every((edge) => typeof edge === 'object' && edge !== null
+    && typeof (edge as BehaviorEdge).merchant === 'string'
+    && typeof (edge as BehaviorEdge).category === 'string'
+    && typeof (edge as BehaviorEdge).weight === 'number'
+    && typeof (edge as BehaviorEdge).confirmations === 'number'
+    && typeof (edge as BehaviorEdge).recurringVotes === 'number')
+}
+
 export function loadBehaviorGraph(): BehaviorEdge[] {
+  const encrypted = getSecureValue<unknown>(SECURE_KEY, undefined)
+  if (validEdges(encrypted)) return encrypted
+
+  const legacy = localStorage.getItem(LEGACY_STORAGE_KEY)
+  if (!legacy) return []
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]') as BehaviorEdge[]
+    const parsed: unknown = JSON.parse(legacy)
+    if (!validEdges(parsed)) return []
+    setSecureValue(SECURE_KEY, parsed)
+    localStorage.removeItem(LEGACY_STORAGE_KEY)
+    return parsed
   } catch {
     return []
   }
 }
 
 function saveBehaviorGraph(edges: BehaviorEdge[]): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(edges))
+  setSecureValue(SECURE_KEY, edges)
+  localStorage.removeItem(LEGACY_STORAGE_KEY)
 }
 
 export function learnBehavior(transaction: Transaction, category: string, recurring: boolean): void {
   const merchant = merchantKey(transaction.description)
   if (!merchant) return
-
   const edges = loadBehaviorGraph()
   const existing = edges.find((edge) => edge.merchant === merchant && edge.category === category)
   if (existing) {
@@ -46,16 +66,8 @@ export function learnBehavior(transaction: Transaction, category: string, recurr
     existing.recurringVotes += recurring ? 1 : 0
     existing.lastUpdated = new Date().toISOString()
   } else {
-    edges.push({
-      merchant,
-      category,
-      weight: 0.62,
-      confirmations: 1,
-      recurringVotes: recurring ? 1 : 0,
-      lastUpdated: new Date().toISOString(),
-    })
+    edges.push({ merchant, category, weight: 0.62, confirmations: 1, recurringVotes: recurring ? 1 : 0, lastUpdated: new Date().toISOString() })
   }
-
   saveBehaviorGraph(edges.sort((a, b) => b.weight - a.weight).slice(0, 500))
 }
 
@@ -63,12 +75,8 @@ export function predictFromBehavior(description: string): BehaviorPrediction | n
   const merchant = merchantKey(description)
   const candidates = loadBehaviorGraph().filter((edge) => edge.merchant === merchant)
   if (!candidates.length) return null
-
   const best = candidates.sort((a, b) => b.weight - a.weight)[0]
-  const recurringProbability = best.confirmations
-    ? Math.round((best.recurringVotes / best.confirmations) * 100)
-    : 0
-
+  const recurringProbability = best.confirmations ? Math.round((best.recurringVotes / best.confirmations) * 100) : 0
   return {
     category: best.category,
     recurringProbability,
