@@ -6,7 +6,6 @@ const source = await readFile(new URL('../src/aiModels.ts', import.meta.url), 'u
 const requiredModels = [
   'Xenova/paraphrase-multilingual-MiniLM-L12-v2',
   'onnx-community/Qwen2.5-0.5B-Instruct',
-  'Xenova/flan-t5-small',
 ]
 
 for (const model of requiredModels) {
