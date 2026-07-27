@@ -5,6 +5,7 @@ import { createAuthRouter } from './auth-router.js'
 import { EncryptedStore } from './crypto-store.js'
 import { createSession, issueState, verifySession, verifyState } from './security.js'
 import { startGoCardless, startPayPal, syncGoCardless, syncPayPal } from './providers.js'
+import { HttpError, SlidingWindowRateLimiter, classifyError, clientIp, requestId, validateProductionConfig } from './runtime-security.js'
 
 const env = process.env
 const port = Number(env.PORT || 8787)
@@ -14,30 +15,48 @@ const sessionSecret = env.SESSION_SECRET || ''
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be an integer between 1 and 65535.')
 if (!['127.0.0.1', '0.0.0.0', '::'].includes(host)) throw new Error('HOST must be 127.0.0.1, 0.0.0.0, or ::.')
 if (sessionSecret.length < 32) throw new Error('SESSION_SECRET must contain at least 32 characters.')
+validateProductionConfig(env, origin)
+
 const store = new EncryptedStore(env.CONNECTOR_STORE_PATH || './data/connectors.enc.json', env.CONNECTOR_MASTER_KEY || '')
 await store.load()
+let ready = true
+let shuttingDown = false
+const generalLimiter = new SlidingWindowRateLimiter({ limit: Number(env.RATE_LIMIT_PER_MINUTE || 120), windowMs: 60_000 })
+const sensitiveLimiter = new SlidingWindowRateLimiter({ limit: Number(env.SENSITIVE_RATE_LIMIT_PER_MINUTE || 20), windowMs: 60_000 })
 
 function send(response, status, payload, headers = {}) {
   response.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
+    'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    'Cross-Origin-Opener-Policy': 'same-origin',
+    'Cross-Origin-Resource-Policy': 'same-site',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
+    'Strict-Transport-Security': origin.startsWith('https://') ? 'max-age=31536000; includeSubDomains' : undefined,
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'no-referrer',
-    ...headers,
+    ...Object.fromEntries(Object.entries(headers).filter(([, value]) => value !== undefined)),
   })
   response.end(JSON.stringify(payload))
 }
 
 async function body(request) {
+  const contentType = String(request.headers['content-type'] || '').split(';')[0].trim().toLowerCase()
+  if (contentType && contentType !== 'application/json') throw new HttpError(415, 'unsupported_media_type', 'Content-Type must be application/json.')
   const chunks = []
   let size = 0
   for await (const chunk of request) {
     size += chunk.length
-    if (size > 1_000_000) throw new Error('Request body too large.')
+    if (size > 1_000_000) throw new HttpError(413, 'payload_too_large', 'Request body too large.')
     chunks.push(chunk)
   }
-  return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}
+  if (!chunks.length) return {}
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  } catch {
+    throw new HttpError(400, 'invalid_json', 'Invalid JSON request body.')
+  }
 }
 
 function cookies(request) {
@@ -59,6 +78,18 @@ function cors(request, response) {
   return true
 }
 
+function rateLimit(request, response, pathname) {
+  const remote = env.TRUST_PROXY === 'true' ? clientIp(request) : request.socket?.remoteAddress || 'unknown'
+  const sensitive = /^\/api\/(auth|session|connectors)/.test(pathname)
+  const result = (sensitive ? sensitiveLimiter : generalLimiter).consume(`${remote}:${sensitive ? 'sensitive' : 'general'}`)
+  response.setHeader('RateLimit-Limit', sensitive ? sensitiveLimiter.limit : generalLimiter.limit)
+  response.setHeader('RateLimit-Remaining', result.remaining)
+  response.setHeader('RateLimit-Reset', Math.ceil(result.resetAt / 1000))
+  if (result.allowed) return true
+  send(response, 429, { error: { code: 'rate_limited', message: 'Too many requests.' }, requestId: response.getHeader('X-Request-ID') }, { 'Retry-After': result.retryAfter })
+  return false
+}
+
 function connection(provider, stored, error) {
   return {
     id: provider,
@@ -75,7 +106,7 @@ async function start(provider, request, response) {
   const user = userId(request)
   const input = await body(request)
   const redirect = new URL(String(input.redirectUri || origin))
-  if (redirect.origin !== origin) throw new Error('Invalid redirect origin.')
+  if (redirect.origin !== origin) throw new HttpError(400, 'invalid_redirect', 'Invalid redirect origin.')
   const consentId = randomUUID()
   const state = issueState(user, provider, sessionSecret, { consentId, redirectUri: redirect.toString() })
   const claims = verifyState(state, provider, sessionSecret)
@@ -83,7 +114,7 @@ async function start(provider, request, response) {
     ? await startGoCardless({ env, state, redirectUri: redirect.toString(), country: input.country || 'DE' })
     : provider === 'paypal'
       ? await startPayPal({ env, state, redirectUri: redirect.toString() })
-      : (() => { throw new Error('finAPI adapter requires a licensed finAPI tenant and is not configured yet.') })()
+      : (() => { throw new HttpError(501, 'provider_unavailable', 'finAPI adapter is not configured.') })()
   await store.createConnectionSetup({
     userId: user,
     provider,
@@ -91,13 +122,7 @@ async function start(provider, request, response) {
     redirectUri: redirect.toString(),
     nonce: claims.nonce,
     expiresAt: claims.exp * 1000,
-    connection: {
-      ...result.credential,
-      consentId,
-      redirectUri: redirect.toString(),
-      state,
-      createdAt: new Date().toISOString(),
-    },
+    connection: { ...result.credential, consentId, redirectUri: redirect.toString(), state, createdAt: new Date().toISOString() },
   })
   send(response, 200, { redirectUrl: result.redirectUrl })
 }
@@ -125,17 +150,23 @@ async function sync(request, response) {
 const handleAuth = await createAuthRouter({ env, origin, sessionSecret, send })
 
 const server = createServer(async (request, response) => {
+  const startedAt = Date.now()
+  const id = requestId(request.headers)
+  response.setHeader('X-Request-ID', id)
   try {
-    if (!cors(request, response)) return send(response, 403, { error: 'Origin not allowed.' })
+    const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
+    if (shuttingDown && url.pathname !== '/health/live') return send(response, 503, { error: { code: 'shutting_down', message: 'Service is shutting down.' }, requestId: id })
+    if (!cors(request, response)) return send(response, 403, { error: { code: 'origin_forbidden', message: 'Origin not allowed.' }, requestId: id })
+    if (!rateLimit(request, response, url.pathname)) return
     if (request.method === 'OPTIONS') {
-      response.writeHead(204, { 'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' })
+      response.writeHead(204, { 'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, X-Request-ID', 'Access-Control-Max-Age': '600' })
       return response.end()
     }
-    const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
+    if (request.method === 'GET' && url.pathname === '/health/live') return send(response, 200, { status: 'ok', service: 'finance-planner-connector' })
+    if (request.method === 'GET' && (url.pathname === '/health' || url.pathname === '/health/ready')) return send(response, ready ? 200 : 503, { status: ready ? 'ready' : 'not_ready', service: 'finance-planner-connector', version: '0.1.0' })
     if (await handleAuth(request, response, url)) return
-    if (request.method === 'GET' && url.pathname === '/health') return send(response, 200, { status: 'ok', service: 'finance-planner-connector', version: '0.1.0' })
     if (request.method === 'POST' && url.pathname === '/api/session/local') {
-      if (env.AUTH_MODE !== 'local') return send(response, 404, { error: 'Not found.' })
+      if (env.AUTH_MODE !== 'local') return send(response, 404, { error: { code: 'not_found', message: 'Not found.' }, requestId: id })
       const token = createSession('local-user', sessionSecret, 86400)
       return send(response, 200, { authenticated: true }, { 'Set-Cookie': `fp_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400${origin.startsWith('https://') ? '; Secure' : ''}` })
     }
@@ -150,27 +181,56 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'GET' && url.pathname === '/api/connectors/callback') {
       const provider = String(url.searchParams.get('provider') || '')
-      if (!['gocardless', 'finapi', 'paypal'].includes(provider)) throw new Error('Unknown connector provider.')
+      if (!['gocardless', 'finapi', 'paypal'].includes(provider)) throw new HttpError(400, 'unknown_provider', 'Unknown connector provider.')
       const state = verifyState(url.searchParams.get('state'), provider, sessionSecret)
-      if (!state.consentId || !state.redirectUri) throw new Error('Consent state is incomplete.')
-      const activated = await store.activateConnection({
-        nonce: state.nonce,
-        consentId: state.consentId,
-        userId: state.sub,
-        provider,
-        redirectUri: state.redirectUri,
-        now: Date.now(),
-        connectedAt: new Date().toISOString(),
-      })
-      if (!activated) throw new Error('Consent state was already used, expired, or does not match.')
-      response.writeHead(302, { Location: state.redirectUri, 'Cache-Control': 'no-store' })
+      if (!state.consentId || !state.redirectUri) throw new HttpError(400, 'invalid_state', 'Consent state is incomplete.')
+      const activated = await store.activateConnection({ nonce: state.nonce, consentId: state.consentId, userId: state.sub, provider, redirectUri: state.redirectUri, now: Date.now(), connectedAt: new Date().toISOString() })
+      if (!activated) throw new HttpError(400, 'invalid_state', 'Consent state was already used, expired, or does not match.')
+      response.writeHead(302, { Location: state.redirectUri, 'Cache-Control': 'no-store', 'X-Request-ID': id })
       return response.end()
     }
-    send(response, 404, { error: 'Not found.' })
+    send(response, 404, { error: { code: 'not_found', message: 'Not found.' }, requestId: id })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unexpected server error.'
-    send(response, /Authentication|session/i.test(message) ? 401 : 400, { error: message })
+    const failure = classifyError(error)
+    if (failure.status >= 500) console.error(JSON.stringify({ level: 'error', requestId: id, error: error instanceof Error ? error.stack : String(error) }))
+    send(response, failure.status, { error: { code: failure.code, message: failure.message }, requestId: id })
+  } finally {
+    console.log(JSON.stringify({ level: 'info', requestId: id, method: request.method, path: request.url, status: response.statusCode, durationMs: Date.now() - startedAt }))
   }
 })
 
-server.listen(port, host, () => console.log(`Connector server listening on http://${host}:${port}`))
+server.requestTimeout = Number(env.REQUEST_TIMEOUT_MS || 15_000)
+server.headersTimeout = Number(env.HEADERS_TIMEOUT_MS || 10_000)
+server.keepAliveTimeout = Number(env.KEEP_ALIVE_TIMEOUT_MS || 5_000)
+server.maxRequestsPerSocket = Number(env.MAX_REQUESTS_PER_SOCKET || 1000)
+
+function shutdown(signal) {
+  if (shuttingDown) return
+  shuttingDown = true
+  ready = false
+  console.log(JSON.stringify({ level: 'info', event: 'shutdown_started', signal }))
+  const force = setTimeout(() => process.exit(1), Number(env.SHUTDOWN_TIMEOUT_MS || 10_000)).unref()
+  server.close((error) => {
+    clearTimeout(force)
+    if (error) {
+      console.error(JSON.stringify({ level: 'error', event: 'shutdown_failed', error: error.message }))
+      process.exit(1)
+    }
+    console.log(JSON.stringify({ level: 'info', event: 'shutdown_complete' }))
+    process.exit(0)
+  })
+  server.closeIdleConnections?.()
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('SIGINT', () => shutdown('SIGINT'))
+process.on('uncaughtException', (error) => {
+  console.error(JSON.stringify({ level: 'fatal', event: 'uncaught_exception', error: error.stack || error.message }))
+  shutdown('uncaughtException')
+})
+process.on('unhandledRejection', (error) => {
+  console.error(JSON.stringify({ level: 'fatal', event: 'unhandled_rejection', error: error instanceof Error ? error.stack : String(error) }))
+  shutdown('unhandledRejection')
+})
+
+server.listen(port, host, () => console.log(JSON.stringify({ level: 'info', event: 'server_listening', host, port })))
