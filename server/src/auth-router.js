@@ -89,6 +89,20 @@ export async function createAuthRouter({ env, origin, sessionSecret, send }) {
   const rpName = env.WEBAUTHN_RP_NAME || 'Finance Planner'
   const store = new AuthStore(env.AUTH_STORE_PATH || './data/auth.enc.json', env.AUTH_MASTER_KEY || env.CONNECTOR_MASTER_KEY || '')
   await store.load()
+
+  if (env.AUTH_MODE === 'local' && !store.data.users['local-user']) {
+    await store.mutate((data) => {
+      data.users['local-user'] = {
+        id: 'local-user',
+        email: env.LOCAL_AUTH_EMAIL || 'local@finance-planner.test',
+        name: env.LOCAL_AUTH_NAME || 'Local Finance Planner User',
+        passkeys: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }
+    })
+  }
+
   const google = new OAuth2Client(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET, `${origin}/api/auth/google/callback`)
 
   return async function handleAuth(request, response, url) {
