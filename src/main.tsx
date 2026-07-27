@@ -11,6 +11,7 @@ import './assistant.css'
 import './usability.css'
 import './connectors.css'
 import './mobile.css'
+import './mobile-production.css'
 import './auth.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
