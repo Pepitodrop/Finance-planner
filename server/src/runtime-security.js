@@ -52,7 +52,7 @@ export function classifyError(error) {
   if (/Authentication required|Invalid session|Session expired/i.test(message)) return { status: 401, code: 'unauthorized', message: 'Authentication required.' }
   if (/Request body too large/i.test(message)) return { status: 413, code: 'payload_too_large', message }
   if (/Unexpected end|JSON|body/i.test(message)) return { status: 400, code: 'invalid_request', message: 'Invalid JSON request body.' }
-  return { status: 400, code: 'request_failed', message }
+  return { status: 500, code: 'internal_error', message: 'Internal server error.' }
 }
 
 export function validateProductionConfig(env, origin) {
