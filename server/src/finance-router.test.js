@@ -19,7 +19,7 @@ function fixture(input = { balanceCents: 100000, monthlyContributionCents: 25000
       return 400000
     },
   })
-  return { handle, sent, wasAuthenticated: () => authenticated, projectedArgs: () => projectedArgs }
+  return { handle, sent: () => sent, wasAuthenticated: () => authenticated, projectedArgs: () => projectedArgs }
 }
 
 test('finance route exposes the authenticated COBOL savings projection', async () => {
