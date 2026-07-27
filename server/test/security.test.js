@@ -15,3 +15,21 @@ test('consent state is provider-bound', () => {
   assert.equal(verifyState(state, 'paypal', secret).sub, 'user-1')
   assert.throws(() => verifyState(state, 'gocardless', secret))
 })
+
+test('consent state carries the exact consent and redirect binding', () => {
+  const state = issueState('user-1', 'gocardless', secret, {
+    consentId: 'consent-1',
+    redirectUri: 'https://app.test/callback',
+  })
+  assert.deepEqual(
+    (({ sub, provider, consentId, redirectUri }) => ({ sub, provider, consentId, redirectUri }))(
+      verifyState(state, 'gocardless', secret),
+    ),
+    {
+      sub: 'user-1',
+      provider: 'gocardless',
+      consentId: 'consent-1',
+      redirectUri: 'https://app.test/callback',
+    },
+  )
+})

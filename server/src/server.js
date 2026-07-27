@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { URL } from 'node:url'
 import { EncryptedStore } from './crypto-store.js'
@@ -74,13 +75,29 @@ async function start(provider, request, response) {
   const input = await body(request)
   const redirect = new URL(String(input.redirectUri || origin))
   if (redirect.origin !== origin) throw new Error('Invalid redirect origin.')
-  const state = issueState(user, provider, sessionSecret)
+  const consentId = randomUUID()
+  const state = issueState(user, provider, sessionSecret, { consentId, redirectUri: redirect.toString() })
+  const claims = verifyState(state, provider, sessionSecret)
   const result = provider === 'gocardless'
     ? await startGoCardless({ env, state, redirectUri: redirect.toString(), country: input.country || 'DE' })
     : provider === 'paypal'
       ? await startPayPal({ env, state, redirectUri: redirect.toString() })
       : (() => { throw new Error('finAPI adapter requires a licensed finAPI tenant and is not configured yet.') })()
-  await store.set(user, provider, { ...result.credential, state, createdAt: new Date().toISOString() })
+  await store.createConnectionSetup({
+    userId: user,
+    provider,
+    consentId,
+    redirectUri: redirect.toString(),
+    nonce: claims.nonce,
+    expiresAt: claims.exp * 1000,
+    connection: {
+      ...result.credential,
+      consentId,
+      redirectUri: redirect.toString(),
+      state,
+      createdAt: new Date().toISOString(),
+    },
+  })
   send(response, 200, { redirectUrl: result.redirectUrl })
 }
 
@@ -95,7 +112,7 @@ async function sync(request, response) {
         : provider === 'paypal' ? await syncPayPal(stored, env)
           : (() => { throw new Error('finAPI adapter is not configured.') })()
       const lastSyncAt = new Date().toISOString()
-      await store.set(user, provider, { ...synced.credential, lastSyncAt, consentExpiresAt: synced.consentExpiresAt })
+      await store.set(user, provider, { ...synced.credential, consentId: stored.consentId, redirectUri: stored.redirectUri, lastSyncAt, consentExpiresAt: synced.consentExpiresAt })
       results.push({ connection: { ...connection(provider, stored), lastSyncAt }, accounts: synced.accounts, transactions: synced.transactions })
     } catch (error) {
       results.push({ connection: connection(provider, stored, error instanceof Error ? error.message : 'Synchronization failed.'), accounts: [], transactions: [] })
@@ -129,11 +146,20 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'GET' && url.pathname === '/api/connectors/callback') {
       const provider = String(url.searchParams.get('provider') || '')
+      if (!['gocardless', 'finapi', 'paypal'].includes(provider)) throw new Error('Unknown connector provider.')
       const state = verifyState(url.searchParams.get('state'), provider, sessionSecret)
-      const stored = store.get(state.sub, provider)
-      if (!stored) throw new Error('Connection setup was not found.')
-      await store.set(state.sub, provider, { ...stored, connectedAt: new Date().toISOString() })
-      response.writeHead(302, { Location: origin, 'Cache-Control': 'no-store' })
+      if (!state.consentId || !state.redirectUri) throw new Error('Consent state is incomplete.')
+      const activated = await store.activateConnection({
+        nonce: state.nonce,
+        consentId: state.consentId,
+        userId: state.sub,
+        provider,
+        redirectUri: state.redirectUri,
+        now: Date.now(),
+        connectedAt: new Date().toISOString(),
+      })
+      if (!activated) throw new Error('Consent state was already used, expired, or does not match.')
+      response.writeHead(302, { Location: state.redirectUri, 'Cache-Control': 'no-store' })
       return response.end()
     }
     send(response, 404, { error: 'Not found.' })
