@@ -44,7 +44,7 @@ docker compose build --pull
 docker compose up -d
 docker compose ps
 curl --fail http://127.0.0.1:${CONNECTOR_PORT:-8787}/health/ready
-curl --fail http://127.0.0.1:${WEB_PORT:-8080}/
+curl --fail http://127.0.0.1:${WEB_PORT:-8080}/healthz
 ```
 
 The connector is ready only when `/health/ready` returns HTTP 200. Do not route traffic before both service health checks pass.
@@ -56,13 +56,13 @@ The encrypted store remains sensitive even though it is encrypted. Backups must 
 Create a backup:
 
 ```bash
-./scripts/backup-connector-data.sh
+bash scripts/backup-connector-data.sh
 ```
 
 Restore only during a maintenance window:
 
 ```bash
-./scripts/restore-connector-data.sh backups/<archive>.tar.gz
+bash scripts/restore-connector-data.sh backups/<archive>.tar.gz
 ```
 
 After restoration, start the connector and verify `/health/ready`, authentication, and one provider synchronization. Perform a scheduled restore drill at least quarterly.
