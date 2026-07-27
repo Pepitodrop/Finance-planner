@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-project_name="${COMPOSE_PROJECT_NAME:-$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-') }"
+project_name="${COMPOSE_PROJECT_NAME:-$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')}"
 project_name="${project_name%-}"
 volume_name="${CONNECTOR_DATA_VOLUME:-${project_name}_connector-data}"
 backup_dir="${BACKUP_DIR:-$PWD/backups}"
