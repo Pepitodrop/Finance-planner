@@ -3,6 +3,7 @@ import { createServer } from 'node:http'
 import { URL } from 'node:url'
 import { createAuthRouter } from './auth-router.js'
 import { EncryptedStore } from './crypto-store.js'
+import { createFinanceRouter } from './finance-router.js'
 import { createSession, issueState, verifySession, verifyState } from './security.js'
 import { startGoCardless, startPayPal, syncGoCardless, syncPayPal } from './providers.js'
 import { HttpError, SlidingWindowRateLimiter, classifyError, clientIp, requestId, validateProductionConfig } from './runtime-security.js'
@@ -81,7 +82,7 @@ function cors(request, response) {
 
 function rateLimit(request, response, pathname) {
   const remote = env.TRUST_PROXY === 'true' ? clientIp(request) : request.socket?.remoteAddress || 'unknown'
-  const sensitive = /^\/api\/(auth|session|connectors)/.test(pathname)
+  const sensitive = /^\/api\/(auth|session|connectors|finance)/.test(pathname)
   const limiter = sensitive ? sensitiveLimiter : generalLimiter
   const result = limiter.consume(`${remote}:${sensitive ? 'sensitive' : 'general'}`)
   response.setHeader('RateLimit-Limit', limiter.limit)
@@ -150,6 +151,7 @@ async function sync(request, response) {
 }
 
 const handleAuth = await createAuthRouter({ env, origin, sessionSecret, send })
+const handleFinance = createFinanceRouter({ env, send, body, userId })
 
 const server = createServer(async (request, response) => {
   const startedAt = Date.now()
@@ -167,6 +169,7 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && url.pathname === '/health/live') return send(response, 200, { status: 'ok', service: 'finance-planner-connector' })
     if (request.method === 'GET' && (url.pathname === '/health' || url.pathname === '/health/ready')) return send(response, ready ? 200 : 503, { status: ready ? 'ready' : 'not_ready', service: 'finance-planner-connector', version: '0.1.0' })
     if (await handleAuth(request, response, url)) return
+    if (await handleFinance(request, response, url)) return
     if (request.method === 'POST' && url.pathname === '/api/session/local') {
       if (env.AUTH_MODE !== 'local') return send(response, 404, { error: { code: 'not_found', message: 'Not found.' }, requestId: id })
       const token = createSession('local-user', sessionSecret, 86400)

@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, open, readFile, rename, unlink } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 function keyFromSecret(secret) {
@@ -19,9 +19,28 @@ function clone(value) {
   return structuredClone(value)
 }
 
+async function syncFile(path) {
+  const handle = await open(path, 'r')
+  try {
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+}
+
+async function syncDirectory(path) {
+  const handle = await open(dirname(path), 'r')
+  try {
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+}
+
 export class EncryptedStore {
   constructor(path, secret) {
     this.path = path
+    this.backupPath = `${path}.bak`
     this.key = keyFromSecret(secret)
     this.data = { connections: {}, oauthNonces: {}, webhookEvents: {} }
     this.writeQueue = Promise.resolve()
@@ -33,27 +52,56 @@ export class EncryptedStore {
     this.data.webhookEvents ??= {}
   }
 
+  decode(contents) {
+    const envelope = JSON.parse(contents)
+    if (
+      envelope?.format !== 'finance-planner-connectors' ||
+      envelope?.version !== 2 ||
+      envelope?.algorithm !== 'AES-256-GCM' ||
+      typeof envelope.iv !== 'string' ||
+      typeof envelope.tag !== 'string' ||
+      typeof envelope.ciphertext !== 'string'
+    ) throw new Error('Unsupported encrypted connector store format.')
+    const iv = Buffer.from(envelope.iv, 'base64')
+    const tag = Buffer.from(envelope.tag, 'base64')
+    if (iv.length !== 12 || tag.length !== 16) throw new Error('Invalid encrypted connector store envelope.')
+    const decipher = createDecipheriv('aes-256-gcm', this.key, iv)
+    decipher.setAuthTag(tag)
+    const plaintext = Buffer.concat([
+      decipher.update(Buffer.from(envelope.ciphertext, 'base64')),
+      decipher.final(),
+    ])
+    return JSON.parse(plaintext.toString('utf8'))
+  }
+
   async load() {
+    let primaryError
     try {
-      const envelope = JSON.parse(await readFile(this.path, 'utf8'))
-      const iv = Buffer.from(envelope.iv, 'base64')
-      const tag = Buffer.from(envelope.tag, 'base64')
-      const decipher = createDecipheriv('aes-256-gcm', this.key, iv)
-      decipher.setAuthTag(tag)
-      const plaintext = Buffer.concat([
-        decipher.update(Buffer.from(envelope.ciphertext, 'base64')),
-        decipher.final(),
-      ])
-      this.data = JSON.parse(plaintext.toString('utf8'))
+      this.data = this.decode(await readFile(this.path, 'utf8'))
     } catch (error) {
-      if (error?.code !== 'ENOENT') throw new Error('Encrypted connector store could not be opened.', { cause: error })
+      if (error?.code === 'ENOENT') {
+        try {
+          this.data = this.decode(await readFile(this.backupPath, 'utf8'))
+          await this.save({ preserveBackup: true })
+        } catch (backupError) {
+          if (backupError?.code !== 'ENOENT') throw new Error('Encrypted connector store could not be recovered.', { cause: backupError })
+        }
+      } else {
+        primaryError = error
+        try {
+          this.data = this.decode(await readFile(this.backupPath, 'utf8'))
+          await this.save({ preserveBackup: true })
+        } catch (backupError) {
+          throw new Error('Encrypted connector store could not be opened or recovered.', { cause: new AggregateError([primaryError, backupError]) })
+        }
+      }
     }
     this.normalize()
     return this.data
   }
 
-  async save() {
-    await mkdir(dirname(this.path), { recursive: true })
+  async save({ preserveBackup = false } = {}) {
+    await mkdir(dirname(this.path), { recursive: true, mode: 0o700 })
     const iv = randomBytes(12)
     const cipher = createCipheriv('aes-256-gcm', this.key, iv)
     const ciphertext = Buffer.concat([cipher.update(JSON.stringify(this.data), 'utf8'), cipher.final()])
@@ -61,9 +109,26 @@ export class EncryptedStore {
       format: 'finance-planner-connectors', version: 2, algorithm: 'AES-256-GCM',
       iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64'),
     })
-    const temp = `${this.path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
-    await writeFile(temp, envelope, { encoding: 'utf8', mode: 0o600 })
-    await rename(temp, this.path)
+    const suffix = `${process.pid}.${randomBytes(6).toString('hex')}`
+    const temp = `${this.path}.${suffix}.tmp`
+    const backupTemp = `${this.backupPath}.${suffix}.tmp`
+    try {
+      await writeFileDurable(temp, envelope)
+      if (!preserveBackup) {
+        try {
+          await copyFile(this.path, backupTemp)
+          await syncFile(backupTemp)
+          await rename(backupTemp, this.backupPath)
+        } catch (error) {
+          if (error?.code !== 'ENOENT') throw error
+        }
+      }
+      await rename(temp, this.path)
+      await syncDirectory(this.path)
+    } finally {
+      await unlink(temp).catch(() => {})
+      await unlink(backupTemp).catch(() => {})
+    }
   }
 
   async mutate(operation) {
@@ -207,5 +272,15 @@ export class EncryptedStore {
       delete this.data.webhookEvents[key]
       return true
     })
+  }
+}
+
+async function writeFileDurable(path, contents) {
+  const handle = await open(path, 'wx', 0o600)
+  try {
+    await handle.writeFile(contents, 'utf8')
+    await handle.sync()
+  } finally {
+    await handle.close()
   }
 }
