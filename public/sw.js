@@ -1,4 +1,4 @@
-const CACHE_NAME = 'finance-planner-shell-v2'
+const CACHE_NAME = 'finance-planner-shell-v3'
 const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icons/app-icon.svg']
 const SENSITIVE_PATHS = ['/api/', '/connectors/', '/oauth/', '/healthz']
 
@@ -12,18 +12,23 @@ function isStaticAsset(request, url) {
     || url.pathname.startsWith('/icons/')
 }
 
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting()
+})
+
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)))
-  self.skipWaiting()
 })
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) => Promise.all(
-      keys.filter((key) => key.startsWith('finance-planner-') && key !== CACHE_NAME).map((key) => caches.delete(key)),
-    )),
-  )
-  self.clients.claim()
+  event.waitUntil((async () => {
+    const keys = await caches.keys()
+    await Promise.all(keys
+      .filter((key) => key.startsWith('finance-planner-') && key !== CACHE_NAME)
+      .map((key) => caches.delete(key)))
+    if ('navigationPreload' in self.registration) await self.registration.navigationPreload.enable()
+    await self.clients.claim()
+  })())
 })
 
 self.addEventListener('fetch', (event) => {
@@ -34,28 +39,32 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin || isSensitiveRequest(url)) return
 
   if (request.mode === 'navigate') {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', response.clone()))
-          return response
-        })
-        .catch(() => caches.match('/index.html')),
-    )
+    event.respondWith((async () => {
+      try {
+        const response = await event.preloadResponse || await fetch(request)
+        if (response?.ok) {
+          const cache = await caches.open(CACHE_NAME)
+          await cache.put('/index.html', response.clone())
+        }
+        return response
+      } catch {
+        return await caches.match('/index.html') || Response.error()
+      }
+    })())
     return
   }
 
   if (!isStaticAsset(request, url)) return
 
-  event.respondWith(
-    caches.match(request).then((cached) => {
-      const network = fetch(request).then((response) => {
-        if (response.ok && response.type === 'basic') {
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, response.clone()))
-        }
-        return response
-      })
-      return cached ?? network
-    }),
-  )
+  event.respondWith((async () => {
+    const cached = await caches.match(request)
+    const network = fetch(request).then(async (response) => {
+      if (response.ok && response.type === 'basic') {
+        const cache = await caches.open(CACHE_NAME)
+        await cache.put(request, response.clone())
+      }
+      return response
+    })
+    return cached || network
+  })())
 })
