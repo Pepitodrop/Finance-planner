@@ -94,6 +94,9 @@ jobs:
       - name: Backend tests
         working-directory: server
         run: npm test
+      - name: Backend production dependency audit
+        working-directory: server
+        run: npm audit --omit=dev --audit-level=high
       - name: Syntax validation
         run: |
           node --check server/src/server.js
@@ -102,6 +105,7 @@ jobs:
           node --check server/src/cobol-engine.js
           node --check server/src/crypto-store.js
           node --check server/src/security.js
+          node --check server/src/runtime-security.js
 
   cobol:
     runs-on: ubuntu-latest
