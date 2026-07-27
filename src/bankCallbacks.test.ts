@@ -13,6 +13,7 @@ import {
   processBankWebhook,
   signBankWebhook,
   type BankWebhookLeaseRepository,
+  type ConsentBoundOAuthStateClaims,
   type OAuthNonceRepository,
 } from './bankCallbacks'
 
@@ -33,26 +34,38 @@ class MemoryRepository implements BankRuntimeRepository {
 
 class MemoryNonceRepository implements OAuthNonceRepository {
   consumed = new Set<string>()
-  async consumeNonce(input: { nonce: string; expiresAt: number; now: number }) {
-    if (input.expiresAt <= input.now || this.consumed.has(input.nonce)) return false
-    this.consumed.add(input.nonce)
+  async consumeNonce(input: { nonce: string; consentId: string; expiresAt: number; now: number }) {
+    const key = `${input.consentId}:${input.nonce}`
+    if (input.expiresAt <= input.now || this.consumed.has(key)) return false
+    this.consumed.add(key)
     return true
   }
 }
 
 class MemoryWebhookRepository implements BankWebhookLeaseRepository {
-  claimed = new Set<string>()
+  leases = new Map<string, string>()
   completed = new Set<string>()
+  sequence = 0
+
   async claimWebhookEvent(input: { eventId: string }) {
-    if (this.claimed.has(input.eventId) || this.completed.has(input.eventId)) return false
-    this.claimed.add(input.eventId)
+    if (this.leases.has(input.eventId) || this.completed.has(input.eventId)) return undefined
+    const leaseToken = `lease-${++this.sequence}`
+    this.leases.set(input.eventId, leaseToken)
+    return leaseToken
+  }
+
+  async completeWebhookEvent(input: { eventId: string; leaseToken: string }) {
+    if (this.leases.get(input.eventId) !== input.leaseToken) return false
+    this.leases.delete(input.eventId)
+    this.completed.add(input.eventId)
     return true
   }
-  async completeWebhookEvent(input: { eventId: string }) {
-    this.claimed.delete(input.eventId)
-    this.completed.add(input.eventId)
+
+  async releaseWebhookEvent(input: { eventId: string; leaseToken: string }) {
+    if (this.leases.get(input.eventId) !== input.leaseToken) return false
+    this.leases.delete(input.eventId)
+    return true
   }
-  async releaseWebhookEvent(input: { eventId: string }) { this.claimed.delete(input.eventId) }
 }
 
 const consent: BankConsent = {
@@ -81,31 +94,52 @@ function vault() {
   return new AesGcmTokenVault({ id: 'key-1', rawKey: new Uint8Array(32).fill(1) })
 }
 
+function callbackExpected() {
+  return { userId: 'user-1', provider: 'sandbox', redirectUri: 'https://app.test/callback' }
+}
+
+async function signedState(secret: Uint8Array, now: Date, consentId = consent.id) {
+  const claims: ConsentBoundOAuthStateClaims = {
+    ...callbackExpected(), consentId, nonce: 'nonce-1', expiresAt: now.getTime() + 60_000,
+  }
+  return issueOAuthState(claims, secret)
+}
+
 describe('bank callback hardening', () => {
-  it('consumes the OAuth nonce exactly once before connecting', async () => {
+  it('binds the signed state to one exact consent and consumes its nonce once', async () => {
     const repository = new MemoryRepository()
     const nonces = new MemoryNonceRepository()
     const adapter = provider()
     const secret = new Uint8Array(32).fill(7)
     const now = new Date('2026-07-26T12:00:00.000Z')
     await repository.saveConsent(consent)
-    await beginBankConnection({ consent, state: 'placeholder', redirectUri: 'https://app.test/callback', provider: adapter, repository, now })
-    const state = await issueOAuthState({
-      userId: 'user-1', provider: 'sandbox', redirectUri: 'https://app.test/callback',
-      nonce: 'nonce-1', expiresAt: now.getTime() + 60_000,
-    }, secret)
+    await beginBankConnection({ consent, state: 'placeholder', redirectUri: callbackExpected().redirectUri, provider: adapter, repository, now })
+    const state = await signedState(secret, now)
 
     await expect(completeBankCallback({
-      state, stateSecret: secret,
-      expected: { userId: 'user-1', provider: 'sandbox', redirectUri: 'https://app.test/callback' },
-      nonceRepository: nonces, consentId: consent.id, provider: adapter, repository, vault: vault(), now,
+      state, stateSecret: secret, expected: callbackExpected(), nonceRepository: nonces,
+      consentId: consent.id, provider: adapter, repository, vault: vault(), now,
     })).resolves.toMatchObject({ status: 'active' })
 
     await expect(completeBankCallback({
-      state, stateSecret: secret,
-      expected: { userId: 'user-1', provider: 'sandbox', redirectUri: 'https://app.test/callback' },
-      nonceRepository: nonces, consentId: consent.id, provider: adapter, repository, vault: vault(), now,
+      state, stateSecret: secret, expected: callbackExpected(), nonceRepository: nonces,
+      consentId: consent.id, provider: adapter, repository, vault: vault(), now,
     })).rejects.toThrow('already used or expired')
+  })
+
+  it('rejects a valid state when it is presented for a different consent', async () => {
+    const repository = new MemoryRepository()
+    const nonces = new MemoryNonceRepository()
+    const secret = new Uint8Array(32).fill(7)
+    const now = new Date('2026-07-26T12:00:00.000Z')
+    const otherConsent = { ...consent, id: 'consent-2' }
+    await repository.saveConsent(otherConsent)
+    await beginBankConnection({ consent: otherConsent, state: 'placeholder', redirectUri: callbackExpected().redirectUri, provider: provider(), repository, now })
+
+    await expect(completeBankCallback({
+      state: await signedState(secret, now, consent.id), stateSecret: secret, expected: callbackExpected(),
+      nonceRepository: nonces, consentId: otherConsent.id, provider: provider(), repository, vault: vault(), now,
+    })).rejects.toThrow('requested bank consent')
   })
 })
 
@@ -125,7 +159,7 @@ describe('bank webhook hardening', () => {
     expect(calls).toBe(1)
   })
 
-  it('releases the lease after handler failure so delivery can retry', async () => {
+  it('releases the owned lease after handler failure so delivery can retry', async () => {
     const repository = new MemoryWebhookRepository()
     const secret = new Uint8Array(32).fill(9)
     const unsigned = { id: 'evt-2', occurredAt: '2026-07-26T11:59:00.000Z', rawBody: '{}' }
@@ -136,6 +170,18 @@ describe('bank webhook hardening', () => {
     await expect(processBankWebhook({
       event, secret, repository, now: new Date('2026-07-26T12:00:00.000Z'), handler: async () => {},
     })).resolves.toBe('processed')
+  })
+
+  it('rejects stale lease tokens for completion and release', async () => {
+    const repository = new MemoryWebhookRepository()
+    const first = await repository.claimWebhookEvent({ eventId: 'evt-fenced', occurredAt: '', leaseUntil: '' })
+    expect(first).toBeDefined()
+    expect(await repository.releaseWebhookEvent({ eventId: 'evt-fenced', leaseToken: first! })).toBe(true)
+    const second = await repository.claimWebhookEvent({ eventId: 'evt-fenced', occurredAt: '', leaseUntil: '' })
+    expect(second).not.toBe(first)
+    expect(await repository.completeWebhookEvent({ eventId: 'evt-fenced', leaseToken: first!, completedAt: '' })).toBe(false)
+    expect(await repository.releaseWebhookEvent({ eventId: 'evt-fenced', leaseToken: first! })).toBe(false)
+    expect(repository.leases.get('evt-fenced')).toBe(second)
   })
 
   it('rejects tampered payloads', async () => {
