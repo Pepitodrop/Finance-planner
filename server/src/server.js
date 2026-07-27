@@ -25,19 +25,20 @@ const generalLimiter = new SlidingWindowRateLimiter({ limit: Number(env.RATE_LIM
 const sensitiveLimiter = new SlidingWindowRateLimiter({ limit: Number(env.SENSITIVE_RATE_LIMIT_PER_MINUTE || 20), windowMs: 60_000 })
 
 function send(response, status, payload, headers = {}) {
-  response.writeHead(status, {
+  const securityHeaders = {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
     'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
     'Cross-Origin-Opener-Policy': 'same-origin',
     'Cross-Origin-Resource-Policy': 'same-site',
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
-    'Strict-Transport-Security': origin.startsWith('https://') ? 'max-age=31536000; includeSubDomains' : undefined,
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'no-referrer',
-    ...Object.fromEntries(Object.entries(headers).filter(([, value]) => value !== undefined)),
-  })
+    ...headers,
+  }
+  if (origin.startsWith('https://')) securityHeaders['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+  response.writeHead(status, securityHeaders)
   response.end(JSON.stringify(payload))
 }
 
@@ -81,8 +82,9 @@ function cors(request, response) {
 function rateLimit(request, response, pathname) {
   const remote = env.TRUST_PROXY === 'true' ? clientIp(request) : request.socket?.remoteAddress || 'unknown'
   const sensitive = /^\/api\/(auth|session|connectors)/.test(pathname)
-  const result = (sensitive ? sensitiveLimiter : generalLimiter).consume(`${remote}:${sensitive ? 'sensitive' : 'general'}`)
-  response.setHeader('RateLimit-Limit', sensitive ? sensitiveLimiter.limit : generalLimiter.limit)
+  const limiter = sensitive ? sensitiveLimiter : generalLimiter
+  const result = limiter.consume(`${remote}:${sensitive ? 'sensitive' : 'general'}`)
+  response.setHeader('RateLimit-Limit', limiter.limit)
   response.setHeader('RateLimit-Remaining', result.remaining)
   response.setHeader('RateLimit-Reset', Math.ceil(result.resetAt / 1000))
   if (result.allowed) return true
