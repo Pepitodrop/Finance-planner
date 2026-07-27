@@ -3,20 +3,40 @@
   "name": "Finance Planner",
   "short_name": "Finance",
   "description": "Offline-first personal finance dashboard with local AI.",
-  "start_url": "/",
+  "start_url": "/?source=installed",
   "scope": "/",
   "display": "standalone",
-  "orientation": "any",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
   "background_color": "#080c18",
   "theme_color": "#0b1020",
   "lang": "de-DE",
+  "dir": "ltr",
   "categories": ["finance", "productivity"],
+  "prefer_related_applications": false,
+  "launch_handler": {
+    "client_mode": ["navigate-existing", "auto"]
+  },
+  "shortcuts": [
+    {
+      "name": "Open dashboard",
+      "short_name": "Dashboard",
+      "description": "Open the finance overview.",
+      "url": "/?source=shortcut"
+    }
+  ],
   "icons": [
     {
       "src": "/icons/app-icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
     }
   ]
 }
