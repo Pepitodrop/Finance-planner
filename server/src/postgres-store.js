@@ -23,13 +23,34 @@ export class PostgresStore {
     const iv = randomBytes(12)
     const cipher = createCipheriv('aes-256-gcm', this.key, iv)
     const ciphertext = Buffer.concat([cipher.update(JSON.stringify(value), 'utf8'), cipher.final()])
-    return { version: 1, algorithm: 'AES-256-GCM', iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64') }
+    return {
+      format: 'finance-planner-connector-record',
+      version: 1,
+      algorithm: 'AES-256-GCM',
+      iv: iv.toString('base64'),
+      tag: cipher.getAuthTag().toString('base64'),
+      ciphertext: ciphertext.toString('base64'),
+    }
   }
 
   decode(envelope) {
-    const decipher = createDecipheriv('aes-256-gcm', this.key, Buffer.from(envelope.iv, 'base64'))
-    decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'))
-    return JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, 'base64')), decipher.final()]).toString('utf8'))
+    if (
+      envelope?.format !== 'finance-planner-connector-record' ||
+      envelope?.version !== 1 ||
+      envelope?.algorithm !== 'AES-256-GCM' ||
+      typeof envelope.iv !== 'string' ||
+      typeof envelope.tag !== 'string' ||
+      typeof envelope.ciphertext !== 'string'
+    ) throw new Error('Unsupported encrypted connector database record.')
+    const iv = Buffer.from(envelope.iv, 'base64')
+    const tag = Buffer.from(envelope.tag, 'base64')
+    if (iv.length !== 12 || tag.length !== 16) throw new Error('Invalid encrypted connector database record.')
+    const decipher = createDecipheriv('aes-256-gcm', this.key, iv)
+    decipher.setAuthTag(tag)
+    return JSON.parse(Buffer.concat([
+      decipher.update(Buffer.from(envelope.ciphertext, 'base64')),
+      decipher.final(),
+    ]).toString('utf8'))
   }
 
   async get(userId, provider) {
@@ -69,7 +90,7 @@ export class PostgresStore {
   }
 
   async consumeOAuthNonce(input) {
-    const result = await this.pool.query(`DELETE FROM oauth_nonces WHERE nonce_hash=$1 AND consent_id=$2 AND user_id=$3 AND provider=$4 AND redirect_uri=$5 AND expires_at > to_timestamp($6/1000.0) RETURNING 1`, [nonceKey(input.nonce), input.consentId, input.userId, input.provider, input.redirectUri, input.now])
+    const result = await this.pool.query('DELETE FROM oauth_nonces WHERE nonce_hash=$1 AND consent_id=$2 AND user_id=$3 AND provider=$4 AND redirect_uri=$5 AND expires_at > to_timestamp($6/1000.0) RETURNING 1', [nonceKey(input.nonce), input.consentId, input.userId, input.provider, input.redirectUri, input.now])
     return result.rowCount === 1
   }
 
@@ -77,7 +98,7 @@ export class PostgresStore {
     const client = await this.pool.connect()
     try {
       await client.query('BEGIN')
-      const nonce = await client.query(`DELETE FROM oauth_nonces WHERE nonce_hash=$1 AND consent_id=$2 AND user_id=$3 AND provider=$4 AND redirect_uri=$5 AND expires_at > to_timestamp($6/1000.0) RETURNING 1`, [nonceKey(input.nonce), input.consentId, input.userId, input.provider, input.redirectUri, input.now])
+      const nonce = await client.query('DELETE FROM oauth_nonces WHERE nonce_hash=$1 AND consent_id=$2 AND user_id=$3 AND provider=$4 AND redirect_uri=$5 AND expires_at > to_timestamp($6/1000.0) RETURNING 1', [nonceKey(input.nonce), input.consentId, input.userId, input.provider, input.redirectUri, input.now])
       if (!nonce.rowCount) { await client.query('ROLLBACK'); return false }
       const current = await client.query('SELECT encrypted_payload FROM connector_connections WHERE user_id=$1 AND provider=$2 FOR UPDATE', [input.userId, input.provider])
       if (!current.rowCount) { await client.query('ROLLBACK'); return false }
@@ -89,7 +110,9 @@ export class PostgresStore {
     } catch (error) {
       await client.query('ROLLBACK')
       throw error
-    } finally { client.release() }
+    } finally {
+      client.release()
+    }
   }
 
   async claimWebhookEvent(input) {
