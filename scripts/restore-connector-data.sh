@@ -7,14 +7,20 @@ if [[ -z "$archive" || ! -f "$archive" ]]; then
   exit 1
 fi
 
+archive_dir="$(cd "$(dirname "$archive")" && pwd)"
+archive_name="$(basename "$archive")"
+checksum_name="${archive_name}.sha256"
+checksum_file="${archive_dir}/${checksum_name}"
 project_name="${COMPOSE_PROJECT_NAME:-$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')}"
 project_name="${project_name%-}"
 volume_name="${CONNECTOR_DATA_VOLUME:-${project_name}_connector-data}"
-checksum_file="${archive}.sha256"
 
 command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
 if [[ -f "$checksum_file" ]]; then
-  sha256sum --check "$checksum_file"
+  (
+    cd "$archive_dir"
+    sha256sum --check "$checksum_name"
+  )
 else
   echo "Refusing restore because checksum file '$checksum_file' is missing." >&2
   exit 1
@@ -30,9 +36,6 @@ fi
 printf "This will replace all data in Docker volume '%s'. Type RESTORE to continue: " "$volume_name"
 read -r confirmation
 [[ "$confirmation" == "RESTORE" ]] || { echo "Restore cancelled."; exit 1; }
-
-archive_dir="$(cd "$(dirname "$archive")" && pwd)"
-archive_name="$(basename "$archive")"
 
 docker run --rm \
   --network none \
