@@ -1,0 +1,60 @@
+:focus-visible {
+  outline: 3px solid #7dd3fc;
+  outline-offset: 3px;
+}
+
+button:disabled,
+[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.mobile-runtime__banner,
+.mobile-install-card {
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+}
+
+@media (max-width: 720px) {
+  main {
+    scroll-padding-top: calc(var(--safe-top) + 4rem);
+    scroll-padding-bottom: calc(var(--safe-bottom) + 6rem);
+  }
+
+  dialog,
+  [role='dialog'] {
+    max-height: calc(100dvh - var(--safe-top) - var(--safe-bottom) - 2rem);
+    overflow: auto;
+  }
+
+  button,
+  [role='button'],
+  a {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
+
+@media (max-height: 520px) and (orientation: landscape) {
+  .mobile-install-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    bottom: max(0.5rem, var(--safe-bottom));
+    padding: 0.75rem;
+  }
+
+  .mobile-install-card__actions {
+    grid-template-columns: auto auto;
+  }
+}
+
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 3px solid CanvasText;
+  }
+
+  .mobile-runtime__banner,
+  .mobile-install-card {
+    border: 1px solid CanvasText;
+  }
+}
