@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "test": "vitest run && node scripts/verify-pwa.mjs && node scripts/verify-mobile.mjs"
+    "test": "vitest run && node scripts/verify-pwa.mjs && node scripts/verify-mobile.mjs && node scripts/verify-ai.mjs"
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.1.2",
