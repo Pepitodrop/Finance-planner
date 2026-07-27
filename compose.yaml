@@ -36,11 +36,48 @@ services:
         max-size: "10m"
         max-file: "5"
 
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-finance_planner}
+      POSTGRES_USER: ${POSTGRES_USER:-finance_planner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-finance_planner} -d ${POSTGRES_DB:-finance_planner}"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_READ_SEARCH
+      - FOWNER
+      - SETGID
+      - SETUID
+    pids_limit: 150
+    stop_grace_period: 60s
+    shm_size: 256mb
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
   connector:
     build:
       context: .
       dockerfile: Dockerfile.server
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       HOST: 0.0.0.0
       PORT: 8787
@@ -49,6 +86,9 @@ services:
       PUBLIC_DEPLOYMENT: ${PUBLIC_DEPLOYMENT:-false}
       SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET in .env}
       CONNECTOR_MASTER_KEY: ${CONNECTOR_MASTER_KEY:?Set CONNECTOR_MASTER_KEY in .env}
+      CONNECTOR_STORE_DRIVER: postgres
+      DATABASE_URL: postgresql://${POSTGRES_USER:-finance_planner}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-finance_planner}
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
       RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
       SENSITIVE_RATE_LIMIT_PER_MINUTE: ${SENSITIVE_RATE_LIMIT_PER_MINUTE:-20}
       REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-15000}
@@ -62,8 +102,6 @@ services:
       PAYPAL_ENVIRONMENT: ${PAYPAL_ENVIRONMENT:-sandbox}
     ports:
       - "127.0.0.1:${CONNECTOR_PORT:-8787}:8787"
-    volumes:
-      - connector-data:/app/data
     tmpfs:
       - /tmp:size=64m,mode=1777
     security_opt:
@@ -79,4 +117,4 @@ services:
         max-file: "5"
 
 volumes:
-  connector-data:
+  postgres-data:
