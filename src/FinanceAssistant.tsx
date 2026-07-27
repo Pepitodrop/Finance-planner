@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
-import { BrainCircuit, ChartNoAxesCombined, Check, Gauge, LoaderCircle, MessageCircleQuestion, Route, Send, ShieldCheck, X } from 'lucide-react'
+import { AlertTriangle, BrainCircuit, ChartNoAxesCombined, Check, CircleCheck, Gauge, Info, LoaderCircle, MessageCircleQuestion, Route, Send, ShieldCheck, X } from 'lucide-react'
 import { ASSISTANT_MODEL, runAssistant, type AssistantMode } from './assistant'
 import { behaviorSummary } from './behavior'
 import { createFinancialAgentPlan, decideAgentAction, type AgentPlan } from './financialAgent'
+import { createSmartBriefing } from './smartBriefing'
 import { assessSmartness } from './smartness'
 import type { AppState } from './types'
 
@@ -15,6 +16,7 @@ export function FinanceAssistant({ state }: { state: AppState }) {
   const [plan, setPlan] = useState<AgentPlan>(initialPlan)
   const learned = behaviorSummary()
   const smartness = useMemo(() => assessSmartness(state, learned.learnedDecisions), [state, learned.learnedDecisions])
+  const briefing = useMemo(() => createSmartBriefing(state), [state])
 
   const run = async () => {
     setLoading(true)
@@ -31,6 +33,10 @@ export function FinanceAssistant({ state }: { state: AppState }) {
       <div><p className="eyebrow">Lokales generatives Modell</p><h2>Analyse, Fragen und Finanzplanung</h2><p>Das Modell arbeitet mit einer kompakten Zusammenfassung deiner lokalen Daten. Geldberechnungen bleiben deterministisch.</p></div>
       <div className="ai-model"><BrainCircuit size={18}/><div><strong>{ASSISTANT_MODEL}</strong><span>Transformers.js · quantisiertes ONNX · ohne API-Key</span></div></div>
     </section>
+    {briefing.length > 0 && <section className="panel smart-briefing" aria-labelledby="smart-briefing-title">
+      <div className="panel-header"><div><p className="eyebrow">Automatisch priorisiert</p><h2 id="smart-briefing-title">Dein Finanzbriefing</h2></div><span className="pill">Letzte 30 Tage</span></div>
+      <div className="smart-briefing-list">{briefing.map((item) => <article className={`smart-briefing-item ${item.severity}`} key={item.id}>{item.severity === 'attention' ? <AlertTriangle size={19}/> : item.severity === 'positive' ? <CircleCheck size={19}/> : <Info size={19}/>}<div><strong>{item.title}</strong><p>{item.detail}</p></div></article>)}</div>
+    </section>}
     <section className="assistant-grid">
       <article className="panel">
         <div className="assistant-modes">
