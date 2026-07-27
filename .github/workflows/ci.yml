@@ -76,7 +76,23 @@ jobs:
 
   connector-server:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_DB: finance_planner_test
+          POSTGRES_USER: finance_planner
+          POSTGRES_PASSWORD: ci-postgres-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U finance_planner -d finance_planner_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://finance_planner:ci-postgres-password@127.0.0.1:5432/finance_planner_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -91,9 +107,14 @@ jobs:
         run: |
           mkdir -p build
           cobc -Wall -Wextra -x -o build/transaction-rules core/cobol/transaction_rules.cob
-      - name: Backend tests
+      - name: Backend tests and migration integration
         working-directory: server
         run: npm test
+      - name: Verify standalone migration command
+        working-directory: server
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: npm run migrate
       - name: Backend production dependency audit
         working-directory: server
         run: npm audit --omit=dev --audit-level=high
@@ -104,6 +125,9 @@ jobs:
           node --check server/src/providers.js
           node --check server/src/cobol-engine.js
           node --check server/src/crypto-store.js
+          node --check server/src/database.js
+          node --check server/src/postgres-store.js
+          node --check server/src/migrate.js
           node --check server/src/security.js
           node --check server/src/runtime-security.js
 
@@ -138,4 +162,5 @@ jobs:
         env:
           SESSION_SECRET: ci-session-secret-with-at-least-32-characters
           CONNECTOR_MASTER_KEY: ci-master-key-with-at-least-32-characters
+          POSTGRES_PASSWORD: ci-postgres-password
         run: docker compose config --quiet
