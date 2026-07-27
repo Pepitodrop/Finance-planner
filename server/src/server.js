@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { URL } from 'node:url'
+import { createAuthRouter } from './auth-router.js'
 import { EncryptedStore } from './crypto-store.js'
 import { createSession, issueState, verifySession, verifyState } from './security.js'
 import { startGoCardless, startPayPal, syncGoCardless, syncPayPal } from './providers.js'
@@ -121,6 +122,8 @@ async function sync(request, response) {
   send(response, 200, { connections: results })
 }
 
+const handleAuth = await createAuthRouter({ env, origin, sessionSecret, send })
+
 const server = createServer(async (request, response) => {
   try {
     if (!cors(request, response)) return send(response, 403, { error: 'Origin not allowed.' })
@@ -129,6 +132,7 @@ const server = createServer(async (request, response) => {
       return response.end()
     }
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
+    if (await handleAuth(request, response, url)) return
     if (request.method === 'GET' && url.pathname === '/health') return send(response, 200, { status: 'ok', service: 'finance-planner-connector', version: '0.1.0' })
     if (request.method === 'POST' && url.pathname === '/api/session/local') {
       if (env.AUTH_MODE !== 'local') return send(response, 404, { error: 'Not found.' })
