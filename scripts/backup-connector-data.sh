@@ -6,7 +6,9 @@ project_name="${project_name%-}"
 volume_name="${CONNECTOR_DATA_VOLUME:-${project_name}_connector-data}"
 backup_dir="${BACKUP_DIR:-$PWD/backups}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-archive="${backup_dir}/connector-data-${timestamp}.tar.gz"
+archive_name="connector-data-${timestamp}.tar.gz"
+archive="${backup_dir}/${archive_name}"
+checksum="${archive}.sha256"
 
 command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
 docker volume inspect "$volume_name" >/dev/null 2>&1 || {
@@ -26,12 +28,15 @@ docker run --rm \
   -v "${volume_name}:/data:ro" \
   -v "${backup_dir}:/backup" \
   alpine:3.22 \
-  sh -ceu "tar -C /data -czf /backup/$(basename "$archive") ."
+  sh -ceu "tar -C /data -czf /backup/${archive_name} ."
 
 chmod 600 "$archive"
-sha256sum "$archive" > "${archive}.sha256"
-chmod 600 "${archive}.sha256"
+(
+  cd "$backup_dir"
+  sha256sum "$archive_name" > "${archive_name}.sha256"
+)
+chmod 600 "$checksum"
 
 echo "Backup created: $archive"
-echo "Checksum: ${archive}.sha256"
+echo "Checksum: $checksum"
 echo "Store the archive, checksum, and encryption key in separate protected locations."
