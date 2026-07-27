@@ -83,20 +83,20 @@ async function start(provider, request, response) {
     : provider === 'paypal'
       ? await startPayPal({ env, state, redirectUri: redirect.toString() })
       : (() => { throw new Error('finAPI adapter requires a licensed finAPI tenant and is not configured yet.') })()
-  await store.set(user, provider, {
-    ...result.credential,
-    consentId,
-    redirectUri: redirect.toString(),
-    state,
-    createdAt: new Date().toISOString(),
-  })
-  await store.registerOAuthNonce({
-    nonce: claims.nonce,
-    consentId,
+  await store.createConnectionSetup({
     userId: user,
     provider,
+    consentId,
     redirectUri: redirect.toString(),
+    nonce: claims.nonce,
     expiresAt: claims.exp * 1000,
+    connection: {
+      ...result.credential,
+      consentId,
+      redirectUri: redirect.toString(),
+      state,
+      createdAt: new Date().toISOString(),
+    },
   })
   send(response, 200, { redirectUrl: result.redirectUrl })
 }
@@ -148,21 +148,17 @@ const server = createServer(async (request, response) => {
       const provider = String(url.searchParams.get('provider') || '')
       if (!['gocardless', 'finapi', 'paypal'].includes(provider)) throw new Error('Unknown connector provider.')
       const state = verifyState(url.searchParams.get('state'), provider, sessionSecret)
-      const stored = store.get(state.sub, provider)
-      if (!stored) throw new Error('Connection setup was not found.')
-      if (!state.consentId || state.consentId !== stored.consentId || state.redirectUri !== stored.redirectUri) {
-        throw new Error('Consent state does not match the stored connection setup.')
-      }
-      const consumed = await store.consumeOAuthNonce({
+      if (!state.consentId || !state.redirectUri) throw new Error('Consent state is incomplete.')
+      const activated = await store.activateConnection({
         nonce: state.nonce,
         consentId: state.consentId,
         userId: state.sub,
         provider,
         redirectUri: state.redirectUri,
         now: Date.now(),
+        connectedAt: new Date().toISOString(),
       })
-      if (!consumed) throw new Error('Consent state was already used, expired, or does not match.')
-      await store.set(state.sub, provider, { ...stored, connectedAt: new Date().toISOString() })
+      if (!activated) throw new Error('Consent state was already used, expired, or does not match.')
       response.writeHead(302, { Location: state.redirectUri, 'Cache-Control': 'no-store' })
       return response.end()
     }
