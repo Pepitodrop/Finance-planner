@@ -95,18 +95,37 @@ Compile the COBOL module:
 cobc -m core/cobol/finance_projection.cob
 ```
 
+## Production deployment
+
+The container stack is a hardened single-host baseline. Before exposing it publicly, follow the mandatory configuration, backup, restore, monitoring, rollback, and incident-response requirements in [`docs/PRODUCTION.md`](docs/PRODUCTION.md).
+
+Security vulnerabilities should be reported privately as described in [`SECURITY.md`](SECURITY.md).
+
+Quick local container start:
+
+```bash
+cp .env.example .env
+# Replace both example secrets before continuing.
+docker compose up --build -d
+docker compose ps
+```
+
+Public deployments must use HTTPS, set `PUBLIC_DEPLOYMENT=true`, disable local authentication, keep the connector port private, and maintain tested backups.
+
 ## Architecture
 
 ```text
 src/                    React/TypeScript application, mobile runtime, and local AI
 public/                 PWA manifest, service worker, and install assets
+server/                 Authentication, provider connectors, encrypted persistence, and COBOL API
 core/cobol/             Deterministic fixed-point financial calculations
-.github/workflows/      CI for web, mobile invariants, and COBOL
+docs/                   Production operations guidance
+.github/workflows/      CI for web, backend, containers, mobile invariants, and COBOL
 ```
 
 ## Next milestones
 
-- encrypted SQLite storage
+- shared transactional database with versioned migrations
 - CSV and bank-statement import
 - stronger periodicity detection using transaction dates and amount tolerances
 - editable behavior-learning rules and graph inspection
@@ -114,11 +133,12 @@ core/cobol/             Deterministic fixed-point financial calculations
 - receipt, invoice, and contract document extraction
 - signed native Android and iOS packaging
 - physical-device and accessibility test matrix
-- COBOL C ABI bindings
+- managed monitoring, SLOs, paging, and disaster-recovery exercises
+- formal threat model and penetration test
 
 ## Security
 
-This is an early MVP and has not undergone a formal security review. Do not use it as the sole record of important financial information. Generated analysis and plans are advisory, may be incomplete, and are not professional financial advice.
+This is an early-stage application and has not undergone a formal security review. Do not use it as the sole record of important financial information. Generated analysis and plans are advisory, may be incomplete, and are not professional financial advice.
 
 ## License
 
