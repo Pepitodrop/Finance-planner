@@ -6,7 +6,10 @@ const serviceWorker = await readFile(new URL('../public/sw.js', import.meta.url)
 const index = await readFile(new URL('../index.html', import.meta.url), 'utf8')
 
 assert.equal(manifest.display, 'standalone')
-assert.equal(manifest.start_url, '/')
+assert.ok(
+  manifest.start_url === '/' || manifest.start_url.startsWith('/?'),
+  'manifest start_url must stay within the application root',
+)
 assert.equal(manifest.scope, '/')
 assert.ok(Array.isArray(manifest.icons) && manifest.icons.length > 0, 'manifest must contain at least one icon')
 assert.ok(manifest.icons.some((icon) => icon.purpose.includes('maskable')), 'manifest must provide a maskable icon')

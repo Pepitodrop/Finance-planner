@@ -1,0 +1,169 @@
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+}
+
+html {
+  min-height: 100%;
+  background: #080c18;
+  overscroll-behavior-y: none;
+  text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  min-height: 100dvh;
+  margin: 0;
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+  padding-bottom: var(--safe-bottom);
+  touch-action: manipulation;
+}
+
+button,
+input,
+select,
+textarea,
+a {
+  touch-action: manipulation;
+}
+
+button,
+[role='button'],
+input,
+select {
+  min-height: 44px;
+}
+
+input,
+select,
+textarea {
+  font-size: max(16px, 1rem);
+}
+
+.mobile-runtime {
+  position: fixed;
+  z-index: 10000;
+  inset: var(--safe-top) var(--safe-right) auto var(--safe-left);
+  pointer-events: none;
+}
+
+.mobile-runtime__banner {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.7rem 1rem;
+  color: #f8fafc;
+  background: rgba(127, 29, 29, 0.96);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  font-size: 0.9rem;
+  text-align: center;
+  pointer-events: auto;
+}
+
+.mobile-runtime__banner--action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  background: rgba(15, 23, 42, 0.97);
+}
+
+.mobile-runtime__banner button,
+.mobile-install-card button {
+  border: 0;
+  border-radius: 0.75rem;
+  padding: 0.65rem 0.9rem;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mobile-runtime__banner button,
+.mobile-install-card__actions > button:last-child {
+  color: #07111f;
+  background: #7dd3fc;
+}
+
+.mobile-install-card {
+  position: fixed;
+  left: max(1rem, var(--safe-left));
+  right: max(1rem, var(--safe-right));
+  bottom: max(1rem, calc(var(--safe-bottom) + 0.5rem));
+  display: grid;
+  gap: 1rem;
+  max-width: 34rem;
+  margin-inline: auto;
+  padding: 1rem;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.98);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 1rem;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+}
+
+.mobile-install-card p {
+  margin: 0.35rem 0 0;
+  color: #cbd5e1;
+  line-height: 1.45;
+}
+
+.mobile-install-card__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+.mobile-install-card__secondary {
+  color: #e2e8f0;
+  background: transparent;
+  border: 1px solid rgba(148, 163, 184, 0.45) !important;
+}
+
+.mobile-standalone body {
+  padding-top: var(--safe-top);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.mobile-standalone input,
+.mobile-standalone textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+@media (max-width: 720px) {
+  body {
+    overflow-x: hidden;
+  }
+
+  .mobile-runtime__banner--action {
+    justify-content: space-between;
+    text-align: left;
+  }
+
+  .mobile-install-card__actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (display-mode: standalone) {
+  body {
+    min-height: 100dvh;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
