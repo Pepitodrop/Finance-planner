@@ -15,6 +15,10 @@ function eventKey(provider, eventId) {
   return `${provider}:${eventId}`
 }
 
+function clone(value) {
+  return structuredClone(value)
+}
+
 export class EncryptedStore {
   constructor(path, secret) {
     this.path = path
@@ -64,9 +68,15 @@ export class EncryptedStore {
 
   async mutate(operation) {
     const run = this.writeQueue.then(async () => {
-      const result = await operation()
-      await this.save()
-      return result
+      const previous = clone(this.data)
+      try {
+        const result = await operation()
+        await this.save()
+        return result
+      } catch (error) {
+        this.data = previous
+        throw error
+      }
     })
     this.writeQueue = run.catch(() => {})
     return run
@@ -87,10 +97,23 @@ export class EncryptedStore {
     })
   }
 
+  async createConnectionSetup(input) {
+    return this.mutate(() => {
+      this.data.connections[input.userId] ??= {}
+      this.data.connections[input.userId][input.provider] = input.connection
+      this.data.oauthNonces[nonceKey(input.nonce)] = {
+        consentId: input.consentId,
+        userId: input.userId,
+        provider: input.provider,
+        redirectUri: input.redirectUri,
+        expiresAt: input.expiresAt,
+      }
+    })
+  }
+
   async registerOAuthNonce(input) {
     return this.mutate(() => {
-      const key = nonceKey(input.nonce)
-      this.data.oauthNonces[key] = {
+      this.data.oauthNonces[nonceKey(input.nonce)] = {
         consentId: input.consentId,
         userId: input.userId,
         provider: input.provider,
@@ -105,14 +128,44 @@ export class EncryptedStore {
       const key = nonceKey(input.nonce)
       const stored = this.data.oauthNonces[key]
       if (!stored) return false
-      delete this.data.oauthNonces[key]
+      if (stored.expiresAt <= input.now) {
+        delete this.data.oauthNonces[key]
+        return false
+      }
       if (
         stored.consentId !== input.consentId ||
         stored.userId !== input.userId ||
         stored.provider !== input.provider ||
-        stored.redirectUri !== input.redirectUri ||
-        stored.expiresAt <= input.now
+        stored.redirectUri !== input.redirectUri
       ) return false
+      delete this.data.oauthNonces[key]
+      return true
+    })
+  }
+
+  async activateConnection(input) {
+    return this.mutate(() => {
+      const connection = this.data.connections?.[input.userId]?.[input.provider]
+      const key = nonceKey(input.nonce)
+      const stored = this.data.oauthNonces[key]
+      if (!connection || !stored) return false
+      if (stored.expiresAt <= input.now) {
+        delete this.data.oauthNonces[key]
+        return false
+      }
+      if (
+        connection.consentId !== input.consentId ||
+        connection.redirectUri !== input.redirectUri ||
+        stored.consentId !== input.consentId ||
+        stored.userId !== input.userId ||
+        stored.provider !== input.provider ||
+        stored.redirectUri !== input.redirectUri
+      ) return false
+      delete this.data.oauthNonces[key]
+      this.data.connections[input.userId][input.provider] = {
+        ...connection,
+        connectedAt: input.connectedAt,
+      }
       return true
     })
   }
