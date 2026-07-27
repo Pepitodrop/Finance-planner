@@ -45,3 +45,17 @@ export async function applyTransactionBalance(balanceCents, amountCents, type, e
   if (!Number.isSafeInteger(next)) throw new Error('COBOL engine returned an invalid balance.')
   return next
 }
+
+export async function projectSavingsBalance(balanceCents, monthlyContributionCents, months, env = process.env) {
+  if (!Number.isSafeInteger(balanceCents) || !Number.isSafeInteger(monthlyContributionCents)) {
+    throw new Error('Balance and monthly contribution must use integer cents.')
+  }
+  if (!Number.isSafeInteger(months) || months < 0 || months > 1200) {
+    throw new Error('Months must be an integer between 0 and 1200.')
+  }
+  const result = await run(['PROJECT', String(balanceCents), String(monthlyContributionCents), String(months)], env)
+  if (!result) return balanceCents + monthlyContributionCents * months
+  const projected = Number(result[0])
+  if (!Number.isSafeInteger(projected)) throw new Error('COBOL engine returned an invalid savings projection.')
+  return projected
+}
