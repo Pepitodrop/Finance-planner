@@ -53,14 +53,6 @@ services:
       retries: 10
     security_opt:
       - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - DAC_READ_SEARCH
-      - FOWNER
-      - SETGID
-      - SETUID
     pids_limit: 150
     stop_grace_period: 60s
     shm_size: 256mb
