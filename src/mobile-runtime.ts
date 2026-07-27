@@ -7,6 +7,10 @@ export function isStandaloneDisplay(mediaMatches: boolean, navigatorStandalone?:
   return mediaMatches || navigatorStandalone === true
 }
 
+export function isIOSDevice(userAgent: string, platform = '', maxTouchPoints = 0) {
+  return /iPad|iPhone|iPod/i.test(userAgent) || (platform === 'MacIntel' && maxTouchPoints > 1)
+}
+
 export function shouldOfferInstall(input: {
   standalone: boolean
   promptAvailable: boolean
@@ -14,6 +18,16 @@ export function shouldOfferInstall(input: {
   now: number
 }) {
   return !input.standalone && input.promptAvailable && input.dismissedUntil <= input.now
+}
+
+export function shouldOfferIOSInstall(input: {
+  standalone: boolean
+  ios: boolean
+  promptAvailable: boolean
+  dismissedUntil: number
+  now: number
+}) {
+  return !input.standalone && input.ios && !input.promptAvailable && input.dismissedUntil <= input.now
 }
 
 export function installDismissalDeadline(now: number, days = 14) {
