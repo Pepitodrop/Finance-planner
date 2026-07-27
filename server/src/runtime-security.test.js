@@ -25,6 +25,19 @@ test('classifyError returns stable public error responses', () => {
   assert.equal(classifyError(new Error('Request body too large.')).status, 413)
 })
 
+test('classifyError hides unexpected exception details behind a 500 response', () => {
+  assert.deepEqual(classifyError(new Error('provider secret leaked in stack message')), {
+    status: 500,
+    code: 'internal_error',
+    message: 'Internal server error.',
+  })
+  assert.deepEqual(classifyError('raw upstream failure'), {
+    status: 500,
+    code: 'internal_error',
+    message: 'Internal server error.',
+  })
+})
+
 test('public production configuration rejects local auth and insecure origins', () => {
   const publicProduction = { NODE_ENV: 'production', PUBLIC_DEPLOYMENT: 'true' }
   assert.throws(() => validateProductionConfig({ ...publicProduction, AUTH_MODE: 'local' }, 'https://app.example'), /AUTH_MODE/)
