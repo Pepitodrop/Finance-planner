@@ -9,6 +9,7 @@
        01  WS-BALANCE               PIC S9(15) VALUE 0.
        01  WS-RESULT                PIC S9(15) VALUE 0.
        01  WS-ABS-AMOUNT            PIC 9(15) VALUE 0.
+       01  WS-MONTHS                PIC 9(4) VALUE 0.
        01  WS-TYPE                  PIC X(7) VALUE SPACES.
        01  WS-DISPLAY-NUMBER        PIC -Z(14)9.
 
@@ -20,6 +21,8 @@
                    PERFORM NORMALIZE-AMOUNT
                WHEN "APPLY"
                    PERFORM APPLY-TRANSACTION
+               WHEN "PROJECT"
+                   PERFORM PROJECT-SAVINGS
                WHEN OTHER
                    DISPLAY "ERROR|UNKNOWN_MODE"
                    MOVE 2 TO RETURN-CODE
@@ -76,6 +79,47 @@
                    MOVE 2 TO RETURN-CODE
                    EXIT PARAGRAPH
            END-EVALUATE
+
+           MOVE WS-RESULT TO WS-DISPLAY-NUMBER
+           DISPLAY "OK|" FUNCTION TRIM(WS-DISPLAY-NUMBER).
+
+       PROJECT-SAVINGS.
+           ACCEPT WS-ARG FROM ARGUMENT-VALUE
+           COMPUTE WS-BALANCE = FUNCTION NUMVAL(WS-ARG)
+               ON SIZE ERROR
+                   DISPLAY "ERROR|INVALID_BALANCE"
+                   MOVE 2 TO RETURN-CODE
+                   EXIT PARAGRAPH
+           END-COMPUTE
+
+           ACCEPT WS-ARG FROM ARGUMENT-VALUE
+           COMPUTE WS-AMOUNT = FUNCTION NUMVAL(WS-ARG)
+               ON SIZE ERROR
+                   DISPLAY "ERROR|INVALID_CONTRIBUTION"
+                   MOVE 2 TO RETURN-CODE
+                   EXIT PARAGRAPH
+           END-COMPUTE
+
+           ACCEPT WS-ARG FROM ARGUMENT-VALUE
+           COMPUTE WS-MONTHS = FUNCTION NUMVAL(WS-ARG)
+               ON SIZE ERROR
+                   DISPLAY "ERROR|INVALID_MONTHS"
+                   MOVE 2 TO RETURN-CODE
+                   EXIT PARAGRAPH
+           END-COMPUTE
+
+           IF WS-MONTHS > 1200
+               DISPLAY "ERROR|INVALID_MONTHS"
+               MOVE 2 TO RETURN-CODE
+               EXIT PARAGRAPH
+           END-IF
+
+           COMPUTE WS-RESULT = WS-BALANCE + (WS-AMOUNT * WS-MONTHS)
+               ON SIZE ERROR
+                   DISPLAY "ERROR|RESULT_OVERFLOW"
+                   MOVE 2 TO RETURN-CODE
+                   EXIT PARAGRAPH
+           END-COMPUTE
 
            MOVE WS-RESULT TO WS-DISPLAY-NUMBER
            DISPLAY "OK|" FUNCTION TRIM(WS-DISPLAY-NUMBER).
