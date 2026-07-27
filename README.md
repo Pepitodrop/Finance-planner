@@ -5,12 +5,28 @@ An offline-first personal finance dashboard implemented as an independent open-s
 ## Current MVP
 
 - Responsive React and TypeScript dashboard
+- Installable mobile PWA with safe-area support, offline status, controlled updates, and install UX
 - Account, balance, income, and expense tracking
 - Savings goals and recurring-payment overview
 - Twelve-month deterministic projection
 - Local browser persistence
 - GnuCOBOL fixed-point projection module
 - Free local Hugging Face AI through Transformers.js-compatible ONNX models
+
+## Mobile application
+
+The mobile release currently ships as an installable progressive web application. It includes:
+
+- standalone portrait launch mode
+- iOS and Android home-screen metadata
+- display-cutout and safe-area handling
+- minimum mobile touch targets and keyboard-safe form sizing
+- offline-state feedback
+- explicit service-worker update activation instead of silent mid-session replacement
+- install prompting with a bounded dismissal period
+- CI verification for mobile manifest, service-worker security exclusions, and mobile CSS invariants
+
+Native App Store and Play Store packaging, signing, device-lab testing, push notifications, biometric vault unlock, and store review remain separate release milestones.
 
 ## AI architecture
 
@@ -82,9 +98,10 @@ cobc -m core/cobol/finance_projection.cob
 ## Architecture
 
 ```text
-src/                    React/TypeScript application and local AI
+src/                    React/TypeScript application, mobile runtime, and local AI
+public/                 PWA manifest, service worker, and install assets
 core/cobol/             Deterministic fixed-point financial calculations
-.github/workflows/      CI for web and COBOL
+.github/workflows/      CI for web, mobile invariants, and COBOL
 ```
 
 ## Next milestones
@@ -95,7 +112,8 @@ core/cobol/             Deterministic fixed-point financial calculations
 - editable behavior-learning rules and graph inspection
 - evaluation dataset for German banking descriptions
 - receipt, invoice, and contract document extraction
-- Tauri desktop and mobile packaging
+- signed native Android and iOS packaging
+- physical-device and accessibility test matrix
 - COBOL C ABI bindings
 
 ## Security
