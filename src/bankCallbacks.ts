@@ -5,6 +5,7 @@ import {
   type BankConsent,
   type BankProviderAdapter,
   type BankRuntimeRepository,
+  type OAuthStateClaims,
 } from './bankRuntime'
 
 const encoder = new TextEncoder()
@@ -31,9 +32,20 @@ async function importHmacKey(secret: Uint8Array): Promise<CryptoKey> {
   return crypto.subtle.importKey('raw', secret, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
 }
 
+export interface ConsentBoundOAuthStateClaims extends OAuthStateClaims {
+  consentId: string
+}
+
 export interface OAuthNonceRepository {
   /** Must atomically consume the nonce. False means used, unknown, or expired. */
-  consumeNonce(input: { nonce: string; userId: string; provider: string; expiresAt: number; now: number }): Promise<boolean>
+  consumeNonce(input: {
+    nonce: string
+    consentId: string
+    userId: string
+    provider: string
+    expiresAt: number
+    now: number
+  }): Promise<boolean>
 }
 
 export interface BankTelemetry {
@@ -65,9 +77,14 @@ export async function completeBankCallback(input: {
   const startedAt = performance.now()
 
   try {
-    const claims = await verifyOAuthState(input.state, input.stateSecret, input.expected, now.getTime())
+    const claims = await verifyOAuthState(input.state, input.stateSecret, input.expected, now.getTime()) as ConsentBoundOAuthStateClaims
+    if (!claims.consentId || claims.consentId !== input.consentId) {
+      throw new Error('OAuth state does not match the requested bank consent.')
+    }
+
     const consumed = await input.nonceRepository.consumeNonce({
       nonce: claims.nonce,
+      consentId: claims.consentId,
       userId: claims.userId,
       provider: claims.provider,
       expiresAt: claims.expiresAt,
@@ -75,14 +92,14 @@ export async function completeBankCallback(input: {
     })
     if (!consumed) throw new Error('OAuth state nonce was already used or expired.')
 
-    const consent = await input.repository.getConsent(input.consentId)
+    const consent = await input.repository.getConsent(claims.consentId)
     if (!consent) throw new Error('Bank consent was not found.')
-    if (consent.userId !== claims.userId || consent.provider !== claims.provider) {
+    if (consent.id !== claims.consentId || consent.userId !== claims.userId || consent.provider !== claims.provider) {
       throw new Error('OAuth state does not match the bank consent.')
     }
 
     const connected = await connectBank({
-      consentId: input.consentId,
+      consentId: claims.consentId,
       provider: input.provider,
       repository: input.repository,
       vault: input.vault,
@@ -107,10 +124,12 @@ export interface SignedBankWebhook {
 }
 
 export interface BankWebhookLeaseRepository {
-  /** Atomically claims an event. Duplicate, completed, or actively leased events return false. */
-  claimWebhookEvent(input: { eventId: string; occurredAt: string; leaseUntil: string }): Promise<boolean>
-  completeWebhookEvent(input: { eventId: string; completedAt: string }): Promise<void>
-  releaseWebhookEvent(input: { eventId: string }): Promise<void>
+  /** Atomically claims an event and returns a unique fencing token. */
+  claimWebhookEvent(input: { eventId: string; occurredAt: string; leaseUntil: string }): Promise<string | undefined>
+  /** Must only complete when the supplied token still owns the active lease. */
+  completeWebhookEvent(input: { eventId: string; leaseToken: string; completedAt: string }): Promise<boolean>
+  /** Must only release when the supplied token still owns the active lease. */
+  releaseWebhookEvent(input: { eventId: string; leaseToken: string }): Promise<boolean>
 }
 
 export async function signBankWebhook(input: {
@@ -167,12 +186,12 @@ export async function processBankWebhook(input: {
     return 'rejected'
   }
 
-  const claimed = await input.repository.claimWebhookEvent({
+  const leaseToken = await input.repository.claimWebhookEvent({
     eventId: input.event.id,
     occurredAt: input.event.occurredAt,
     leaseUntil: new Date(now.getTime() + (input.leaseMs ?? 60_000)).toISOString(),
   })
-  if (!claimed) {
+  if (!leaseToken) {
     telemetry.increment('bank.webhook.duplicate')
     return 'duplicate'
   }
@@ -180,11 +199,16 @@ export async function processBankWebhook(input: {
   const startedAt = performance.now()
   try {
     await input.handler(input.event)
-    await input.repository.completeWebhookEvent({ eventId: input.event.id, completedAt: now.toISOString() })
+    const completed = await input.repository.completeWebhookEvent({
+      eventId: input.event.id,
+      leaseToken,
+      completedAt: now.toISOString(),
+    })
+    if (!completed) throw new Error('Webhook lease ownership was lost before completion.')
     telemetry.increment('bank.webhook.processed')
     return 'processed'
   } catch (error) {
-    await input.repository.releaseWebhookEvent({ eventId: input.event.id })
+    await input.repository.releaseWebhookEvent({ eventId: input.event.id, leaseToken })
     telemetry.increment('bank.webhook.failed')
     telemetry.error(error, { operation: 'processBankWebhook', eventId: input.event.id })
     throw error
