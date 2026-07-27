@@ -7,6 +7,15 @@ export interface StorageHealth {
   pressure: 'unknown' | 'healthy' | 'warning' | 'critical'
 }
 
+const UNKNOWN_STORAGE_HEALTH: StorageHealth = {
+  supported: false,
+  persisted: false,
+  usage: 0,
+  quota: 0,
+  usageRatio: 0,
+  pressure: 'unknown',
+}
+
 export function storagePressure(usage: number, quota: number): StorageHealth['pressure'] {
   if (quota <= 0 || usage < 0) return 'unknown'
   const ratio = usage / quota
@@ -16,22 +25,24 @@ export function storagePressure(usage: number, quota: number): StorageHealth['pr
 }
 
 export async function readStorageHealth(storage: StorageManager | undefined): Promise<StorageHealth> {
-  if (!storage?.estimate) {
-    return { supported: false, persisted: false, usage: 0, quota: 0, usageRatio: 0, pressure: 'unknown' }
-  }
+  if (!storage?.estimate) return UNKNOWN_STORAGE_HEALTH
 
-  const [{ usage = 0, quota = 0 }, persisted] = await Promise.all([
-    storage.estimate(),
-    storage.persisted?.().catch(() => false) ?? Promise.resolve(false),
-  ])
+  try {
+    const [{ usage = 0, quota = 0 }, persisted] = await Promise.all([
+      storage.estimate(),
+      storage.persisted?.().catch(() => false) ?? Promise.resolve(false),
+    ])
 
-  return {
-    supported: true,
-    persisted,
-    usage,
-    quota,
-    usageRatio: quota > 0 ? usage / quota : 0,
-    pressure: storagePressure(usage, quota),
+    return {
+      supported: true,
+      persisted,
+      usage,
+      quota,
+      usageRatio: quota > 0 ? usage / quota : 0,
+      pressure: storagePressure(usage, quota),
+    }
+  } catch {
+    return UNKNOWN_STORAGE_HEALTH
   }
 }
 
