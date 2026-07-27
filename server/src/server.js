@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { URL } from 'node:url'
 import { createAuthRouter } from './auth-router.js'
-import { EncryptedStore } from './crypto-store.js'
+import { createConnectorStore } from './database.js'
 import { createFinanceRouter } from './finance-router.js'
 import { createSession, issueState, verifySession, verifyState } from './security.js'
 import { startGoCardless, startPayPal, syncGoCardless, syncPayPal } from './providers.js'
@@ -18,8 +18,8 @@ if (!['127.0.0.1', '0.0.0.0', '::'].includes(host)) throw new Error('HOST must b
 if (sessionSecret.length < 32) throw new Error('SESSION_SECRET must contain at least 32 characters.')
 validateProductionConfig(env, origin)
 
-const store = new EncryptedStore(env.CONNECTOR_STORE_PATH || './data/connectors.enc.json', env.CONNECTOR_MASTER_KEY || '')
-await store.load()
+const persistence = await createConnectorStore(env)
+const store = persistence.store
 let ready = true
 let shuttingDown = false
 const generalLimiter = new SlidingWindowRateLimiter({ limit: Number(env.RATE_LIMIT_PER_MINUTE || 120), windowMs: 60_000 })
@@ -134,7 +134,7 @@ async function sync(request, response) {
   const user = userId(request)
   const results = []
   for (const provider of ['gocardless', 'finapi', 'paypal']) {
-    const stored = store.get(user, provider)
+    const stored = await store.get(user, provider)
     if (!stored) continue
     try {
       const synced = provider === 'gocardless' ? await syncGoCardless(stored, env)
@@ -167,7 +167,7 @@ const server = createServer(async (request, response) => {
       return response.end()
     }
     if (request.method === 'GET' && url.pathname === '/health/live') return send(response, 200, { status: 'ok', service: 'finance-planner-connector' })
-    if (request.method === 'GET' && (url.pathname === '/health' || url.pathname === '/health/ready')) return send(response, ready ? 200 : 503, { status: ready ? 'ready' : 'not_ready', service: 'finance-planner-connector', version: '0.1.0' })
+    if (request.method === 'GET' && (url.pathname === '/health' || url.pathname === '/health/ready')) return send(response, ready ? 200 : 503, { status: ready ? 'ready' : 'not_ready', service: 'finance-planner-connector', version: '0.1.0', persistence: persistence.driver })
     if (await handleAuth(request, response, url)) return
     if (await handleFinance(request, response, url)) return
     if (request.method === 'POST' && url.pathname === '/api/session/local') {
@@ -215,14 +215,17 @@ function shutdown(signal) {
   ready = false
   console.log(JSON.stringify({ level: 'info', event: 'shutdown_started', signal }))
   const force = setTimeout(() => process.exit(1), Number(env.SHUTDOWN_TIMEOUT_MS || 10_000)).unref()
-  server.close((error) => {
-    clearTimeout(force)
-    if (error) {
-      console.error(JSON.stringify({ level: 'error', event: 'shutdown_failed', error: error.message }))
+  server.close(async (error) => {
+    try {
+      if (error) throw error
+      await persistence.close()
+      clearTimeout(force)
+      console.log(JSON.stringify({ level: 'info', event: 'shutdown_complete' }))
+      process.exit(0)
+    } catch (shutdownError) {
+      console.error(JSON.stringify({ level: 'error', event: 'shutdown_failed', error: shutdownError.message }))
       process.exit(1)
     }
-    console.log(JSON.stringify({ level: 'info', event: 'shutdown_complete' }))
-    process.exit(0)
   })
   server.closeIdleConnections?.()
 }
@@ -238,4 +241,4 @@ process.on('unhandledRejection', (error) => {
   shutdown('unhandledRejection')
 })
 
-server.listen(port, host, () => console.log(JSON.stringify({ level: 'info', event: 'server_listening', host, port })))
+server.listen(port, host, () => console.log(JSON.stringify({ level: 'info', event: 'server_listening', host, port, persistence: persistence.driver })))
