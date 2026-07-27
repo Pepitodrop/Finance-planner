@@ -25,9 +25,11 @@ test('classifyError returns stable public error responses', () => {
   assert.equal(classifyError(new Error('Request body too large.')).status, 413)
 })
 
-test('production configuration rejects local auth and insecure origins', () => {
-  assert.throws(() => validateProductionConfig({ NODE_ENV: 'production', AUTH_MODE: 'local' }, 'https://app.example'), /AUTH_MODE/)
-  assert.throws(() => validateProductionConfig({ NODE_ENV: 'production' }, 'http://app.example'), /HTTPS/)
-  assert.doesNotThrow(() => validateProductionConfig({ NODE_ENV: 'production' }, 'https://app.example'))
-  assert.doesNotThrow(() => validateProductionConfig({ NODE_ENV: 'development', AUTH_MODE: 'local' }, 'http://localhost:5173'))
+test('public production configuration rejects local auth and insecure origins', () => {
+  const publicProduction = { NODE_ENV: 'production', PUBLIC_DEPLOYMENT: 'true' }
+  assert.throws(() => validateProductionConfig({ ...publicProduction, AUTH_MODE: 'local' }, 'https://app.example'), /AUTH_MODE/)
+  assert.throws(() => validateProductionConfig(publicProduction, 'http://app.example'), /HTTPS/)
+  assert.doesNotThrow(() => validateProductionConfig(publicProduction, 'https://app.example'))
+  assert.doesNotThrow(() => validateProductionConfig({ NODE_ENV: 'production', AUTH_MODE: 'local' }, 'http://localhost:8080'))
+  assert.doesNotThrow(() => validateProductionConfig({ NODE_ENV: 'development', PUBLIC_DEPLOYMENT: 'true', AUTH_MODE: 'local' }, 'http://localhost:5173'))
 })
