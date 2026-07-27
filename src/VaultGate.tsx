@@ -1,5 +1,6 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { KeyRound, LockKeyhole, ShieldCheck } from 'lucide-react'
+import { shouldLockAfterBackground, setPrivacyShield } from './mobile-security'
 import { clearLegacyPlaintextState, hasLegacyPlaintextState, loadLegacyState, setUnlockedState } from './storage'
 import { createVault, hasEncryptedVault, lockVault, unlockVault } from './vault'
 
@@ -14,21 +15,54 @@ export function VaultGate({ children }: VaultGateProps) {
   const [confirmation, setConfirmation] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const backgroundedAt = useRef<number | null>(null)
 
   useEffect(() => {
     if (mode !== 'open') return
-    let timer = window.setTimeout(() => { lockVault(); window.location.reload() }, AUTO_LOCK_MS)
+
+    const lockNow = () => {
+      setPrivacyShield(true)
+      lockVault()
+      window.location.reload()
+    }
+
+    let timer = window.setTimeout(lockNow, AUTO_LOCK_MS)
     const resetTimer = () => {
       window.clearTimeout(timer)
-      timer = window.setTimeout(() => { lockVault(); window.location.reload() }, AUTO_LOCK_MS)
+      timer = window.setTimeout(lockNow, AUTO_LOCK_MS)
     }
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        backgroundedAt.current = Date.now()
+        setPrivacyShield(true)
+        return
+      }
+
+      const mustLock = shouldLockAfterBackground(backgroundedAt.current, Date.now())
+      backgroundedAt.current = null
+      if (mustLock) {
+        lockNow()
+        return
+      }
+      setPrivacyShield(false)
+      resetTimer()
+    }
+    const handlePageHide = () => {
+      setPrivacyShield(true)
+      lockVault()
+    }
+
     const events: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'touchstart', 'scroll']
     events.forEach((eventName) => window.addEventListener(eventName, resetTimer, { passive: true }))
-    document.addEventListener('visibilitychange', resetTimer)
+    document.addEventListener('visibilitychange', handleVisibility)
+    window.addEventListener('pagehide', handlePageHide)
+
     return () => {
       window.clearTimeout(timer)
       events.forEach((eventName) => window.removeEventListener(eventName, resetTimer))
-      document.removeEventListener('visibilitychange', resetTimer)
+      document.removeEventListener('visibilitychange', handleVisibility)
+      window.removeEventListener('pagehide', handlePageHide)
+      setPrivacyShield(false)
     }
   }, [mode])
 
@@ -50,6 +84,7 @@ export function VaultGate({ children }: VaultGateProps) {
       }
       setPassword('')
       setConfirmation('')
+      setPrivacyShield(false)
       setMode('open')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Der Datenspeicher konnte nicht geöffnet werden.')
@@ -59,7 +94,7 @@ export function VaultGate({ children }: VaultGateProps) {
   }
 
   if (mode === 'open') {
-    return <>{children}<button className="vault-lock-button" type="button" onClick={() => { lockVault(); window.location.reload() }}><LockKeyhole size={16}/> Sperren</button></>
+    return <>{children}<button className="vault-lock-button" type="button" onClick={() => { setPrivacyShield(true); lockVault(); window.location.reload() }}><LockKeyhole size={16}/> Sperren</button></>
   }
 
   const migrating = mode === 'setup' && hasLegacyPlaintextState()
@@ -68,7 +103,7 @@ export function VaultGate({ children }: VaultGateProps) {
       <div className="goal-hero-icon"><ShieldCheck size={26}/></div>
       <p className="eyebrow">Lokale Ende-zu-Ende-Verschlüsselung</p>
       <h1>{mode === 'setup' ? 'Sicheren Datenspeicher einrichten' : 'Finance Planner entsperren'}</h1>
-      <p className="muted">Konten, Transaktionen und Sparziele werden mit AES-256-GCM verschlüsselt. Der Schlüssel wird aus deinem Passwort abgeleitet, nur im Arbeitsspeicher gehalten und nach 15 Minuten Inaktivität automatisch entfernt.</p>
+      <p className="muted">Konten, Transaktionen und Sparziele werden mit AES-256-GCM verschlüsselt. Der Schlüssel wird aus deinem Passwort abgeleitet, nur im Arbeitsspeicher gehalten und nach 15 Minuten Inaktivität oder spätestens 30 Sekunden im Hintergrund entfernt.</p>
       {migrating && <p className="status-message">Bestehende Klartextdaten werden nach erfolgreicher Einrichtung verschlüsselt und anschließend entfernt.</p>}
       <form onSubmit={submit} className="vault-form">
         <label>Passwort<input autoFocus autoComplete={mode === 'setup' ? 'new-password' : 'current-password'} minLength={12} type="password" value={password} onChange={(event) => setPassword(event.target.value)} required/></label>

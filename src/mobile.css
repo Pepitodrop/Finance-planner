@@ -135,6 +135,25 @@ textarea {
   -webkit-user-select: text;
 }
 
+.mobile-privacy-shielded body > * {
+  visibility: hidden !important;
+}
+
+.mobile-privacy-shielded body::before {
+  content: 'Finance Planner ist gesperrt';
+  position: fixed;
+  z-index: 2147483647;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  visibility: visible;
+  padding: 2rem;
+  color: #e2e8f0;
+  background: #080c18;
+  font-weight: 700;
+  text-align: center;
+}
+
 @media (max-width: 720px) {
   body {
     overflow-x: hidden;
