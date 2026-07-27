@@ -94,6 +94,8 @@ services:
       PAYPAL_ENVIRONMENT: ${PAYPAL_ENVIRONMENT:-sandbox}
     ports:
       - "127.0.0.1:${CONNECTOR_PORT:-8787}:8787"
+    volumes:
+      - auth-data:/app/data
     tmpfs:
       - /tmp:size=64m,mode=1777
     security_opt:
@@ -110,3 +112,4 @@ services:
 
 volumes:
   postgres-data:
+  auth-data:
