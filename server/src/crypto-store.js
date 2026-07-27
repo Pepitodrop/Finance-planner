@@ -7,11 +7,26 @@ function keyFromSecret(secret) {
   return createHash('sha256').update(secret, 'utf8').digest()
 }
 
+function nonceKey(nonce) {
+  return createHash('sha256').update(nonce, 'utf8').digest('base64url')
+}
+
+function eventKey(provider, eventId) {
+  return `${provider}:${eventId}`
+}
+
 export class EncryptedStore {
   constructor(path, secret) {
     this.path = path
     this.key = keyFromSecret(secret)
-    this.data = { connections: {} }
+    this.data = { connections: {}, oauthNonces: {}, webhookEvents: {} }
+    this.writeQueue = Promise.resolve()
+  }
+
+  normalize() {
+    this.data.connections ??= {}
+    this.data.oauthNonces ??= {}
+    this.data.webhookEvents ??= {}
   }
 
   async load() {
@@ -29,6 +44,7 @@ export class EncryptedStore {
     } catch (error) {
       if (error?.code !== 'ENOENT') throw new Error('Encrypted connector store could not be opened.', { cause: error })
     }
+    this.normalize()
     return this.data
   }
 
@@ -38,22 +54,105 @@ export class EncryptedStore {
     const cipher = createCipheriv('aes-256-gcm', this.key, iv)
     const ciphertext = Buffer.concat([cipher.update(JSON.stringify(this.data), 'utf8'), cipher.final()])
     const envelope = JSON.stringify({
-      format: 'finance-planner-connectors', version: 1, algorithm: 'AES-256-GCM',
+      format: 'finance-planner-connectors', version: 2, algorithm: 'AES-256-GCM',
       iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64'),
     })
-    const temp = `${this.path}.tmp`
+    const temp = `${this.path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
     await writeFile(temp, envelope, { encoding: 'utf8', mode: 0o600 })
     await rename(temp, this.path)
   }
 
-  get(userId, provider) { return this.data.connections?.[userId]?.[provider] ?? null }
-  async set(userId, provider, value) {
-    this.data.connections[userId] ??= {}
-    this.data.connections[userId][provider] = value
-    await this.save()
+  async mutate(operation) {
+    const run = this.writeQueue.then(async () => {
+      const result = await operation()
+      await this.save()
+      return result
+    })
+    this.writeQueue = run.catch(() => {})
+    return run
   }
+
+  get(userId, provider) { return this.data.connections?.[userId]?.[provider] ?? null }
+
+  async set(userId, provider, value) {
+    return this.mutate(() => {
+      this.data.connections[userId] ??= {}
+      this.data.connections[userId][provider] = value
+    })
+  }
+
   async remove(userId, provider) {
-    if (this.data.connections?.[userId]) delete this.data.connections[userId][provider]
-    await this.save()
+    return this.mutate(() => {
+      if (this.data.connections?.[userId]) delete this.data.connections[userId][provider]
+    })
+  }
+
+  async registerOAuthNonce(input) {
+    return this.mutate(() => {
+      const key = nonceKey(input.nonce)
+      this.data.oauthNonces[key] = {
+        consentId: input.consentId,
+        userId: input.userId,
+        provider: input.provider,
+        redirectUri: input.redirectUri,
+        expiresAt: input.expiresAt,
+      }
+    })
+  }
+
+  async consumeOAuthNonce(input) {
+    return this.mutate(() => {
+      const key = nonceKey(input.nonce)
+      const stored = this.data.oauthNonces[key]
+      if (!stored) return false
+      delete this.data.oauthNonces[key]
+      if (
+        stored.consentId !== input.consentId ||
+        stored.userId !== input.userId ||
+        stored.provider !== input.provider ||
+        stored.redirectUri !== input.redirectUri ||
+        stored.expiresAt <= input.now
+      ) return false
+      return true
+    })
+  }
+
+  async claimWebhookEvent(input) {
+    return this.mutate(() => {
+      const key = eventKey(input.provider, input.eventId)
+      const now = Date.parse(input.now)
+      const existing = this.data.webhookEvents[key]
+      if (existing?.completedAt) return undefined
+      if (existing?.leaseUntil && Date.parse(existing.leaseUntil) > now) return undefined
+      const leaseToken = randomBytes(24).toString('base64url')
+      this.data.webhookEvents[key] = {
+        occurredAt: input.occurredAt,
+        leaseToken,
+        leaseUntil: input.leaseUntil,
+        completedAt: null,
+      }
+      return leaseToken
+    })
+  }
+
+  async completeWebhookEvent(input) {
+    return this.mutate(() => {
+      const key = eventKey(input.provider, input.eventId)
+      const existing = this.data.webhookEvents[key]
+      if (!existing || existing.completedAt || existing.leaseToken !== input.leaseToken) return false
+      existing.completedAt = input.completedAt
+      existing.leaseUntil = null
+      return true
+    })
+  }
+
+  async releaseWebhookEvent(input) {
+    return this.mutate(() => {
+      const key = eventKey(input.provider, input.eventId)
+      const existing = this.data.webhookEvents[key]
+      if (!existing || existing.completedAt || existing.leaseToken !== input.leaseToken) return false
+      delete this.data.webhookEvents[key]
+      return true
+    })
   }
 }
