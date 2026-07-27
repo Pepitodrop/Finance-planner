@@ -34,7 +34,14 @@ class MemoryRepository implements BankRuntimeRepository {
 
 class MemoryNonceRepository implements OAuthNonceRepository {
   consumed = new Set<string>()
-  async consumeNonce(input: { nonce: string; consentId: string; expiresAt: number; now: number }) {
+  async consumeNonce(input: {
+    nonce: string
+    consentId: string
+    userId: string
+    provider: string
+    expiresAt: number
+    now: number
+  }) {
     const key = `${input.consentId}:${input.nonce}`
     if (input.expiresAt <= input.now || this.consumed.has(key)) return false
     this.consumed.add(key)
@@ -47,14 +54,14 @@ class MemoryWebhookRepository implements BankWebhookLeaseRepository {
   completed = new Set<string>()
   sequence = 0
 
-  async claimWebhookEvent(input: { eventId: string }) {
+  async claimWebhookEvent(input: { eventId: string; occurredAt: string; leaseUntil: string }) {
     if (this.leases.has(input.eventId) || this.completed.has(input.eventId)) return undefined
     const leaseToken = `lease-${++this.sequence}`
     this.leases.set(input.eventId, leaseToken)
     return leaseToken
   }
 
-  async completeWebhookEvent(input: { eventId: string; leaseToken: string }) {
+  async completeWebhookEvent(input: { eventId: string; leaseToken: string; completedAt: string }) {
     if (this.leases.get(input.eventId) !== input.leaseToken) return false
     this.leases.delete(input.eventId)
     this.completed.add(input.eventId)
