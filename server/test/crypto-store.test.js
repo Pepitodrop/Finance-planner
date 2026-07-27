@@ -15,6 +15,19 @@ async function fixture() {
   return { directory, path, store }
 }
 
+function setupInput(overrides = {}) {
+  return {
+    nonce: 'nonce-atomic',
+    consentId: 'consent-atomic',
+    userId: 'user-atomic',
+    provider: 'gocardless',
+    redirectUri: 'https://app.test/callback',
+    expiresAt: Date.now() + 60_000,
+    connection: { requisitionId: 'req-atomic', consentId: 'consent-atomic', redirectUri: 'https://app.test/callback' },
+    ...overrides,
+  }
+}
+
 test('credential store persists encrypted data and reloads it', async () => {
   const { directory, path, store } = await fixture()
   try {
@@ -57,7 +70,7 @@ test('oauth nonces survive restart and can only be consumed once', async () => {
   }
 })
 
-test('oauth nonce consumption rejects consent mismatches', async () => {
+test('oauth nonce consumption rejects consent mismatches without consuming the valid nonce', async () => {
   const { directory, store } = await fixture()
   try {
     const input = {
@@ -66,6 +79,71 @@ test('oauth nonce consumption rejects consent mismatches', async () => {
     }
     await store.registerOAuthNonce(input)
     assert.equal(await store.consumeOAuthNonce({ ...input, consentId: 'consent-2', now: Date.now() }), false)
+    assert.equal(await store.consumeOAuthNonce({ ...input, now: Date.now() }), true)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('connection setup and nonce registration persist as one transition', async () => {
+  const { directory, path, store } = await fixture()
+  try {
+    const input = setupInput()
+    await store.createConnectionSetup(input)
+    const restarted = new EncryptedStore(path, secret)
+    await restarted.load()
+    assert.equal(restarted.get(input.userId, input.provider).requisitionId, 'req-atomic')
+    assert.equal(await restarted.activateConnection({
+      ...input,
+      now: Date.now(),
+      connectedAt: '2026-07-27T12:00:00.000Z',
+    }), true)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('failed setup persistence rolls back both connection and nonce', async () => {
+  const { directory, store } = await fixture()
+  try {
+    const input = setupInput()
+    const originalSave = store.save.bind(store)
+    store.save = async () => { throw new Error('disk unavailable') }
+    await assert.rejects(() => store.createConnectionSetup(input), /disk unavailable/)
+    store.save = originalSave
+    assert.equal(store.get(input.userId, input.provider), null)
+    assert.equal(await store.activateConnection({
+      ...input,
+      now: Date.now(),
+      connectedAt: '2026-07-27T12:00:00.000Z',
+    }), false)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('failed callback persistence leaves nonce and connection retryable', async () => {
+  const { directory, path, store } = await fixture()
+  try {
+    const input = setupInput()
+    await store.createConnectionSetup(input)
+    const originalSave = store.save.bind(store)
+    store.save = async () => { throw new Error('disk unavailable') }
+    await assert.rejects(() => store.activateConnection({
+      ...input,
+      now: Date.now(),
+      connectedAt: '2026-07-27T12:00:00.000Z',
+    }), /disk unavailable/)
+    store.save = originalSave
+    assert.equal(store.get(input.userId, input.provider).connectedAt, undefined)
+    assert.equal(await store.activateConnection({
+      ...input,
+      now: Date.now(),
+      connectedAt: '2026-07-27T12:01:00.000Z',
+    }), true)
+    const restarted = new EncryptedStore(path, secret)
+    await restarted.load()
+    assert.equal(restarted.get(input.userId, input.provider).connectedAt, '2026-07-27T12:01:00.000Z')
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
