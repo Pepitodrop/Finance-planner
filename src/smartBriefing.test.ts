@@ -15,10 +15,11 @@ const state: AppState = {
 }
 
 describe('createSmartBriefing', () => {
-  it('prioritizes overspending and low liquidity signals', () => {
+  it('prioritizes critical liquidity before overspending', () => {
     const briefing = createSmartBriefing(state, new Date('2026-07-27T12:00:00Z'))
-    expect(briefing[0]?.id).toBe('spending-trend')
-    expect(briefing.some((item) => item.id === 'cash-runway' && item.severity === 'attention')).toBe(true)
+    expect(briefing[0]?.id).toBe('cash-runway')
+    expect(briefing[0]?.severity).toBe('attention')
+    expect(briefing.some((item) => item.id === 'spending-trend' && item.severity === 'attention')).toBe(true)
     expect(briefing.some((item) => item.id === 'savings-rate')).toBe(true)
   })
 
