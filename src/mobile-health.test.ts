@@ -29,6 +29,22 @@ describe('mobile health', () => {
     })
   })
 
+  it('falls back safely when quota estimation fails', async () => {
+    const storage = {
+      estimate: vi.fn().mockRejectedValue(new Error('quota unavailable')),
+      persisted: vi.fn().mockResolvedValue(true),
+    } as unknown as StorageManager
+
+    await expect(readStorageHealth(storage)).resolves.toEqual({
+      supported: false,
+      persisted: false,
+      usage: 0,
+      quota: 0,
+      usageRatio: 0,
+      pressure: 'unknown',
+    })
+  })
+
   it('requests persistent storage without surfacing browser failures', async () => {
     const storage = { persist: vi.fn().mockRejectedValue(new Error('denied')) } as unknown as StorageManager
     await expect(requestPersistentStorage(storage)).resolves.toBe(false)
