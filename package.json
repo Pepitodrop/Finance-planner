@@ -11,6 +11,7 @@
     "test": "vitest run && node scripts/verify-pwa.mjs && node scripts/verify-mobile.mjs"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "^13.1.2",
     "@vitejs/plugin-react": "^4.3.4",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.468.0",
