@@ -2,12 +2,32 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { deterministicScenarioInsights, governedAiModels, runGovernedEnsemble } from '../src/ai-ensemble.js'
 
-const revision = 'a'.repeat(40)
+const ANALYST_MODEL = 'Qwen/Qwen3-4B-Thinking-2507:fastest'
+const ANALYST_REVISION = '768f209d9ea81521153ed38c47d515654e938aea'
+const CRITIC_MODEL = 'Qwen/Qwen3-4B-Instruct-2507:fastest'
+const CRITIC_REVISION = '1b4199c4f36b0cef378bfb12390c18780c18af4c'
 
-test('requires immutable revisions and reviewed open models', () => {
-  const models = governedAiModels({ HF_MODEL: 'Qwen/Qwen3-4B-Instruct-2507:fastest', HF_MODEL_REVISION: revision }, { model: 'unused', revision })
-  assert.equal(models.analyst.model, 'Qwen/Qwen3-4B-Instruct-2507:fastest')
-  assert.throws(() => governedAiModels({ HF_MODEL: 'unknown/model', HF_MODEL_REVISION: revision }, { model: 'unused', revision }), /allowlist/)
+test('requires exact reviewed model-and-revision pairs', () => {
+  const models = governedAiModels(
+    { HF_MODEL: ANALYST_MODEL, HF_MODEL_REVISION: ANALYST_REVISION },
+    { model: ANALYST_MODEL, revision: ANALYST_REVISION },
+  )
+  assert.equal(models.analyst.model, ANALYST_MODEL)
+  assert.equal(models.analyst.revision, ANALYST_REVISION)
+  assert.throws(
+    () => governedAiModels({ HF_MODEL: 'unknown/model', HF_MODEL_REVISION: ANALYST_REVISION }, { model: ANALYST_MODEL, revision: ANALYST_REVISION }),
+    /allowlist/,
+  )
+  assert.throws(
+    () => governedAiModels({ HF_MODEL: ANALYST_MODEL, HF_MODEL_REVISION: 'a'.repeat(40) }, { model: ANALYST_MODEL, revision: ANALYST_REVISION }),
+    /allowlist/,
+  )
+  const ensemble = governedAiModels(
+    { HF_CRITIC_ENABLED: 'true', HF_CRITIC_MODEL: CRITIC_MODEL, HF_CRITIC_MODEL_REVISION: CRITIC_REVISION },
+    { model: ANALYST_MODEL, revision: ANALYST_REVISION },
+  )
+  assert.equal(ensemble.critic.model, CRITIC_MODEL)
+  assert.equal(ensemble.critic.revision, CRITIC_REVISION)
 })
 
 test('retains only signals independently agreed by analyst and critic', async () => {
@@ -17,7 +37,10 @@ test('retains only signals independently agreed by analyst and critic', async ()
   ]
   const result = await runGovernedEnsemble({
     transport: { chatCompletion: async () => completions.shift() },
-    models: { analyst: { model: 'a', revision }, critic: { model: 'b', revision } },
+    models: {
+      analyst: { model: ANALYST_MODEL, revision: ANALYST_REVISION },
+      critic: { model: CRITIC_MODEL, revision: CRITIC_REVISION },
+    },
     snapshot: {},
     analystPrompt: () => [],
     parseAndValidate: JSON.parse,
