@@ -11,11 +11,10 @@ on:
 permissions:
   contents: write
 
-environment: production-release
-
 jobs:
   verify-and-publish:
     runs-on: ubuntu-latest
+    environment: production-release
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -46,4 +45,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-        run: gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --generate-notes --verify-tag=false
+        run: gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --generate-notes
