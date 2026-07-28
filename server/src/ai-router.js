@@ -62,9 +62,9 @@ function validateModelResult(value) {
     if (typeof item.explanation !== 'string' || item.explanation.trim().length < 1 || item.explanation.length > 600) throw new Error('AI signal explanation is invalid')
     if (!Array.isArray(item.evidence) || item.evidence.length > 5 || !item.evidence.every((entry) => typeof entry === 'string' && entry.length <= 200)) throw new Error('AI evidence is invalid')
     if (item.suggestedAction !== undefined && (typeof item.suggestedAction !== 'string' || item.suggestedAction.length > 300)) throw new Error('AI suggested action is invalid')
-    return { type: item.type, severity: item.severity, title: item.title, explanation: item.explanation, confidence: clampConfidence(item.confidence), evidence: item.evidence, ...(item.suggestedAction ? { suggestedAction: item.suggestedAction } : {}), requiresApproval: true }
+    return { type: item.type, severity: item.severity, title: item.title, explanation: item.explanation, confidence: clampConfidence(item.confidence), modelRationale: item.evidence, ...(item.suggestedAction ? { suggestedAction: item.suggestedAction } : {}), requiresApproval: true }
   })
-  return { summary: value.summary, confidence: clampConfidence(value.confidence), signals }
+  return { modelSummary: value.summary, confidence: clampConfidence(value.confidence), signals }
 }
 
 function dataQuality(snapshot) {
@@ -84,6 +84,14 @@ function verifiedEvidence(signal, snapshot) {
     case 'anomaly': return [`transactionCount=${snapshot.transactionCount}`, 'anomalyRequiresTransactionLevelVerification=true']
     default: return []
   }
+}
+
+function reconciledSummary(signals) {
+  if (signals.length === 0) return 'Nach Abgleich mit den verifizierten Finanzdaten wurden keine belastbaren KI-Hinweise übernommen.'
+  const critical = signals.filter((signal) => signal.severity === 'critical').length
+  const warning = signals.filter((signal) => signal.severity === 'warning').length
+  const info = signals.filter((signal) => signal.severity === 'info').length
+  return `Nach Abgleich mit den verifizierten Finanzdaten wurden ${signals.length} Hinweise übernommen (${critical} kritisch, ${warning} Warnungen, ${info} informativ).`
 }
 
 function reconcileModelResult(result, snapshot) {
@@ -119,7 +127,7 @@ function reconcileModelResult(result, snapshot) {
       warnings.push('Anomaly confidence was capped because only aggregate data was supplied.')
     }
 
-    signal.evidence = [...new Set([...verifiedEvidence(signal, snapshot), ...signal.evidence])].slice(0, 5)
+    signal.evidence = verifiedEvidence(signal, snapshot)
     signals.push(signal)
   }
 
@@ -127,14 +135,15 @@ function reconcileModelResult(result, snapshot) {
   if (calibratedConfidence < result.confidence) warnings.push(`Overall confidence was capped at ${confidenceCap} because data quality is ${quality.level}.`)
 
   return {
-    ...result,
+    summary: reconciledSummary(signals),
+    modelSummary: result.modelSummary,
     confidence: calibratedConfidence,
     signals,
     confidenceDetails: {
       modelConfidence: result.confidence,
       calibratedConfidence,
       dataQuality: quality,
-      policy: 'Confidence is capped by verified history depth; anomaly claims are additionally capped until transaction-level verification is available.',
+      policy: 'Confidence is capped by verified history depth; anomaly claims are additionally capped until transaction-level verification is available. Summary and evidence are generated from accepted verified facts; model rationale is labelled separately.',
     },
     warnings,
   }
