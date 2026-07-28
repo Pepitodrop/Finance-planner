@@ -1,5 +1,5 @@
 import type { BankConsent, BankRuntimeRepository } from './bankRuntime'
-import { acceptWebhookOnce } from './bankRuntime'
+import { validateWebhookTimestamp } from './bankRuntime'
 
 const encoder = new TextEncoder()
 
@@ -66,22 +66,19 @@ export async function processBankWebhook(input: {
   let event: BankWebhookEvent
   try { event = parseBankWebhook(input.rawBody) } catch { return { accepted: false, action: 'ignored' } }
 
-  const accepted = await acceptWebhookOnce(input.repository, {
-    id: event.id,
-    occurredAt: event.occurredAt,
-    signatureValid,
-  }, (input.now ?? new Date()).getTime())
-  if (!accepted) return { accepted: false, action: 'ignored' }
+  const now = input.now ?? new Date()
+  if (!validateWebhookTimestamp(event.occurredAt, now.getTime())) return { accepted: false, action: 'ignored' }
+  if (await input.repository.hasWebhookEvent(event.id)) return { accepted: false, action: 'ignored' }
 
   const consent = await input.repository.findConsentByProviderConnection(event.provider, event.connectionId)
-  if (!consent) return { accepted: true, action: 'ignored' }
+  let result: BankWebhookResult
 
-  const updatedAt = (input.now ?? new Date()).toISOString()
-  if (event.type === 'consent.expired') {
-    await input.repository.saveConsent({ ...consent, status: 'expired', updatedAt })
-    return { accepted: true, action: 'consent-expired', consentId: consent.id }
-  }
-  if (event.type === 'consent.revoked') {
+  if (!consent) {
+    result = { accepted: true, action: 'ignored' }
+  } else if (event.type === 'consent.expired') {
+    await input.repository.saveConsent({ ...consent, status: 'expired', updatedAt: now.toISOString() })
+    result = { accepted: true, action: 'consent-expired', consentId: consent.id }
+  } else if (event.type === 'consent.revoked') {
     await input.repository.saveConsent({
       ...consent,
       status: 'revoked',
@@ -89,12 +86,16 @@ export async function processBankWebhook(input: {
       encryptedRefreshToken: undefined,
       tokenExpiresAt: undefined,
       cursor: undefined,
-      updatedAt,
+      updatedAt: now.toISOString(),
     })
-    return { accepted: true, action: 'consent-revoked', consentId: consent.id }
+    result = { accepted: true, action: 'consent-revoked', consentId: consent.id }
+  } else if (consent.status !== 'active') {
+    result = { accepted: true, action: 'ignored', consentId: consent.id }
+  } else {
+    await input.scheduleSync(consent.id, event.id)
+    result = { accepted: true, action: 'sync-scheduled', consentId: consent.id }
   }
 
-  if (consent.status !== 'active') return { accepted: true, action: 'ignored', consentId: consent.id }
-  await input.scheduleSync(consent.id, event.id)
-  return { accepted: true, action: 'sync-scheduled', consentId: consent.id }
+  const committed = await input.repository.commitWebhookEvent(event.id, event.occurredAt)
+  return committed ? result : { accepted: false, action: 'ignored' }
 }
