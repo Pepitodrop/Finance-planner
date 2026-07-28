@@ -7,6 +7,7 @@ import { FrontendExperience } from './FrontendExperience'
 import { MobileConnectivityStatus } from './MobileConnectivityStatus'
 import { MobileEnhancements } from './MobileEnhancements'
 import { MobileExperience } from './MobileExperience'
+import { MobileProductionRuntime } from './MobileProductionRuntime'
 import { MobileRuntime } from './MobileRuntime'
 import { VaultGate } from './VaultGate'
 import { WebMobileHardening } from './WebMobileHardening'
@@ -28,6 +29,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <ErrorBoundary>
       <WebMobileHardening />
       <FrontendExperience />
+      <MobileProductionRuntime />
       <MobileRuntime />
       <MobileConnectivityStatus />
       <MobileEnhancements />

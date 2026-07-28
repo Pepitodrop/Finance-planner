@@ -10,6 +10,16 @@ export interface ExternalTransaction { externalId: string; externalAccountId: st
 export interface SyncPayload { connection: ConnectorConnection; accounts: ExternalAccount[]; transactions: ExternalTransaction[] }
 export interface SyncPreview { accountsToCreate: Account[]; transactionsToImport: Transaction[]; duplicateCount: number; pendingCount: number; quality: BankImportQuality }
 
+const REQUEST_TIMEOUT_MS = 15_000
+const RETRY_DELAYS_MS = [350, 900]
+
+class BankingRequestError extends Error {
+  constructor(message: string, readonly retryable: boolean) {
+    super(message)
+    this.name = 'BankingRequestError'
+  }
+}
+
 function normalizeDescription(value: string): string { return value.replace(/\s+/g, ' ').trim().slice(0, 160) || 'Unbenannte Transaktion' }
 export function transactionFingerprint(transaction: Pick<Transaction, 'accountId' | 'date' | 'amountCents' | 'description'>): string { return [transaction.accountId, transaction.date, transaction.amountCents, normalizeDescription(transaction.description).toLocaleLowerCase('de-DE')].join('|') }
 
@@ -47,12 +57,55 @@ async function initializeDevelopmentSession(baseUrl: string): Promise<void> {
   if (!response.ok) throw new Error(`Lokale Backend-Sitzung konnte nicht gestartet werden (${response.status}).`)
 }
 
+function delay(milliseconds: number) { return new Promise((resolve) => window.setTimeout(resolve, milliseconds)) }
+
+async function requestJson<T>(url: string, init: RequestInit, options: { retry?: boolean } = {}): Promise<T> {
+  const attempts = options.retry ? RETRY_DELAYS_MS.length + 1 : 1
+  let lastError: unknown
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+    try {
+      const response = await fetch(url, { ...init, signal: controller.signal, credentials: 'include', headers: { Accept: 'application/json', ...init.headers } })
+      const payload = await response.json().catch(() => ({})) as { error?: { message?: string }; requestId?: string } & T
+      if (!response.ok) {
+        const requestSuffix = payload.requestId ? ` Referenz: ${payload.requestId}` : ''
+        const retryable = response.status === 429 || response.status >= 500
+        throw new BankingRequestError(`${payload.error?.message || `Anfrage fehlgeschlagen (${response.status}).`}${requestSuffix}`, retryable)
+      }
+      return payload
+    } catch (error) {
+      if (error instanceof BankingRequestError) {
+        if (!error.retryable) throw error
+        lastError = error
+      } else if (error instanceof DOMException && error.name === 'AbortError') {
+        lastError = new Error('Das Banking-Backend hat nicht rechtzeitig geantwortet.')
+      } else {
+        lastError = error
+      }
+    } finally {
+      window.clearTimeout(timeout)
+    }
+    if (attempt < attempts - 1) await delay(RETRY_DELAYS_MS[attempt])
+  }
+  throw lastError instanceof Error ? lastError : new Error('Das Banking-Backend ist vorübergehend nicht erreichbar.')
+}
+
+export function connectorReturnUrl(): string {
+  const url = new URL(window.location.href)
+  for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider']) url.searchParams.delete(key)
+  url.hash = ''
+  return url.toString()
+}
+
 export async function startConnector(provider: ConnectorProvider, backendBaseUrl: string): Promise<void> {
   const baseUrl = backendBaseUrl.replace(/\/$/, '')
   await initializeDevelopmentSession(baseUrl)
-  const response = await fetch(`${baseUrl}/api/connectors/${provider}/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ redirectUri: window.location.href, country: 'DE' }) })
-  if (!response.ok) throw new Error(`Verbindung konnte nicht gestartet werden (${response.status}).`)
-  const result = await response.json() as { redirectUrl?: string }
+  const result = await requestJson<{ redirectUrl?: string }>(`${baseUrl}/api/connectors/${provider}/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ redirectUri: connectorReturnUrl(), country: 'DE' }),
+  })
   if (!result.redirectUrl || !result.redirectUrl.startsWith('https://')) throw new Error('Der Connector lieferte keine sichere Weiterleitungsadresse.')
   window.location.assign(result.redirectUrl)
 }
@@ -60,9 +113,22 @@ export async function startConnector(provider: ConnectorProvider, backendBaseUrl
 export async function synchronizeConnections(backendBaseUrl: string): Promise<SyncPayload[]> {
   const baseUrl = backendBaseUrl.replace(/\/$/, '')
   await initializeDevelopmentSession(baseUrl)
-  const response = await fetch(`${baseUrl}/api/connectors/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include' })
-  if (!response.ok) throw new Error(`Synchronisierung fehlgeschlagen (${response.status}).`)
-  const result = await response.json() as { connections?: SyncPayload[] }
+  const result = await requestJson<{ connections?: SyncPayload[] }>(`${baseUrl}/api/connectors/sync`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+  }, { retry: true })
   if (!Array.isArray(result.connections)) throw new Error('Der Sync-Dienst lieferte ein ungültiges Ergebnis.')
   return result.connections
+}
+
+export async function disconnectConnector(provider: ConnectorProvider, backendBaseUrl: string): Promise<void> {
+  const baseUrl = backendBaseUrl.replace(/\/$/, '')
+  await initializeDevelopmentSession(baseUrl)
+  await requestJson<{ disconnected: boolean }>(`${baseUrl}/api/connectors/${provider}`, { method: 'DELETE' })
+}
+
+export function consentDaysRemaining(connection: ConnectorConnection, now = Date.now()): number | null {
+  if (!connection.consentExpiresAt) return null
+  const expiresAt = Date.parse(connection.consentExpiresAt)
+  if (!Number.isFinite(expiresAt)) return null
+  return Math.ceil((expiresAt - now) / 86_400_000)
 }
