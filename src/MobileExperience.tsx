@@ -18,30 +18,38 @@ const ITEMS: NavItem[] = [
   { label: 'Daten', view: 'data', icon: <DatabaseBackup size={20} /> },
 ]
 
+let suppressNextHistory = false
+
 function sidebarButtons() {
   return Array.from(document.querySelectorAll<HTMLButtonElement>('.sidebar nav button'))
 }
 
+function itemForButton(button: HTMLButtonElement) {
+  return ITEMS.find((candidate) => button.textContent?.includes(candidate.label))
+}
+
 function activate(label: string, updateHistory = true) {
-  const item = ITEMS.find((candidate) => candidate.label === label)
   const target = sidebarButtons().find((button) => button.textContent?.trim().includes(label))
-  target?.click()
-  target?.scrollIntoView({ block: 'nearest' })
-  if (updateHistory && item) {
-    const url = new URL(window.location.href)
-    url.searchParams.set('view', item.view)
-    url.searchParams.delete('action')
-    window.history.pushState({ view: item.view }, '', url)
-  }
+  if (!target) return false
+  suppressNextHistory = !updateHistory
+  target.click()
+  target.scrollIntoView({ block: 'nearest' })
+  return true
 }
 
 function activateFromUrl() {
   const url = new URL(window.location.href)
   const item = ITEMS.find((candidate) => candidate.view === url.searchParams.get('view'))
-  if (item) activate(item.label, false)
+  if (item && !activate(item.label, false)) return false
+
   if (url.searchParams.get('action') === 'new-transaction') {
-    window.setTimeout(() => document.querySelector<HTMLButtonElement>('.topbar .primary')?.click(), 0)
+    const transactionButton = document.querySelector<HTMLButtonElement>('.topbar .primary')
+    if (!transactionButton) return false
+    transactionButton.click()
+    url.searchParams.delete('action')
+    window.history.replaceState(window.history.state, '', url)
   }
+  return true
 }
 
 export function MobileExperience() {
@@ -52,26 +60,52 @@ export function MobileExperience() {
   const primaryItems = useMemo(() => ITEMS.slice(0, 4), [])
 
   useEffect(() => {
-    const timer = window.setTimeout(activateFromUrl, 0)
-    const onPopState = () => activateFromUrl()
-    window.addEventListener('popstate', onPopState)
-    return () => {
-      window.clearTimeout(timer)
-      window.removeEventListener('popstate', onPopState)
-    }
-  }, [])
+    const boundButtons = new Map<HTMLButtonElement, EventListener>()
+    let pendingUrlActivation = true
 
-  useEffect(() => {
-    const sync = () => {
-      const current = sidebarButtons().find((button) => button.classList.contains('active'))
-      const item = ITEMS.find((candidate) => current?.textContent?.includes(candidate.label))
+    const bindAndSync = () => {
+      const buttons = sidebarButtons()
+      for (const button of buttons) {
+        if (boundButtons.has(button)) continue
+        const listener: EventListener = () => {
+          const item = itemForButton(button)
+          if (!item) return
+          if (suppressNextHistory) {
+            suppressNextHistory = false
+            return
+          }
+          const url = new URL(window.location.href)
+          if (url.searchParams.get('view') === item.view && !url.searchParams.has('action')) return
+          url.searchParams.set('view', item.view)
+          url.searchParams.delete('action')
+          window.history.pushState({ view: item.view }, '', url)
+        }
+        button.addEventListener('click', listener)
+        boundButtons.set(button, listener)
+      }
+
+      const current = buttons.find((button) => button.classList.contains('active'))
+      const item = current ? itemForButton(current) : undefined
       if (item) setActive(item.label)
+
+      if (pendingUrlActivation && activateFromUrl()) pendingUrlActivation = false
     }
-    sync()
-    const observer = new MutationObserver(sync)
-    const nav = document.querySelector('.sidebar nav')
-    if (nav) observer.observe(nav, { attributes: true, subtree: true, attributeFilter: ['class'] })
-    return () => observer.disconnect()
+
+    const onPopState = () => {
+      pendingUrlActivation = true
+      bindAndSync()
+    }
+
+    bindAndSync()
+    const observer = new MutationObserver(bindAndSync)
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] })
+    window.addEventListener('popstate', onPopState)
+
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('popstate', onPopState)
+      for (const [button, listener] of boundButtons) button.removeEventListener('click', listener)
+    }
   }, [])
 
   useEffect(() => {
