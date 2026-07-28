@@ -2,10 +2,10 @@ import { createHuggingFaceChatTransport } from './huggingFaceClient.js'
 import { HttpError } from './runtime-security.js'
 import { publicModelCatalog } from './ai-model-catalog.js'
 import { learnBehaviorPatterns } from './behavior-learning.js'
+import { deterministicScenarioInsights, governedAiModels, runGovernedEnsemble } from './ai-ensemble.js'
 
 const GOVERNED_MODEL = Object.freeze({
-  id: 'Qwen/Qwen3-4B-Thinking-2507',
-  providerAlias: 'Qwen/Qwen3-4B-Thinking-2507:fastest',
+  model: 'Qwen/Qwen3-4B-Thinking-2507:fastest',
   revision: '768f209d9ea81521153ed38c47d515654e938aea',
 })
 const ALLOWED_SIGNAL_TYPES = new Set(['cashflow', 'recurring-cost', 'goal-risk', 'anomaly', 'data-quality'])
@@ -79,7 +79,7 @@ function validateModelResult(value) {
     if (item.suggestedAction) assertSafeModelText(item.suggestedAction, 'signal.suggestedAction')
     return { type: item.type, severity: item.severity, title: item.title, explanation: item.explanation, confidence: clampConfidence(item.confidence), ...(item.suggestedAction ? { suggestedAction: item.suggestedAction } : {}), requiresApproval: true }
   })
-  return { confidence: clampConfidence(value.confidence), signals }
+  return { summary: value.summary, confidence: clampConfidence(value.confidence), signals }
 }
 
 function dataQuality(snapshot) {
@@ -134,7 +134,7 @@ function reconcileModelResult(result, snapshot) {
   if (calibratedConfidence < result.confidence) warnings.push(`Overall confidence was capped at ${confidenceCap} because data quality is ${quality.level}.`)
   return {
     summary: reconciledSummary(signals), confidence: calibratedConfidence, signals,
-    confidenceDetails: { modelConfidence: result.confidence, calibratedConfidence, dataQuality: quality, policy: 'Confidence is capped by verified history depth; unsafe model text is rejected; summary and evidence are generated only from accepted verified facts.' },
+    confidenceDetails: { modelConfidence: result.confidence, calibratedConfidence, dataQuality: quality, policy: 'Confidence is capped by verified history depth; unsafe model text is rejected; cross-model claims require agreement; summary and evidence are generated only from accepted verified facts.' },
     warnings,
   }
 }
@@ -146,20 +146,17 @@ function deterministicFallback(snapshot, warning) {
   if (snapshot.transactionCount < 15 || snapshot.monthsCovered < 3) signals.push({ type: 'data-quality', severity: 'info', title: 'Noch wenig belastbare Historie', explanation: 'Prognosen und personalisierte Empfehlungen sind wegen der begrenzten Datenbasis vorsichtig zu interpretieren.', confidence: 0.99, evidence: [`transactionCount=${snapshot.transactionCount}`, `monthsCovered=${snapshot.monthsCovered}`], requiresApproval: true })
   const quality = dataQuality(snapshot)
   const confidence = signals.length ? 0.86 : 0.7
-  return { summary: signals.length ? 'Regelbasierte Analyse verfügbar; das Sprachmodell konnte nicht sicher verwendet werden.' : 'Keine dringenden regelbasierten Risiken erkannt.', signals, confidence, confidenceDetails: { modelConfidence: null, calibratedConfidence: confidence, dataQuality: quality, policy: 'Deterministic rule-engine result; no model-generated financial claim was accepted.' }, source: 'deterministic-fallback', generatedAt: new Date().toISOString(), warnings: [String(warning).slice(0, 300)] }
+  return { summary: signals.length ? 'Regelbasierte Analyse verfügbar; das Sprachmodell konnte nicht sicher verwendet werden.' : 'Keine dringenden regelbasierten Risiken erkannt.', signals, confidence, confidenceDetails: { modelConfidence: null, calibratedConfidence: confidence, dataQuality: quality, policy: 'Deterministic rule-engine result; no model-generated financial claim was accepted.' }, source: 'deterministic-fallback', generatedAt: new Date().toISOString(), warnings: [String(warning).slice(0, 300)], scenarios: deterministicScenarioInsights(snapshot) }
 }
 
-function governedRuntime(env) {
-  const model = String(env.HF_MODEL || GOVERNED_MODEL.providerAlias)
-  const revision = String(env.HF_MODEL_REVISION || GOVERNED_MODEL.revision)
-  if (model !== GOVERNED_MODEL.providerAlias || revision !== GOVERNED_MODEL.revision) throw new HttpError(503, 'ai_model_not_governed', 'Configured AI model and revision must match the reviewed production lock.')
-  return { model, revision }
+function analystPrompt(snapshot) {
+  return [{ role: 'system', content: 'Du bist ein vorsichtiger Finanzanalyse-Assistent. Nutze ausschließlich die aggregierten Fakten. Erfinde keine Transaktionen, stelle keine Rechts-, Steuer- oder Anlageberatung als sicher dar und führe keine Aktion aus. Antworte ausschließlich als JSON mit summary, confidence und signals. Zulässige type-Werte: cashflow, recurring-cost, goal-risk, anomaly, data-quality. Jede Empfehlung bleibt genehmigungspflichtig.' }, { role: 'user', content: `Analysiere diesen anonymisierten Finanz-Snapshot: ${JSON.stringify(snapshot)}` }]
 }
 
 export function createAiRouter({ env, send, body, userId, transportFactory = createHuggingFaceChatTransport, loadBehaviorEvents = null }) {
   const transport = env.HF_TOKEN ? transportFactory({ token: env.HF_TOKEN, timeoutMs: Number(env.HF_TIMEOUT_MS || 12_000) }) : null
   return async function handleAi(request, response, url) {
-    if (request.method === 'GET' && url.pathname === '/api/ai/models') { userId(request); send(response, 200, { models: publicModelCatalog(), note: 'Only models marked integrated have an active inference path. Catalog-only models require a separately configured worker.' }); return true }
+    if (request.method === 'GET' && url.pathname === '/api/ai/models') { userId(request); send(response, 200, { models: publicModelCatalog(), note: 'Open-weight models are free to self-host; hosted inference availability and quotas depend on the configured Hugging Face provider.' }); return true }
     if (request.method === 'POST' && url.pathname === '/api/ai/behavior-prediction') {
       const user = userId(request)
       const input = await body(request)
@@ -169,17 +166,24 @@ export function createAiRouter({ env, send, body, userId, transportFactory = cre
       send(response, 200, learnBehaviorPatterns(await loadBehaviorEvents(user)))
       return true
     }
+    if (request.method === 'POST' && url.pathname === '/api/ai/scenario-intelligence') {
+      userId(request)
+      const input = await body(request)
+      const snapshot = validateSnapshot(input.snapshot)
+      send(response, 200, { ...deterministicScenarioInsights(snapshot), source: 'deterministic-scenario-engine', generatedAt: new Date().toISOString() })
+      return true
+    }
     if (request.method !== 'POST' || url.pathname !== '/api/ai/financial-intelligence') return false
     userId(request)
     const input = await body(request)
     if (input.consentExternalAi !== true) throw new HttpError(400, 'ai_consent_required', 'Explicit consent is required before external AI inference.')
     if (!transport) throw new HttpError(503, 'ai_unavailable', 'Hugging Face inference is not configured.')
     const snapshot = validateSnapshot(input.snapshot)
-    const { model, revision } = governedRuntime(env)
     try {
-      const content = await transport.chatCompletion({ model, revision, temperature: 0.1, maxTokens: 900, messages: [{ role: 'system', content: 'Du bist ein vorsichtiger Finanzanalyse-Assistent. Nutze ausschließlich die aggregierten Fakten. Erfinde keine Transaktionen, stelle keine Rechts-, Steuer- oder Anlageberatung als sicher dar und führe keine Aktion aus. Antworte ausschließlich als JSON mit summary, confidence und signals. Zulässige type-Werte: cashflow, recurring-cost, goal-risk, anomaly, data-quality. Jede Empfehlung bleibt genehmigungspflichtig.' }, { role: 'user', content: `Analysiere diesen anonymisierten Finanz-Snapshot: ${JSON.stringify(snapshot)}` }] })
-      const reconciled = reconcileModelResult(validateModelResult(extractJson(content)), snapshot)
-      send(response, 200, { ...reconciled, source: 'hugging-face-reconciled', model, modelRevision: revision, generatedAt: new Date().toISOString() })
+      const models = governedAiModels(env, GOVERNED_MODEL)
+      const ensemble = await runGovernedEnsemble({ transport, models, snapshot, analystPrompt, parseAndValidate: (content) => validateModelResult(extractJson(content)) })
+      const reconciled = reconcileModelResult(ensemble.result, snapshot)
+      send(response, 200, { ...reconciled, source: ensemble.modelsUsed.length > 1 ? 'hugging-face-ensemble-reconciled' : 'hugging-face-reconciled', models: ensemble.modelsUsed, modelAgreement: ensemble.agreement, scenarios: deterministicScenarioInsights(snapshot), generatedAt: new Date().toISOString() })
     } catch (error) {
       send(response, 200, deterministicFallback(snapshot, error instanceof Error ? error.message : 'Hugging Face inference failed'))
     }
