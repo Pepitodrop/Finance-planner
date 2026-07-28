@@ -1,0 +1,120 @@
+html {
+  min-width: 320px;
+  text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior-y: none;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.app-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+main {
+  min-width: 0;
+  padding-bottom: max(2rem, env(safe-area-inset-bottom));
+}
+
+.panel,
+.stat-card,
+.big-goal {
+  min-width: 0;
+}
+
+.transaction-row,
+.account-row,
+.goal-item {
+  contain: layout paint;
+}
+
+.transaction-list,
+.account-list,
+.goal-list {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 480px;
+}
+
+.modal-backdrop {
+  padding-top: max(1rem, env(safe-area-inset-top));
+  padding-right: max(1rem, env(safe-area-inset-right));
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  padding-left: max(1rem, env(safe-area-inset-left));
+}
+
+.modal {
+  max-height: calc(100dvh - 2rem - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  overflow: auto;
+  overscroll-behavior: contain;
+  scroll-padding-bottom: 7rem;
+}
+
+.modal input,
+.modal select,
+.modal textarea {
+  font-size: max(1rem, 16px);
+}
+
+.recharts-responsive-container[role='img']:focus-visible {
+  outline: 3px solid Highlight;
+  outline-offset: 4px;
+}
+
+@media (max-width: 720px) {
+  .topbar {
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .topbar .primary {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .transaction-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .transaction-row > b {
+    grid-column: 2 / 4;
+    justify-self: start;
+  }
+
+  .transaction-row .pill {
+    grid-column: 2 / 4;
+    justify-self: start;
+  }
+
+  .row-actions {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    align-self: center;
+  }
+
+  .modal-actions {
+    position: sticky;
+    bottom: 0;
+    margin: 1rem -1rem -1rem;
+    padding: 1rem;
+    background: inherit;
+    border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  }
+}
+
+@media (max-width: 420px) {
+  .stats-grid,
+  .dashboard-grid,
+  .goal-card-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .panel,
+  .stat-card,
+  .big-goal {
+    border-radius: 1rem;
+  }
+}
