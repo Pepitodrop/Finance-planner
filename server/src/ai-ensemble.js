@@ -83,10 +83,12 @@ export function deterministicScenarioInsights(inputSnapshot = {}) {
   const expenseRatio = income > 0 ? expenses / income : null
   const recurringShare = expenses > 0 ? recurring / expenses : 0
   const monthlyBurn = historyMonths > 0 ? expenses / historyMonths : expenses
+  const monthlyRecurring = historyMonths > 0 ? recurring / historyMonths : recurring
+  const monthlyFreeCash = historyMonths > 0 ? freeCash / historyMonths : freeCash
   const runwayMonths = monthlyBurn > 0 ? balance / monthlyBurn : null
-  const recurringCoverageMonths = recurring > 0 ? balance / recurring : null
+  const recurringCoverageMonths = monthlyRecurring > 0 ? balance / monthlyRecurring : null
   const goalRemainingCents = goals.reduce((sum, goal) => sum + Math.max(0, finiteNumber(goal?.remainingCents)), 0)
-  const monthsToFundGoals = freeCash > 0 && goalRemainingCents > 0 ? goalRemainingCents / freeCash : null
+  const monthsToFundGoals = monthlyFreeCash > 0 && goalRemainingCents > 0 ? goalRemainingCents / monthlyFreeCash : null
 
   const stressedIncome = income * 0.9
   const stressedExpenses = expenses * 1.1
@@ -106,7 +108,7 @@ export function deterministicScenarioInsights(inputSnapshot = {}) {
   if (recurringShare > 0.6) insights.push(insight('high_recurring_share', round(recurringShare), 'warning', 70, 'Mehr als 60 % der Ausgaben sind wiederkehrend und kurzfristig schwer anpassbar.', 'Wiederkehrende Verträge einzeln prüfen.'))
   if (runwayMonths !== null && runwayMonths < 3) insights.push(insight('low_liquidity_runway', round(runwayMonths, 2), runwayMonths < 1 ? 'critical' : 'warning', runwayMonths < 1 ? 98 : 85, 'Der verfügbare Kontostand deckt weniger als drei durchschnittliche Ausgabenmonate.', 'Liquiditätspuffer priorisieren und größere neue Ausgaben zurückstellen.'))
   if (!incomeShockSurvivable) insights.push(insight('stress_test_negative', Math.round(stressedFreeCash), 'warning', 88, 'Bei 10 % weniger Einnahmen und 10 % höheren Ausgaben würde der Cashflow negativ.', 'Einen Puffer für Einkommens- und Ausgabenschwankungen aufbauen.'))
-  if (goalRemainingCents > 0 && freeCash <= 0) insights.push(insight('goals_unfunded', goalRemainingCents, 'critical', 92, 'Aktuelle Ziele können aus dem derzeitigen freien Cashflow nicht finanziert werden.', 'Zieltermine oder Zielbeträge prüfen, ohne automatische Änderungen vorzunehmen.'))
+  if (goalRemainingCents > 0 && monthlyFreeCash <= 0) insights.push(insight('goals_unfunded', goalRemainingCents, 'critical', 92, 'Aktuelle Ziele können aus dem derzeitigen freien Cashflow nicht finanziert werden.', 'Zieltermine oder Zielbeträge prüfen, ohne automatische Änderungen vorzunehmen.'))
   if (monthsToFundGoals !== null && monthsToFundGoals > 36) insights.push(insight('goals_slow_progress', round(monthsToFundGoals, 1), 'warning', 65, 'Bei unverändertem freien Cashflow benötigen die erfassten Ziele mehr als 36 Monate.', 'Zielprioritäten und monatliche Zuweisung prüfen.'))
   if (transactionCount < 15 || historyMonths < 3) insights.push(insight('insufficient_history', round(historyConfidence), 'info', 60, 'Die Datenhistorie ist für belastbare Prognosen noch begrenzt.', 'Mehr Historie sammeln und Prognosen bis dahin vorsichtig behandeln.'))
 
