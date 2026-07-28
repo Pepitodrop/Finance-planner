@@ -75,13 +75,14 @@ export function deterministicScenarioInsights(snapshot) {
   const recurring = Math.max(0, snapshot.recurringExpenseCents)
   const balance = snapshot.accountBalanceCents
   const historyMonths = Math.max(0, snapshot.monthsCovered)
+  const goals = Array.isArray(snapshot.goals) ? snapshot.goals : []
   const savingsRate = income > 0 ? freeCash / income : 0
   const expenseRatio = income > 0 ? expenses / income : null
   const recurringShare = expenses > 0 ? recurring / expenses : 0
   const monthlyBurn = historyMonths > 0 ? expenses / historyMonths : expenses
   const runwayMonths = monthlyBurn > 0 ? balance / monthlyBurn : null
   const recurringCoverageMonths = recurring > 0 ? balance / recurring : null
-  const goalRemainingCents = snapshot.goals.reduce((sum, goal) => sum + Math.max(0, goal.remainingCents), 0)
+  const goalRemainingCents = goals.reduce((sum, goal) => sum + Math.max(0, goal.remainingCents), 0)
   const monthsToFundGoals = freeCash > 0 && goalRemainingCents > 0 ? goalRemainingCents / freeCash : null
 
   const stressedIncome = income * 0.9
