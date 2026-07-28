@@ -3,6 +3,8 @@
   --mobile-safe-right: env(safe-area-inset-right, 0px);
   --mobile-safe-bottom: env(safe-area-inset-bottom, 0px);
   --mobile-safe-left: env(safe-area-inset-left, 0px);
+  --mobile-viewport-height: 100dvh;
+  --mobile-viewport-offset-top: 0px;
 }
 
 html,
@@ -41,7 +43,7 @@ button,
 .mobile-pull-indicator {
   position: fixed;
   z-index: 10020;
-  top: calc(var(--mobile-safe-top) + 0.5rem);
+  top: calc(var(--mobile-safe-top) + var(--mobile-viewport-offset-top) + 0.5rem);
   left: 50%;
   display: flex;
   align-items: center;
@@ -111,6 +113,60 @@ button,
 
 @keyframes mobile-skeleton-exit {
   to { opacity: 0; visibility: hidden; }
+}
+
+@media (max-width: 720px) {
+  .modal-backdrop {
+    align-items: flex-end;
+    height: var(--mobile-viewport-height);
+    top: var(--mobile-viewport-offset-top);
+  }
+
+  .modal {
+    width: 100%;
+    max-height: calc(var(--mobile-viewport-height) - var(--mobile-safe-top) - 0.75rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-radius: 1.25rem 1.25rem 0 0;
+    padding-bottom: calc(var(--mobile-safe-bottom) + 1rem);
+    scroll-padding-bottom: calc(var(--mobile-safe-bottom) + 5rem);
+  }
+
+  .modal-actions {
+    position: sticky;
+    bottom: calc(-1 * var(--mobile-safe-bottom));
+    z-index: 2;
+    padding-top: 0.75rem;
+    padding-bottom: var(--mobile-safe-bottom);
+    background: inherit;
+  }
+
+  .topbar {
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .topbar .primary {
+    min-width: 52px;
+  }
+
+  .transaction-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.65rem;
+  }
+
+  .transaction-row > .pill,
+  .transaction-row > b,
+  .transaction-row > .row-actions {
+    grid-column: 2 / -1;
+    justify-self: start;
+  }
+
+  .chart {
+    min-width: 0;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
