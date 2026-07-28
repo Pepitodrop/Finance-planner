@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import { AuthGate } from './AuthGate'
 import { ErrorBoundary } from './ErrorBoundary'
+import { FrontendExperience } from './FrontendExperience'
 import { MobileConnectivityStatus } from './MobileConnectivityStatus'
 import { MobileEnhancements } from './MobileEnhancements'
 import { MobileExperience } from './MobileExperience'
@@ -19,12 +20,14 @@ import './mobile-connectivity.css'
 import './mobile-enhancements.css'
 import './mobile-experience.css'
 import './web-mobile-hardening.css'
+import './frontend-experience.css'
 import './auth.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>
       <WebMobileHardening />
+      <FrontendExperience />
       <MobileRuntime />
       <MobileConnectivityStatus />
       <MobileEnhancements />
