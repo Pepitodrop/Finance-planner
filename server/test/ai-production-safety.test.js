@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import { createAiRouter } from '../src/ai-router.js'
 
 const MODEL_REVISION = '768f209d9ea81521153ed38c47d515654e938aea'
+const CRITIC_MODEL = 'Qwen/Qwen3-4B-Instruct-2507:fastest'
+const CRITIC_REVISION = '1b4199c4f36b0cef378bfb12390c18780c18af4c'
 const safeSnapshot = {
   incomeCents: 250000, expenseCents: 180000, freeCashCents: 70000, recurringExpenseCents: 30000,
   accountBalanceCents: 420000, transactionCount: 80, monthsCovered: 8,
@@ -95,10 +97,11 @@ test('fails closed to deterministic output for unreviewed runtime models', async
 })
 
 test('uses an optional independent critic and exposes agreement metadata', async () => {
-  const target = routerFor(safeCompletion, undefined, { env: { HF_CRITIC_ENABLED: 'true', HF_CRITIC_MODEL_REVISION: 'a'.repeat(40) } })
+  const target = routerFor(safeCompletion, undefined, { env: { HF_CRITIC_ENABLED: 'true', HF_CRITIC_MODEL: CRITIC_MODEL, HF_CRITIC_MODEL_REVISION: CRITIC_REVISION } })
   const response = await invoke(target)
   assert.equal(response.payload.source, 'hugging-face-ensemble-reconciled')
   assert.equal(response.payload.models.length, 2)
+  assert.equal(response.payload.models[1].revision, CRITIC_REVISION)
   assert.equal(response.payload.modelAgreement, 1)
   assert.equal(target.calls.length, 2)
 })
