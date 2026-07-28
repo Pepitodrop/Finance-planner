@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-07-28",
+  "launchDate": "2026-08-01",
+  "modelId": "Qwen/Qwen3-4B-Thinking-2507",
+  "modelRevision": "768f209d9ea81521153ed38c47d515654e938aea",
+  "environment": "single-user-personal-pilot",
+  "metrics": {
+    "precision": 1,
+    "recall": 1,
+    "safeAbstentionRate": 1,
+    "calibrationError": 0.095,
+    "p95LatencyMs": 1100
+  },
+  "coverage": {
+    "cases": 16,
+    "locales": ["de-DE", "en-GB"],
+    "germanCases": 8,
+    "englishCases": 8,
+    "abstentionCases": 3
+  },
+  "measurement": {
+    "kind": "deterministic-ci-harness",
+    "hostedProviderLatencyValidated": false,
+    "notes": "This baseline gates logic, reconciliation, safety and fallback behaviour. Hosted inference latency and quota must be checked with the launch command before enabling external AI in the personal pilot."
+  }
+}
