@@ -4,9 +4,17 @@ This document converts the remaining production-readiness work into evidence-bas
 
 ## Machine-enforced gate
 
-`npm test` validates the readiness manifest and all referenced evidence paths. `npm run verify:release` is deliberately strict and fails until every required gate is `verified` or explicitly `not-applicable` with documented justification.
+`npm test` validates the readiness manifest and all referenced evidence paths. `npm run verify:release` is deliberately strict and fails until every required gate is `verified` or an explicitly permitted gate is `not-applicable` with durable evidence, substantive justification, an accountable approver, and a review date.
 
-The source of truth is `config/production-readiness-evidence.json`. Never mark a gate verified without adding durable evidence to the repository or a controlled release system.
+All current gates are mandatory. `config/production-readiness-evidence.json` therefore has an empty `notApplicablePolicy.allowedGates` list. Adding an exception requires an explicit policy change that is reviewable in a pull request; changing only a gate status cannot bypass the release check.
+
+A `verified` gate must include durable evidence, `approvedBy`, and `reviewedAt`. Never mark a gate verified without adding reproducible evidence to the repository or a controlled release system.
+
+## Controlled release path
+
+`.github/workflows/release-readiness.yml` is the repository-controlled production publishing path. It accepts a new semantic-version tag, runs normal verification, runs the strict evidence gate, and only then creates the tag and GitHub Release. The `production-release` environment should be configured in GitHub with required reviewers and restricted deployment branches.
+
+The workflow intentionally does not run after a tag is pushed, because a post-tag check cannot prevent the tag from existing. Repository administrators must also use a ruleset and permissions that prevent contributors from bypassing the controlled workflow by pushing release tags or publishing releases manually. Those GitHub settings are external evidence and must be reviewed as part of release governance.
 
 ## Required evidence
 
@@ -48,4 +56,4 @@ A qualified reviewer who did not implement the assessed feature must examine aut
 
 ## External work that cannot be completed by repository changes alone
 
-Physical-device testing, provider certification, code signing/notarization, and independent assessment require devices, provider credentials, certificates, deployment environments, and independent reviewers. Repository automation can make their evidence mandatory, but it cannot honestly manufacture that evidence.
+Physical-device testing, provider certification, code signing/notarization, GitHub environment and ruleset configuration, and independent assessment require devices, provider credentials, certificates, deployment environments, repository administration, and independent reviewers. Repository automation can make their evidence mandatory, but it cannot honestly manufacture that evidence.
