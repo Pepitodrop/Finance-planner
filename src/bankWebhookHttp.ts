@@ -128,6 +128,7 @@ export async function replayBankWebhookDeadLetter(input: {
   repository: BankWebhookRepository
   scheduleSyncOnce: (consentId: string, eventId: string) => Promise<boolean>
   now?: Date
+  maxEventAgeMs?: number
 }): Promise<BankWebhookResult> {
   return processBankWebhook({
     rawBody: input.rawBody,
@@ -136,5 +137,6 @@ export async function replayBankWebhookDeadLetter(input: {
     repository: input.repository,
     scheduleSyncOnce: input.scheduleSyncOnce,
     now: input.now,
+    replayWindowMs: input.maxEventAgeMs ?? 30 * 24 * 60 * 60_000,
   })
 }
