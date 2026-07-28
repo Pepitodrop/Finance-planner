@@ -39,6 +39,10 @@ test('claims, completes, and deduplicates webhook events', async () => {
       active = 'lease'
       return active
     },
+    async getWebhookEventState(_provider, eventId) {
+      if (completed.has(eventId)) return 'completed'
+      return active ? 'processing' : 'missing'
+    },
     async completeWebhookEvent(input) {
       assert.equal(input.leaseToken, active)
       completed.add(input.eventId)
@@ -55,6 +59,18 @@ test('claims, completes, and deduplicates webhook events', async () => {
   assert.equal(accepted.duplicate, false)
   assert.equal(duplicate.duplicate, true)
   assert.equal(calls, 1)
+})
+
+test('does not acknowledge an in-flight duplicate as completed', async () => {
+  const store = {
+    async claimWebhookEvent() { return undefined },
+    async getWebhookEventState() { return 'processing' },
+  }
+  const delivery = signedRequest({ type: 'transactions.updated' })
+  await assert.rejects(
+    processWebhook({ request: delivery.request, provider: 'gocardless', secret, store, now: new Date('2026-07-28T19:02:00.000Z'), handler: async () => {} }),
+    (error) => error?.status === 503 && error?.code === 'webhook_processing',
+  )
 })
 
 test('production capabilities require durable storage and webhook secrets', () => {
