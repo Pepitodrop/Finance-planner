@@ -16,19 +16,16 @@ function validateSnapshot(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'invalid_ai_snapshot', 'snapshot must be an object.')
   const allowed = new Set(['incomeCents', 'expenseCents', 'freeCashCents', 'recurringExpenseCents', 'accountBalanceCents', 'transactionCount', 'monthsCovered', 'categoryTotals', 'goals'])
   for (const key of Object.keys(value)) if (!allowed.has(key)) throw new HttpError(400, 'invalid_ai_snapshot', `Unexpected snapshot field: ${key}`)
-
   const categoryTotals = Array.isArray(value.categoryTotals) ? value.categoryTotals.slice(0, 8).map((item, index) => {
     if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some((key) => !['rank', 'amountCents'].includes(key))) throw new HttpError(400, 'invalid_ai_snapshot', 'categoryTotals may contain only rank and amountCents.')
     return { rank: finiteInteger(item.rank, `categoryTotals[${index}].rank`, { min: 1, max: 8 }), amountCents: finiteInteger(item.amountCents, `categoryTotals[${index}].amountCents`, { min: 0 }) }
   }) : []
-
   const goals = Array.isArray(value.goals) ? value.goals.slice(0, 20).map((item, index) => {
     if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some((key) => !['remainingCents', 'targetDate'].includes(key))) throw new HttpError(400, 'invalid_ai_snapshot', 'goals may contain only remainingCents and targetDate.')
     const targetDate = String(item.targetDate || '')
     if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) throw new HttpError(400, 'invalid_ai_snapshot', `goals[${index}].targetDate is invalid.`)
     return { remainingCents: finiteInteger(item.remainingCents, `goals[${index}].remainingCents`, { min: 0 }), targetDate }
   }) : []
-
   return {
     incomeCents: finiteInteger(value.incomeCents, 'incomeCents', { min: 0 }), expenseCents: finiteInteger(value.expenseCents, 'expenseCents', { min: 0 }),
     freeCashCents: finiteInteger(value.freeCashCents, 'freeCashCents'), recurringExpenseCents: finiteInteger(value.recurringExpenseCents, 'recurringExpenseCents', { min: 0 }),
@@ -78,19 +75,22 @@ function deterministicFallback(snapshot, warning) {
   return { summary: signals.length ? 'Regelbasierte Analyse verfügbar; das Sprachmodell konnte nicht sicher verwendet werden.' : 'Keine dringenden regelbasierten Risiken erkannt.', signals, confidence: signals.length ? 0.86 : 0.7, source: 'deterministic-fallback', generatedAt: new Date().toISOString(), warnings: [String(warning).slice(0, 300)] }
 }
 
-export function createAiRouter({ env, send, body, userId, transportFactory = createHuggingFaceChatTransport }) {
+export function createAiRouter({ env, send, body, userId, transportFactory = createHuggingFaceChatTransport, loadBehaviorEvents = null }) {
   const transport = env.HF_TOKEN ? transportFactory({ token: env.HF_TOKEN, timeoutMs: Number(env.HF_TIMEOUT_MS || 12_000) }) : null
   return async function handleAi(request, response, url) {
     if (request.method === 'GET' && url.pathname === '/api/ai/models') {
       userId(request)
-      send(response, 200, { models: publicModelCatalog(), note: 'Model weights are not bundled. Optional local execution avoids hosted inference charges but uses deployment CPU/RAM.' })
+      send(response, 200, { models: publicModelCatalog(), note: 'Only models marked integrated have an active inference path. Catalog-only models require a separately configured worker.' })
       return true
     }
     if (request.method === 'POST' && url.pathname === '/api/ai/behavior-prediction') {
-      userId(request)
+      const user = userId(request)
       const input = await body(request)
       if (input.consentBehaviorLearning !== true) throw new HttpError(400, 'behavior_consent_required', 'Explicit consent is required for behavior learning.')
-      send(response, 200, learnBehaviorPatterns(input.events))
+      if (Object.keys(input).some((key) => !['consentBehaviorLearning'].includes(key))) throw new HttpError(400, 'invalid_behavior_request', 'Behavior history must be loaded by the server and must not be supplied by the client.')
+      if (typeof loadBehaviorEvents !== 'function') throw new HttpError(503, 'behavior_history_unavailable', 'Trusted server-side financial history is not configured.')
+      const events = await loadBehaviorEvents(user)
+      send(response, 200, learnBehaviorPatterns(events))
       return true
     }
     if (request.method !== 'POST' || url.pathname !== '/api/ai/financial-intelligence') return false
