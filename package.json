@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "test": "vitest run && node scripts/verify-pwa.mjs && node scripts/verify-mobile.mjs && node scripts/verify-ai.mjs && node scripts/verify-ai-evaluation.mjs && node scripts/verify-production-readiness.mjs",
+    "test": "vitest run && node scripts/verify-pwa.mjs && node scripts/verify-mobile.mjs && node scripts/verify-ai.mjs && node scripts/verify-ai-evaluation.mjs && node scripts/verify-ai-model-lock.mjs && node scripts/verify-production-readiness.mjs",
     "verify:release": "node scripts/verify-production-readiness.mjs --strict"
   },
   "dependencies": {
@@ -31,9 +31,10 @@
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^5.1.0",
     "eslint-plugin-react-refresh": "^0.4.16",
-    "globals": "^15.14.0",
+    "globals": "^15.14.2",
     "typescript": "~5.7.2",
     "typescript-eslint": "^8.18.2",
+    "vite": "^6.0.5",
     "vitest": "^2.1.8"
   }
 }
