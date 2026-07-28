@@ -11,6 +11,11 @@ function responseRecorder() {
   }
 }
 
+function send(response, status, payload) {
+  response.writeHead(status)
+  response.end(JSON.stringify(payload))
+}
+
 const snapshot = {
   incomeCents: 250000,
   expenseCents: 123000,
@@ -21,6 +26,16 @@ const snapshot = {
   monthsCovered: 1,
   categoryTotals: [{ rank: 1, amountCents: 95000 }],
   goals: [{ remainingCents: 400000, targetDate: '2027-06-01' }],
+}
+
+function routerWithCompletion(completion) {
+  return createAiRouter({
+    env: { HF_TOKEN: 'token' },
+    send,
+    body: async () => ({ consentExternalAi: true, snapshot }),
+    userId: () => 'user-1',
+    transportFactory: () => ({ chatCompletion: async () => completion }),
+  })
 }
 
 test('requires authentication before AI inference', async () => {
@@ -60,4 +75,57 @@ test('rejects user-controlled text in the external snapshot schema', async () =>
     () => router({ method: 'POST' }, responseRecorder(), new URL('http://localhost/api/ai/financial-intelligence')),
     (error) => error.code === 'invalid_ai_snapshot',
   )
+})
+
+test('returns only validated and approval-gated model signals', async () => {
+  const router = routerWithCompletion(JSON.stringify({
+    summary: 'Auswertung abgeschlossen.',
+    confidence: 2,
+    signals: [{
+      type: 'cashflow',
+      severity: 'warning',
+      title: 'Cashflow prüfen',
+      explanation: 'Die Ausgaben sollten kontrolliert werden.',
+      confidence: -1,
+      evidence: ['Aggregierte Ausgaben'],
+      suggestedAction: 'Budget prüfen',
+      requiresApproval: false,
+    }],
+  }))
+  const response = responseRecorder()
+  await router({ method: 'POST' }, response, new URL('http://localhost/api/ai/financial-intelligence'))
+  assert.equal(response.status, 200)
+  assert.equal(response.payload.source, 'hugging-face')
+  assert.equal(response.payload.confidence, 1)
+  assert.equal(response.payload.signals[0].confidence, 0)
+  assert.equal(response.payload.signals[0].requiresApproval, true)
+})
+
+test('falls back deterministically for malformed or unsupported model output', async () => {
+  const router = routerWithCompletion(JSON.stringify({
+    summary: 'Unsafe',
+    confidence: 1,
+    signals: [{ type: 'transfer-money', severity: 'critical', title: 'Send', explanation: 'Send now', confidence: 1, evidence: [] }],
+  }))
+  const response = responseRecorder()
+  await router({ method: 'POST' }, response, new URL('http://localhost/api/ai/financial-intelligence'))
+  assert.equal(response.status, 200)
+  assert.equal(response.payload.source, 'deterministic-fallback')
+  assert.ok(response.payload.signals.length >= 1)
+  assert.ok(response.payload.signals.every((signal) => signal.requiresApproval === true))
+  assert.match(response.payload.warnings[0], /signal type/i)
+})
+
+test('falls back when the provider fails', async () => {
+  const router = createAiRouter({
+    env: { HF_TOKEN: 'token' },
+    send,
+    body: async () => ({ consentExternalAi: true, snapshot }),
+    userId: () => 'user-1',
+    transportFactory: () => ({ chatCompletion: async () => { throw new Error('provider unavailable') } }),
+  })
+  const response = responseRecorder()
+  await router({ method: 'POST' }, response, new URL('http://localhost/api/ai/financial-intelligence'))
+  assert.equal(response.payload.source, 'deterministic-fallback')
+  assert.match(response.payload.warnings[0], /provider unavailable/)
 })
