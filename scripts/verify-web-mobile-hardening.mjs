@@ -23,6 +23,12 @@ assert.match(css, /forced-colors: active/, 'High-contrast mode must remain usabl
 assert.match(css, /min-height: 44px/, 'Coarse-pointer targets must meet the mobile minimum')
 assert.match(worker, /SENSITIVE_PATHS/, 'Sensitive routes must remain outside service-worker caching')
 assert.match(worker, /MAX_RUNTIME_ENTRIES/, 'Runtime caches must be bounded')
+assert.match(worker, /SHELL_CACHE_NAME/, 'The immutable app shell needs a dedicated cache')
+assert.match(worker, /RUNTIME_CACHE_NAME/, 'Runtime assets need a separate bounded cache')
+assert.match(worker, /caches\.open\(SHELL_CACHE_NAME\).*cache\.addAll\(APP_SHELL\)/s, 'App shell must be installed only into the protected shell cache')
+assert.match(worker, /caches\.open\(RUNTIME_CACHE_NAME\)/, 'Runtime responses must use the runtime cache')
+assert.match(worker, /trimRuntimeCache\(runtimeCache\)/, 'Only the runtime cache may be trimmed')
+assert.doesNotMatch(worker, /trimRuntimeCache\(shellCache\)/, 'The protected app shell must never be trimmed')
 assert.match(worker, /\.catch\(\(\) => undefined\)/, 'Background revalidation must not create unhandled rejections')
 assert.doesNotMatch(worker, /cache\.put\([^\n]*\/api\//, 'API responses must never be cached')
 
