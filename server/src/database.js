@@ -41,12 +41,35 @@ export async function migrateDatabase(pool) {
   }
 }
 
+function addWebhookEventState(store, pool) {
+  if (pool) {
+    store.getWebhookEventState = async (provider, eventId, now = new Date()) => {
+      const result = await pool.query('SELECT completed_at, lease_until FROM webhook_events WHERE provider=$1 AND event_id=$2', [provider, eventId])
+      if (!result.rowCount) return 'missing'
+      const row = result.rows[0]
+      if (row.completed_at) return 'completed'
+      if (row.lease_until && new Date(row.lease_until) > now) return 'processing'
+      return 'available'
+    }
+    return store
+  }
+
+  store.getWebhookEventState = async (provider, eventId, now = new Date()) => {
+    const event = store.data?.webhookEvents?.[`${provider}:${eventId}`]
+    if (!event) return 'missing'
+    if (event.completedAt) return 'completed'
+    if (event.leaseUntil && new Date(event.leaseUntil) > now) return 'processing'
+    return 'available'
+  }
+  return store
+}
+
 export async function createConnectorStore(env = process.env) {
   const driver = String(env.CONNECTOR_STORE_DRIVER || 'file').toLowerCase()
   if (driver === 'file') {
     const store = new EncryptedStore(env.CONNECTOR_STORE_PATH || './data/connectors.enc.json', env.CONNECTOR_MASTER_KEY || '')
     await store.load()
-    return { store, pool: null, close: async () => {}, driver }
+    return { store: addWebhookEventState(store, null), pool: null, close: async () => {}, driver }
   }
   if (driver !== 'postgres') throw new Error('CONNECTOR_STORE_DRIVER must be file or postgres.')
 
@@ -55,7 +78,7 @@ export async function createConnectorStore(env = process.env) {
     await migrateDatabase(pool)
     const store = new PostgresStore(pool, env.CONNECTOR_MASTER_KEY || '')
     await store.load()
-    return { store, pool, close: () => pool.end(), driver }
+    return { store: addWebhookEventState(store, pool), pool, close: () => pool.end(), driver }
   } catch (error) {
     await pool.end().catch(() => {})
     throw error

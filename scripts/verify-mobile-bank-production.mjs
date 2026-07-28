@@ -4,12 +4,14 @@ import { resolve } from 'node:path'
 
 const root = resolve(new URL('..', import.meta.url).pathname)
 const read = (path) => readFile(resolve(root, path), 'utf8')
-const [main, runtime, connectors, panel, server] = await Promise.all([
+const [main, runtime, connectors, panel, server, webhookSecurity, database] = await Promise.all([
   read('src/main.tsx'),
   read('src/MobileProductionRuntime.tsx'),
   read('src/connectors.ts'),
   read('src/ConnectionsPanel.tsx'),
   read('server/src/server.js'),
+  read('server/src/webhook-security.js'),
+  read('server/src/database.js'),
 ])
 
 assert.match(main, /<MobileProductionRuntime\s*\/>/, 'Mobile production runtime must be mounted')
@@ -37,6 +39,17 @@ assert.match(server, /syncReplayCache/, 'The backend must replay completed idemp
 assert.match(server, /activeSyncs/, 'The backend must coalesce concurrent per-user synchronizations')
 assert.match(server, /invalid_idempotency_key/, 'The backend must validate idempotency keys')
 assert.match(server, /Idempotency-Replayed/, 'The backend must expose replay behavior operationally')
+assert.match(server, /\/health\/bank/, 'Bank production capabilities must have a dedicated health endpoint')
+assert.match(server, /processWebhook/, 'Verified provider webhooks must be routed through the security boundary')
+assert.match(webhookSecurity, /createHmac/, 'Webhook payloads must be authenticated with HMAC signatures')
+assert.match(webhookSecurity, /timingSafeEqual/, 'Webhook signatures must use constant-time comparison')
+assert.match(webhookSecurity, /stale_webhook/, 'Webhook replay windows must be enforced')
+assert.match(webhookSecurity, /claimWebhookEvent/, 'Webhook delivery must be idempotent')
+assert.match(webhookSecurity, /getWebhookEventState/, 'Completed and in-flight webhook deliveries must be distinguished')
+assert.match(webhookSecurity, /webhook_processing/, 'In-flight webhook collisions must remain retryable')
+assert.match(database, /completed_at/, 'Durable webhook completion state must be queryable')
+assert.match(database, /lease_until/, 'Active webhook leases must be queryable')
+assert.match(webhookSecurity, /postgres_persistence_required/, 'Public production deployments must require durable database storage')
 assert.match(panel, /Verbindungszustand/, 'Connection health must be visible')
 assert.match(panel, /Zustimmung/, 'Consent expiry must be shown to the user')
 assert.match(panel, /Provider-Tokens wurden serverseitig entfernt/, 'Disconnect semantics must be explicit')
