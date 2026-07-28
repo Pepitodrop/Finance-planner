@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 
-const [manifestRaw, serviceWorker, index, main, mobileCss, vaultGate, mobileSecurity, mobileRuntime, mobileHealth] = await Promise.all([
+const [manifestRaw, serviceWorker, index, main, mobileCss, vaultGate, mobileSecurity, mobileRuntime, mobileHealth, nginx] = await Promise.all([
   readFile(new URL('../public/manifest.webmanifest', import.meta.url), 'utf8'),
   readFile(new URL('../public/sw.js', import.meta.url), 'utf8'),
   readFile(new URL('../index.html', import.meta.url), 'utf8'),
@@ -11,6 +11,7 @@ const [manifestRaw, serviceWorker, index, main, mobileCss, vaultGate, mobileSecu
   readFile(new URL('../src/mobile-security.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/MobileRuntime.tsx', import.meta.url), 'utf8'),
   readFile(new URL('../src/mobile-health.ts', import.meta.url), 'utf8'),
+  readFile(new URL('../deploy/nginx.conf', import.meta.url), 'utf8'),
 ])
 
 const manifest = JSON.parse(manifestRaw)
@@ -43,6 +44,11 @@ assert.match(mobileRuntime, /Add Finance Planner to your Home Screen/)
 assert.match(mobileHealth, /ratio >= 0\.95/)
 assert.match(mobileHealth, /ratio >= 0\.8/)
 assert.match(mobileHealth, /CriOS\|FxiOS\|EdgiOS\|OPiOS/)
+
+assert.match(nginx, /location = \/health\/ready/)
+assert.match(nginx, /proxy_pass http:\/\/connector:8787\/health\/ready/)
+assert.match(nginx, /proxy_set_header Host \$http_host/)
+assert.doesNotMatch(nginx, /proxy_set_header Origin \$scheme:\/\/\$host/)
 
 for (const path of ['/api/', '/connectors/', '/oauth/']) {
   assert.ok(serviceWorker.includes(path), `service worker must exclude sensitive path ${path}`)
