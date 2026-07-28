@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "gates": {
+    "aiWorkers": { "status": "pending", "evidence": [] },
+    "modelLicensesAndRevisions": { "status": "pending", "evidence": ["config/ai-model-lock.json"] },
+    "aiEvaluationAndDrift": { "status": "partial", "evidence": ["ai/evaluation/transaction-categories.json", "scripts/verify-ai-evaluation.mjs"] },
+    "bankProviderCertification": { "status": "pending", "evidence": [] },
+    "playwrightAndAccessibility": { "status": "pending", "evidence": [] },
+    "physicalAndroidValidation": { "status": "pending", "evidence": [] },
+    "physicalIosValidation": { "status": "pending", "evidence": [] },
+    "signedLinuxRelease": { "status": "pending", "evidence": [] },
+    "signedWindowsRelease": { "status": "pending", "evidence": [] },
+    "signedMacosRelease": { "status": "pending", "evidence": [] },
+    "distributedRateLimiting": { "status": "pending", "evidence": [] },
+    "productionObservability": { "status": "partial", "evidence": ["docs/PRODUCTION.md"] },
+    "independentSecurityReview": { "status": "pending", "evidence": [] },
+    "independentPrivacyReview": { "status": "pending", "evidence": [] }
+  }
+}
