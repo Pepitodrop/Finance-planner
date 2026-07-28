@@ -32,11 +32,11 @@ function repository() {
   }
 }
 
-function body() {
+function body(occurredAt = '2026-07-28T12:00:00.000Z') {
   return JSON.stringify({
     id: 'event-1',
     type: 'transactions.available',
-    occurredAt: '2026-07-28T12:00:00.000Z',
+    occurredAt,
     provider: 'gocardless',
     connectionId: 'connection-1',
   })
@@ -108,9 +108,9 @@ describe('bank webhook HTTP operations', () => {
     expect(deadLetters.save).toHaveBeenCalledWith(expect.objectContaining({ provider: 'gocardless', attempts: 1, error: 'queue unavailable' }))
   })
 
-  it('replays a dead-letter through the same signature and idempotency checks', async () => {
+  it('replays an old dead-letter under a bounded operator policy while preserving signature checks', async () => {
     const secret = encoder.encode('secret')
-    const rawBody = body()
+    const rawBody = body('2026-07-27T12:00:00.000Z')
     const scheduleSyncOnce = vi.fn(async () => true)
 
     const result = await replayBankWebhookDeadLetter({
@@ -124,5 +124,37 @@ describe('bank webhook HTTP operations', () => {
     })
 
     expect(result).toEqual({ accepted: true, action: 'sync-scheduled', consentId: 'consent-1' })
+    expect(scheduleSyncOnce).toHaveBeenCalledTimes(1)
+
+    const invalid = await replayBankWebhookDeadLetter({
+      provider: 'gocardless',
+      rawBody,
+      signatureHex: '00',
+      secret,
+      repository: repository(),
+      scheduleSyncOnce,
+      now: new Date('2026-07-28T12:01:00.000Z'),
+    })
+    expect(invalid).toEqual({ accepted: false, action: 'ignored' })
+  })
+
+  it('rejects operator replay beyond its configured maximum event age', async () => {
+    const secret = encoder.encode('secret')
+    const rawBody = body('2026-07-27T12:00:00.000Z')
+    const scheduleSyncOnce = vi.fn(async () => true)
+
+    const result = await replayBankWebhookDeadLetter({
+      provider: 'gocardless',
+      rawBody,
+      signatureHex: await signature(rawBody, secret),
+      secret,
+      repository: repository(),
+      scheduleSyncOnce,
+      now: new Date('2026-07-28T12:01:00.000Z'),
+      maxEventAgeMs: 60 * 60_000,
+    })
+
+    expect(result).toEqual({ accepted: false, action: 'ignored' })
+    expect(scheduleSyncOnce).not.toHaveBeenCalled()
   })
 })
