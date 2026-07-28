@@ -23,6 +23,7 @@ describe('deterministic financial smartness engine', () => {
     expect(result.expenseRatio).toBe(0.7)
     expect(result.recurringShare).toBeCloseTo(0.429, 3)
     expect(result.runwayMonths).toBeCloseTo(25.71, 2)
+    expect(result.recurringCoverageMonths).toBe(60)
     expect(result.resilienceScore).toBeGreaterThanOrEqual(85)
     expect(result.stressTest).toEqual({ incomeChangePercent: -10, expenseChangePercent: 10, stressedFreeCashCents: 39000, survivable: true })
     expect(result.insights).toEqual([])
@@ -54,7 +55,7 @@ describe('deterministic financial smartness engine', () => {
     expect(result.monthsToFundGoals).toBeNull()
   })
 
-  it('detects goals with implausibly slow progress', () => {
+  it('normalises goal funding to monthly free cashflow', () => {
     const result = deterministicScenarioInsights(snapshot({
       freeCashCents: 10000,
       incomeCents: 250000,
@@ -62,7 +63,7 @@ describe('deterministic financial smartness engine', () => {
       goals: [{ remainingCents: 500000, targetDate: '2030-08-01' }],
     }))
     expect(codes(result)).toContain('goals_slow_progress')
-    expect(result.monthsToFundGoals).toBe(50)
+    expect(result.monthsToFundGoals).toBe(300)
   })
 
   it('abstains from high confidence when history is insufficient', () => {
@@ -84,6 +85,7 @@ describe('deterministic financial smartness engine', () => {
     expect(scaled.expenseRatio).toBe(base.expenseRatio)
     expect(scaled.recurringShare).toBe(base.recurringShare)
     expect(scaled.runwayMonths).toBe(base.runwayMonths)
+    expect(scaled.recurringCoverageMonths).toBe(base.recurringCoverageMonths)
     expect(scaled.resilienceScore).toBe(base.resilienceScore)
   })
 
@@ -112,6 +114,21 @@ describe('deterministic financial smartness engine', () => {
     expect(result.runwayMonths).toBeNull()
     expect(result.stressTest.survivable).toBe(true)
     expect(Number.isFinite(result.resilienceScore)).toBe(true)
+  })
+
+  it('supports legacy snapshots without goals or transaction counts', () => {
+    const result = deterministicScenarioInsights({
+      incomeCents: 200000,
+      expenseCents: 150000,
+      freeCashCents: 50000,
+      recurringExpenseCents: 60000,
+      accountBalanceCents: 300000,
+      monthsCovered: 3,
+    })
+    expect(result.goalRemainingCents).toBe(0)
+    expect(result.confidence).toBeGreaterThanOrEqual(0)
+    expect(result.confidence).toBeLessThanOrEqual(1)
+    expect(codes(result)).toContain('insufficient_history')
   })
 
   it('flags expenses without income as a critical data-backed condition', () => {
