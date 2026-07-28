@@ -43,6 +43,13 @@ test('passes a representative governed-finance evaluation set', () => {
   assert.equal(report.metrics.recall, 1)
   assert.equal(report.metrics.abstentionSafety, 1)
   assert.ok(report.metrics.calibrationError <= 0.15)
+  assert.deepEqual(report.coverage, {
+    cases: 4,
+    labelledSignals: 3,
+    abstentionCases: 1,
+    calibrationSamples: 4,
+    latencySamples: 4,
+  })
 })
 
 test('fails closed when safety, quality, calibration, or latency regress', () => {
@@ -63,6 +70,20 @@ test('fails closed when safety, quality, calibration, or latency regress', () =>
       correctness: 0,
       latencyMs: 14_000,
     },
+    {
+      expectedSignals: [signal('goal-risk', 'warning')],
+      actualSignals: [],
+      confidence: 0.9,
+      correctness: 0,
+      latencyMs: 13_500,
+    },
+    {
+      expectedSignals: [signal('recurring-cost', 'warning')],
+      actualSignals: [signal('anomaly', 'warning')],
+      confidence: 0.9,
+      correctness: 0,
+      latencyMs: 13_000,
+    },
   ])
 
   assert.equal(report.passed, false)
@@ -71,6 +92,40 @@ test('fails closed when safety, quality, calibration, or latency regress', () =>
   assert.ok(report.failures.some((item) => item.startsWith('abstentionSafety=')))
   assert.ok(report.failures.some((item) => item.startsWith('calibrationError=')))
   assert.ok(report.failures.some((item) => item.startsWith('latencyP95Ms=')))
+})
+
+test('fails closed for an empty evaluation set', () => {
+  const report = evaluateAiCases([])
+
+  assert.equal(report.passed, false)
+  assert.deepEqual(report.metrics, {
+    precision: null,
+    recall: null,
+    abstentionSafety: null,
+    calibrationError: null,
+    latencyP95Ms: null,
+  })
+  assert.ok(report.failures.some((item) => item.startsWith('coverage.cases=')))
+  assert.ok(report.failures.some((item) => item.startsWith('coverage.labelledSignals=')))
+  assert.ok(report.failures.some((item) => item.startsWith('coverage.abstentionCases=')))
+  assert.ok(report.failures.some((item) => item.startsWith('coverage.calibrationSamples=')))
+  assert.ok(report.failures.some((item) => item.startsWith('coverage.latencySamples=')))
+})
+
+test('fails closed when required evaluation dimensions are incomplete', () => {
+  const report = evaluateAiCases([
+    { expectedSignals: [], actualSignals: [] },
+    { expectedSignals: [], actualSignals: [] },
+    { expectedSignals: [], actualSignals: [] },
+    { expectedSignals: [], actualSignals: [] },
+  ])
+
+  assert.equal(report.passed, false)
+  assert.equal(report.coverage.cases, 4)
+  assert.ok(report.failures.some((item) => item.startsWith('coverage.labelledSignals=')))
+  assert.ok(report.failures.some((item) => item.startsWith('coverage.abstentionCases=')))
+  assert.ok(report.failures.some((item) => item.startsWith('coverage.calibrationSamples=')))
+  assert.ok(report.failures.some((item) => item.startsWith('coverage.latencySamples=')))
 })
 
 test('detects material model-quality drift against a reviewed baseline', () => {
