@@ -4,15 +4,9 @@ import { createAiRouter } from '../src/ai-router.js'
 
 const MODEL_REVISION = '768f209d9ea81521153ed38c47d515654e938aea'
 const safeSnapshot = {
-  incomeCents: 250000,
-  expenseCents: 180000,
-  freeCashCents: 70000,
-  recurringExpenseCents: 30000,
-  accountBalanceCents: 420000,
-  transactionCount: 80,
-  monthsCovered: 8,
-  categoryTotals: [{ rank: 1, amountCents: 60000 }],
-  goals: [{ remainingCents: 300000, targetDate: '2027-12-01' }],
+  incomeCents: 250000, expenseCents: 180000, freeCashCents: 70000, recurringExpenseCents: 30000,
+  accountBalanceCents: 420000, transactionCount: 80, monthsCovered: 8,
+  categoryTotals: [{ rank: 1, amountCents: 60000 }], goals: [{ remainingCents: 300000, targetDate: '2027-12-01' }],
 }
 
 function responseRecorder() { return { status: 0, payload: null } }
@@ -21,18 +15,16 @@ function send(response, status, payload) { response.status = status; response.pa
 function routerFor(completion, requestBody = { consentExternalAi: true, snapshot: safeSnapshot }, options = {}) {
   const calls = []
   const router = createAiRouter({
-    env: { HF_TOKEN: 'test-token', ...(options.env || {}) },
-    send,
-    body: async () => requestBody,
-    userId: () => 'user-1',
-    transportFactory: () => ({ chatCompletion: async (input) => { calls.push(input); return completion } }),
+    env: { HF_TOKEN: 'test-token', ...(options.env || {}) }, send,
+    body: async () => requestBody, userId: () => 'user-1',
+    transportFactory: () => ({ chatCompletion: async (input) => { calls.push(input); return typeof completion === 'function' ? completion(input, calls.length) : completion } }),
   })
   return { router, calls }
 }
 
-async function invoke(target) {
+async function invoke(target, path = '/api/ai/financial-intelligence') {
   const response = responseRecorder()
-  await target.router({ method: 'POST' }, response, new URL('http://localhost/api/ai/financial-intelligence'))
+  await target.router({ method: 'POST' }, response, new URL(`http://localhost${path}`))
   return response
 }
 
@@ -83,19 +75,40 @@ test('abstains deterministically when model JSON is malformed or oversized', asy
   }
 })
 
-test('passes the immutable reviewed revision into every provider request', async () => {
+test('passes immutable reviewed revisions into provider requests', async () => {
   const target = routerFor(safeCompletion)
   const response = await invoke(target)
-  assert.equal(response.payload.modelRevision, MODEL_REVISION)
+  assert.equal(response.payload.models[0].revision, MODEL_REVISION)
   assert.equal(target.calls.length, 1)
   assert.equal(target.calls[0].revision, MODEL_REVISION)
 })
 
-test('fails closed when runtime model configuration differs from the reviewed lock', async () => {
+test('fails closed to deterministic output for unreviewed runtime models', async () => {
   for (const env of [
     { HF_MODEL: 'other/model' },
-    { HF_MODEL_REVISION: '0000000000000000000000000000000000000000' },
-  ]) await assert.rejects(() => invoke(routerFor(safeCompletion, undefined, { env })), (error) => error.code === 'ai_model_not_governed')
+    { HF_MODEL_REVISION: 'not-an-immutable-revision' },
+  ]) {
+    const response = await invoke(routerFor(safeCompletion, undefined, { env }))
+    assert.equal(response.payload.source, 'deterministic-fallback')
+    assert.match(response.payload.warnings[0], /allowlist|immutable/i)
+  }
+})
+
+test('uses an optional independent critic and exposes agreement metadata', async () => {
+  const target = routerFor(safeCompletion, undefined, { env: { HF_CRITIC_ENABLED: 'true', HF_CRITIC_MODEL_REVISION: 'a'.repeat(40) } })
+  const response = await invoke(target)
+  assert.equal(response.payload.source, 'hugging-face-ensemble-reconciled')
+  assert.equal(response.payload.models.length, 2)
+  assert.equal(response.payload.modelAgreement, 1)
+  assert.equal(target.calls.length, 2)
+})
+
+test('provides deterministic scenario intelligence without external inference', async () => {
+  const target = createAiRouter({ env: {}, send, body: async () => ({ snapshot: safeSnapshot }), userId: () => 'user-1' })
+  const response = responseRecorder()
+  await target({ method: 'POST' }, response, new URL('http://localhost/api/ai/scenario-intelligence'))
+  assert.equal(response.payload.source, 'deterministic-scenario-engine')
+  assert.equal(typeof response.payload.savingsRate, 'number')
 })
 
 test('reconciles contradictory claims against verified facts', async () => {
