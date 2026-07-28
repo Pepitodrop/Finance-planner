@@ -1,10 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
-import { canStartPullToRefresh, pullProgress, shouldRefreshFromPull, triggerHaptic } from './mobile-enhancements'
+import {
+  canStartPullToRefresh,
+  isPullToRefreshTargetAllowed,
+  isVerticalPull,
+  keyboardInset,
+  pullProgress,
+  shouldRefreshFromPull,
+  triggerHaptic,
+} from './mobile-enhancements'
 
 const PULL_THRESHOLD = 84
 
 export function MobileEnhancements() {
-  const startY = useRef<number | null>(null)
+  const startPoint = useRef<{ x: number; y: number } | null>(null)
+  const distanceRef = useRef(0)
+  const refreshingRef = useRef(false)
   const [distance, setDistance] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
   const [booting, setBooting] = useState(true)
@@ -15,41 +25,92 @@ export function MobileEnhancements() {
   }, [])
 
   useEffect(() => {
+    refreshingRef.current = refreshing
+  }, [refreshing])
+
+  useEffect(() => {
+    const viewport = window.visualViewport
+    if (!viewport) return
+
+    const syncViewport = () => {
+      const inset = keyboardInset(window.innerHeight, viewport.height, viewport.offsetTop)
+      document.documentElement.style.setProperty('--mobile-keyboard-inset', `${inset}px`)
+      document.documentElement.classList.toggle('mobile-keyboard-open', inset > 80)
+    }
+
+    syncViewport()
+    viewport.addEventListener('resize', syncViewport)
+    viewport.addEventListener('scroll', syncViewport)
+    return () => {
+      viewport.removeEventListener('resize', syncViewport)
+      viewport.removeEventListener('scroll', syncViewport)
+      document.documentElement.style.removeProperty('--mobile-keyboard-inset')
+      document.documentElement.classList.remove('mobile-keyboard-open')
+    }
+  }, [])
+
+  useEffect(() => {
+    const resetPull = () => {
+      startPoint.current = null
+      distanceRef.current = 0
+      setDistance(0)
+    }
+
     const handleTouchStart = (event: TouchEvent) => {
-      if (!canStartPullToRefresh(window.scrollY, event.touches.length)) return
-      startY.current = event.touches[0]?.clientY ?? null
+      const allowed = isPullToRefreshTargetAllowed(event.target)
+      if (!canStartPullToRefresh(window.scrollY, event.touches.length, allowed)) return
+      const touch = event.touches[0]
+      startPoint.current = touch ? { x: touch.clientX, y: touch.clientY } : null
     }
 
     const handleTouchMove = (event: TouchEvent) => {
-      if (startY.current === null || refreshing) return
-      const nextDistance = Math.max(0, (event.touches[0]?.clientY ?? startY.current) - startY.current)
-      if (nextDistance > 0 && window.scrollY <= 0) event.preventDefault()
-      setDistance(Math.min(nextDistance * 0.55, PULL_THRESHOLD * 1.35))
+      const start = startPoint.current
+      const touch = event.touches[0]
+      if (!start || !touch || refreshingRef.current) return
+
+      const deltaX = touch.clientX - start.x
+      const deltaY = touch.clientY - start.y
+      if (!isVerticalPull(deltaX, deltaY)) {
+        if (Math.abs(deltaX) > 8 || deltaY < -8) resetPull()
+        return
+      }
+
+      if (window.scrollY > 0) {
+        resetPull()
+        return
+      }
+
+      event.preventDefault()
+      const nextDistance = Math.min(deltaY * 0.55, PULL_THRESHOLD * 1.35)
+      distanceRef.current = nextDistance
+      setDistance(nextDistance)
     }
 
     const finishPull = () => {
-      if (startY.current === null) return
-      startY.current = null
-      if (shouldRefreshFromPull(distance, PULL_THRESHOLD)) {
+      if (!startPoint.current) return
+      startPoint.current = null
+      if (shouldRefreshFromPull(distanceRef.current, PULL_THRESHOLD)) {
+        refreshingRef.current = true
         setRefreshing(true)
         triggerHaptic('success')
         window.setTimeout(() => window.location.reload(), 180)
         return
       }
+      distanceRef.current = 0
       setDistance(0)
     }
 
     document.addEventListener('touchstart', handleTouchStart, { passive: true })
     document.addEventListener('touchmove', handleTouchMove, { passive: false })
     document.addEventListener('touchend', finishPull, { passive: true })
-    document.addEventListener('touchcancel', finishPull, { passive: true })
+    document.addEventListener('touchcancel', resetPull, { passive: true })
     return () => {
       document.removeEventListener('touchstart', handleTouchStart)
       document.removeEventListener('touchmove', handleTouchMove)
       document.removeEventListener('touchend', finishPull)
-      document.removeEventListener('touchcancel', finishPull)
+      document.removeEventListener('touchcancel', resetPull)
     }
-  }, [distance, refreshing])
+  }, [])
 
   useEffect(() => {
     const handleFeedback = (event: Event) => {
