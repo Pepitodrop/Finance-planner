@@ -5,7 +5,11 @@
   "locales": ["de-DE", "en-GB"],
   "currency": "EUR",
   "ai": {
-    "enabled": true,
+    "enabledByDefault": false,
+    "enableOnlyAfterRuntimeValidation": true,
+    "runtimeEvidencePath": ".launch-evidence/hosted-ai.json",
+    "minimumHostedSamples": 5,
+    "maximumHostedErrorRate": 0,
     "requireExplicitExternalAiConsent": true,
     "requireDeterministicFallback": true,
     "requireHumanApprovalForActions": true,
