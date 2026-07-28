@@ -57,7 +57,7 @@ export async function processBankWebhook(input: {
   signatureHex: string
   secret: Uint8Array
   repository: BankWebhookRepository
-  scheduleSync: (consentId: string, eventId: string) => Promise<void>
+  scheduleSyncOnce: (consentId: string, eventId: string) => Promise<boolean>
   now?: Date
 }): Promise<BankWebhookResult> {
   const signatureValid = await verifyBankWebhookSignature(input.rawBody, input.signatureHex, input.secret)
@@ -92,7 +92,7 @@ export async function processBankWebhook(input: {
   } else if (consent.status !== 'active') {
     result = { accepted: true, action: 'ignored', consentId: consent.id }
   } else {
-    await input.scheduleSync(consent.id, event.id)
+    await input.scheduleSyncOnce(consent.id, event.id)
     result = { accepted: true, action: 'sync-scheduled', consentId: consent.id }
   }
 
