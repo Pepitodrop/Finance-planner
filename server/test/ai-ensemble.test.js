@@ -20,7 +20,7 @@ test('requires exact reviewed model-and-revision pairs', () => {
   )
   assert.throws(
     () => governedAiModels({ HF_MODEL: ANALYST_MODEL, HF_MODEL_REVISION: 'a'.repeat(40) }, { model: ANALYST_MODEL, revision: ANALYST_REVISION }),
-    /allowlist/,
+    /revision|production lock/i,
   )
   const ensemble = governedAiModels(
     { HF_CRITIC_ENABLED: 'true', HF_CRITIC_MODEL: CRITIC_MODEL, HF_CRITIC_MODEL_REVISION: CRITIC_REVISION },
