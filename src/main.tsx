@@ -8,6 +8,7 @@ import { MobileEnhancements } from './MobileEnhancements'
 import { MobileExperience } from './MobileExperience'
 import { MobileRuntime } from './MobileRuntime'
 import { VaultGate } from './VaultGate'
+import { WebMobileHardening } from './WebMobileHardening'
 import './styles.css'
 import './ai.css'
 import './assistant.css'
@@ -17,11 +18,13 @@ import './mobile.css'
 import './mobile-connectivity.css'
 import './mobile-enhancements.css'
 import './mobile-experience.css'
+import './web-mobile-hardening.css'
 import './auth.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>
+      <WebMobileHardening />
       <MobileRuntime />
       <MobileConnectivityStatus />
       <MobileEnhancements />
