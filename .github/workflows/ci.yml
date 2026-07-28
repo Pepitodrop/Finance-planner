@@ -130,6 +130,8 @@ jobs:
           node --check server/src/migrate.js
           node --check server/src/security.js
           node --check server/src/runtime-security.js
+          node --check server/src/ai-router.js
+          node --check server/src/huggingFaceClient.js
 
   cobol:
     runs-on: ubuntu-latest
