@@ -21,7 +21,10 @@ async function withDatabase(run) {
 test('PostgreSQL migrations are idempotent and recorded', { skip: !databaseUrl }, async () => {
   await withDatabase(async (pool) => {
     const versions = await pool.query('SELECT version FROM schema_migrations ORDER BY version')
-    assert.deepEqual(versions.rows.map((row) => Number(row.version)), [1])
+    const recorded = versions.rows.map((row) => Number(row.version))
+    assert.ok(recorded.includes(1), 'initial connector-store migration must be recorded')
+    assert.ok(recorded.includes(5), 'distributed rate-limit migration must be recorded')
+    assert.equal(new Set(recorded).size, recorded.length, 'migration versions must be unique')
   })
 })
 

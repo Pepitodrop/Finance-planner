@@ -46,7 +46,7 @@ export async function createConnectorStore(env = process.env) {
   if (driver === 'file') {
     const store = new EncryptedStore(env.CONNECTOR_STORE_PATH || './data/connectors.enc.json', env.CONNECTOR_MASTER_KEY || '')
     await store.load()
-    return { store, close: async () => {}, driver }
+    return { store, pool: null, close: async () => {}, driver }
   }
   if (driver !== 'postgres') throw new Error('CONNECTOR_STORE_DRIVER must be file or postgres.')
 
@@ -55,7 +55,7 @@ export async function createConnectorStore(env = process.env) {
     await migrateDatabase(pool)
     const store = new PostgresStore(pool, env.CONNECTOR_MASTER_KEY || '')
     await store.load()
-    return { store, close: () => pool.end(), driver }
+    return { store, pool, close: () => pool.end(), driver }
   } catch (error) {
     await pool.end().catch(() => {})
     throw error

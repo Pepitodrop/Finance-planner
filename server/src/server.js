@@ -4,6 +4,7 @@ import { URL } from 'node:url'
 import { createAiRouter } from './ai-router.js'
 import { createAuthRouter } from './auth-router.js'
 import { createConnectorStore } from './database.js'
+import { createRateLimiters } from './distributed-rate-limiter.js'
 import { createFinanceRouter } from './finance-router.js'
 import { createSession, issueState, verifySession, verifyState } from './security.js'
 import { startGoCardless, startPayPal, syncGoCardless, syncPayPal } from './providers.js'
@@ -23,8 +24,17 @@ const persistence = await createConnectorStore(env)
 const store = persistence.store
 let ready = true
 let shuttingDown = false
-const generalLimiter = new SlidingWindowRateLimiter({ limit: Number(env.RATE_LIMIT_PER_MINUTE || 120), windowMs: 60_000 })
-const sensitiveLimiter = new SlidingWindowRateLimiter({ limit: Number(env.SENSITIVE_RATE_LIMIT_PER_MINUTE || 20), windowMs: 60_000 })
+const generalLimit = Number(env.RATE_LIMIT_PER_MINUTE || 120)
+const sensitiveLimit = Number(env.SENSITIVE_RATE_LIMIT_PER_MINUTE || 20)
+const distributedLimiters = createRateLimiters({
+  persistence,
+  generalLimit,
+  sensitiveLimit,
+  windowMs: 60_000,
+  requireDistributed: env.NODE_ENV === 'production' && env.PUBLIC_DEPLOYMENT === 'true',
+})
+const generalLimiter = distributedLimiters?.general || new SlidingWindowRateLimiter({ limit: generalLimit, windowMs: 60_000 })
+const sensitiveLimiter = distributedLimiters?.sensitive || new SlidingWindowRateLimiter({ limit: sensitiveLimit, windowMs: 60_000 })
 
 function send(response, status, payload, headers = {}) {
   const securityHeaders = {
@@ -81,11 +91,11 @@ function cors(request, response) {
   return true
 }
 
-function rateLimit(request, response, pathname) {
+async function rateLimit(request, response, pathname) {
   const remote = env.TRUST_PROXY === 'true' ? clientIp(request) : request.socket?.remoteAddress || 'unknown'
   const sensitive = /^\/api\/(auth|session|connectors|finance|ai)/.test(pathname)
   const limiter = sensitive ? sensitiveLimiter : generalLimiter
-  const result = limiter.consume(`${remote}:${sensitive ? 'sensitive' : 'general'}`)
+  const result = await limiter.consume(`${remote}:${sensitive ? 'sensitive' : 'general'}`)
   response.setHeader('RateLimit-Limit', limiter.limit)
   response.setHeader('RateLimit-Remaining', result.remaining)
   response.setHeader('RateLimit-Reset', Math.ceil(result.resetAt / 1000))
@@ -163,13 +173,13 @@ const server = createServer(async (request, response) => {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
     if (shuttingDown && url.pathname !== '/health/live') return send(response, 503, { error: { code: 'shutting_down', message: 'Service is shutting down.' }, requestId: id })
     if (!cors(request, response)) return send(response, 403, { error: { code: 'origin_forbidden', message: 'Origin not allowed.' }, requestId: id })
-    if (!rateLimit(request, response, url.pathname)) return
+    if (!await rateLimit(request, response, url.pathname)) return
     if (request.method === 'OPTIONS') {
-      response.writeHead(204, { 'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, X-Request-ID', 'Access-Control-Max-Age': '600' })
+      response.writeHead(204, { 'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, X-Request-ID, Idempotency-Key', 'Access-Control-Max-Age': '600' })
       return response.end()
     }
     if (request.method === 'GET' && url.pathname === '/health/live') return send(response, 200, { status: 'ok', service: 'finance-planner-connector' })
-    if (request.method === 'GET' && (url.pathname === '/health' || url.pathname === '/health/ready')) return send(response, ready ? 200 : 503, { status: ready ? 'ready' : 'not_ready', service: 'finance-planner-connector', version: '0.1.0', persistence: persistence.driver })
+    if (request.method === 'GET' && (url.pathname === '/health' || url.pathname === '/health/ready')) return send(response, ready ? 200 : 503, { status: ready ? 'ready' : 'not_ready', service: 'finance-planner-connector', version: '0.1.0', persistence: persistence.driver, distributedRateLimiting: Boolean(distributedLimiters?.distributed) })
     if (await handleAuth(request, response, url)) return
     if (await handleFinance(request, response, url)) return
     if (await handleAi(request, response, url)) return
@@ -244,4 +254,4 @@ process.on('unhandledRejection', (error) => {
   shutdown('unhandledRejection')
 })
 
-server.listen(port, host, () => console.log(JSON.stringify({ level: 'info', event: 'server_listening', host, port, persistence: persistence.driver })))
+server.listen(port, host, () => console.log(JSON.stringify({ level: 'info', event: 'server_listening', host, port, persistence: persistence.driver, distributedRateLimiting: Boolean(distributedLimiters?.distributed) })))

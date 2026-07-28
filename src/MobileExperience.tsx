@@ -3,28 +3,53 @@ import { Bot, CalendarClock, DatabaseBackup, Link2, Menu, MessageCircleQuestion,
 
 type NavItem = {
   label: string
+  view: string
   icon: ReactNode
 }
 
 const ITEMS: NavItem[] = [
-  { label: 'Übersicht', icon: <WalletCards size={20} /> },
-  { label: 'Transaktionen', icon: <Repeat2 size={20} /> },
-  { label: 'Sparziele', icon: <Target size={20} /> },
-  { label: 'Verbindungen', icon: <Link2 size={20} /> },
-  { label: 'Verträge', icon: <CalendarClock size={20} /> },
-  { label: 'KI-Lernen', icon: <Bot size={20} /> },
-  { label: 'Assistent', icon: <MessageCircleQuestion size={20} /> },
-  { label: 'Daten', icon: <DatabaseBackup size={20} /> },
+  { label: 'Übersicht', view: 'dashboard', icon: <WalletCards size={20} /> },
+  { label: 'Transaktionen', view: 'transactions', icon: <Repeat2 size={20} /> },
+  { label: 'Sparziele', view: 'goals', icon: <Target size={20} /> },
+  { label: 'Verbindungen', view: 'connections', icon: <Link2 size={20} /> },
+  { label: 'Verträge', view: 'recurring', icon: <CalendarClock size={20} /> },
+  { label: 'KI-Lernen', view: 'ai', icon: <Bot size={20} /> },
+  { label: 'Assistent', view: 'assistant', icon: <MessageCircleQuestion size={20} /> },
+  { label: 'Daten', view: 'data', icon: <DatabaseBackup size={20} /> },
 ]
+
+let suppressNextHistory = false
 
 function sidebarButtons() {
   return Array.from(document.querySelectorAll<HTMLButtonElement>('.sidebar nav button'))
 }
 
-function activate(label: string) {
+function itemForButton(button: HTMLButtonElement) {
+  return ITEMS.find((candidate) => button.textContent?.includes(candidate.label))
+}
+
+function activate(label: string, updateHistory = true) {
   const target = sidebarButtons().find((button) => button.textContent?.trim().includes(label))
-  target?.click()
-  target?.scrollIntoView({ block: 'nearest' })
+  if (!target) return false
+  suppressNextHistory = !updateHistory
+  target.click()
+  target.scrollIntoView({ block: 'nearest' })
+  return true
+}
+
+function activateFromUrl() {
+  const url = new URL(window.location.href)
+  const item = ITEMS.find((candidate) => candidate.view === url.searchParams.get('view'))
+  if (item && !activate(item.label, false)) return false
+
+  if (url.searchParams.get('action') === 'new-transaction') {
+    const transactionButton = document.querySelector<HTMLButtonElement>('.topbar .primary')
+    if (!transactionButton) return false
+    transactionButton.click()
+    url.searchParams.delete('action')
+    window.history.replaceState(window.history.state, '', url)
+  }
+  return true
 }
 
 export function MobileExperience() {
@@ -35,16 +60,52 @@ export function MobileExperience() {
   const primaryItems = useMemo(() => ITEMS.slice(0, 4), [])
 
   useEffect(() => {
-    const sync = () => {
-      const current = sidebarButtons().find((button) => button.classList.contains('active'))
-      const label = ITEMS.find((item) => current?.textContent?.includes(item.label))?.label
-      if (label) setActive(label)
+    const boundButtons = new Map<HTMLButtonElement, EventListener>()
+    let pendingUrlActivation = true
+
+    const bindAndSync = () => {
+      const buttons = sidebarButtons()
+      for (const button of buttons) {
+        if (boundButtons.has(button)) continue
+        const listener: EventListener = () => {
+          const item = itemForButton(button)
+          if (!item) return
+          if (suppressNextHistory) {
+            suppressNextHistory = false
+            return
+          }
+          const url = new URL(window.location.href)
+          if (url.searchParams.get('view') === item.view && !url.searchParams.has('action')) return
+          url.searchParams.set('view', item.view)
+          url.searchParams.delete('action')
+          window.history.pushState({ view: item.view }, '', url)
+        }
+        button.addEventListener('click', listener)
+        boundButtons.set(button, listener)
+      }
+
+      const current = buttons.find((button) => button.classList.contains('active'))
+      const item = current ? itemForButton(current) : undefined
+      if (item) setActive(item.label)
+
+      if (pendingUrlActivation && activateFromUrl()) pendingUrlActivation = false
     }
-    sync()
-    const observer = new MutationObserver(sync)
-    const nav = document.querySelector('.sidebar nav')
-    if (nav) observer.observe(nav, { attributes: true, subtree: true, attributeFilter: ['class'] })
-    return () => observer.disconnect()
+
+    const onPopState = () => {
+      pendingUrlActivation = true
+      bindAndSync()
+    }
+
+    bindAndSync()
+    const observer = new MutationObserver(bindAndSync)
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] })
+    window.addEventListener('popstate', onPopState)
+
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('popstate', onPopState)
+      for (const [button, listener] of boundButtons) button.removeEventListener('click', listener)
+    }
   }, [])
 
   useEffect(() => {
@@ -96,7 +157,8 @@ export function MobileExperience() {
       const current = buttons.findIndex((button) => button.classList.contains('active'))
       if (current < 0) return
       const next = dx < 0 ? Math.min(buttons.length - 1, current + 1) : Math.max(0, current - 1)
-      buttons[next]?.click()
+      const item = ITEMS[next]
+      if (item) activate(item.label)
       window.scrollTo({ top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
     }
     document.addEventListener('touchstart', onTouchStart, { passive: true })
