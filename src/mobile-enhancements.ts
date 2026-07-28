@@ -11,8 +11,14 @@ export function triggerHaptic(kind: HapticKind = 'tap', vibrate = navigator.vibr
   return vibrate(HAPTIC_PATTERNS[kind])
 }
 
-export function canStartPullToRefresh(scrollY: number, touchCount: number) {
-  return scrollY <= 0 && touchCount === 1
+export function canStartPullToRefresh(scrollY: number, touchCount: number, blocked = false) {
+  return !blocked && scrollY <= 0 && touchCount === 1
+}
+
+export function isPullGestureBlocked(target: EventTarget | null, dialogOpen: boolean) {
+  if (dialogOpen) return true
+  if (!(target instanceof Element)) return false
+  return Boolean(target.closest('input, select, textarea, button, a[href], [contenteditable="true"], [role="dialog"]'))
 }
 
 export function pullProgress(distance: number, threshold = 84) {
@@ -21,4 +27,11 @@ export function pullProgress(distance: number, threshold = 84) {
 
 export function shouldRefreshFromPull(distance: number, threshold = 84) {
   return distance >= threshold
+}
+
+export function viewportMetrics(viewport: Pick<VisualViewport, 'height' | 'offsetTop'> | null, fallbackHeight: number) {
+  return {
+    height: Math.max(0, Math.round(viewport?.height ?? fallbackHeight)),
+    offsetTop: Math.max(0, Math.round(viewport?.offsetTop ?? 0)),
+  }
 }
