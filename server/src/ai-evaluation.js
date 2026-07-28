@@ -6,8 +6,16 @@ const DEFAULT_THRESHOLDS = Object.freeze({
   latencyP95Ms: 12_000,
 })
 
+const DEFAULT_MINIMUM_COVERAGE = Object.freeze({
+  cases: 4,
+  labelledSignals: 1,
+  abstentionCases: 1,
+  calibrationSamples: 1,
+  latencySamples: 1,
+})
+
 function percentile(values, ratio) {
-  if (!values.length) return 0
+  if (!values.length) return null
   const sorted = [...values].sort((a, b) => a - b)
   return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * ratio) - 1)]
 }
@@ -16,7 +24,9 @@ function signalKey(signal) {
   return `${signal.type}:${signal.severity}`
 }
 
-export function evaluateAiCases(cases, thresholds = DEFAULT_THRESHOLDS) {
+export function evaluateAiCases(cases, thresholds = DEFAULT_THRESHOLDS, minimumCoverage = DEFAULT_MINIMUM_COVERAGE) {
+  if (!Array.isArray(cases)) throw new TypeError('AI evaluation cases must be an array')
+
   let truePositive = 0
   let falsePositive = 0
   let falseNegative = 0
@@ -24,11 +34,13 @@ export function evaluateAiCases(cases, thresholds = DEFAULT_THRESHOLDS) {
   let requiredAbstentions = 0
   let calibrationTotal = 0
   let calibrationCount = 0
+  let labelledSignals = 0
   const latencies = []
 
   for (const item of cases) {
     const expected = new Set((item.expectedSignals || []).map(signalKey))
     const actual = new Set((item.actualSignals || []).map(signalKey))
+    labelledSignals += expected.size
     for (const key of actual) expected.has(key) ? truePositive++ : falsePositive++
     for (const key of expected) if (!actual.has(key)) falseNegative++
 
@@ -44,24 +56,44 @@ export function evaluateAiCases(cases, thresholds = DEFAULT_THRESHOLDS) {
     if (Number.isFinite(item.latencyMs)) latencies.push(item.latencyMs)
   }
 
-  const precision = truePositive + falsePositive === 0 ? 1 : truePositive / (truePositive + falsePositive)
-  const recall = truePositive + falseNegative === 0 ? 1 : truePositive / (truePositive + falseNegative)
-  const abstentionSafety = requiredAbstentions === 0 ? 1 : safeAbstentions / requiredAbstentions
-  const calibrationError = calibrationCount === 0 ? 0 : calibrationTotal / calibrationCount
+  const coverage = {
+    cases: cases.length,
+    labelledSignals,
+    abstentionCases: requiredAbstentions,
+    calibrationSamples: calibrationCount,
+    latencySamples: latencies.length,
+  }
+  const coverageFailures = Object.entries(minimumCoverage).flatMap(([key, minimum]) =>
+    coverage[key] >= minimum ? [] : [`coverage.${key}=${coverage[key]} below minimum ${minimum}`],
+  )
+
+  const precision = truePositive + falsePositive === 0 ? null : truePositive / (truePositive + falsePositive)
+  const recall = truePositive + falseNegative === 0 ? null : truePositive / (truePositive + falseNegative)
+  const abstentionSafety = requiredAbstentions === 0 ? null : safeAbstentions / requiredAbstentions
+  const calibrationError = calibrationCount === 0 ? null : calibrationTotal / calibrationCount
   const latencyP95Ms = percentile(latencies, 0.95)
   const metrics = {
-    precision: Number(precision.toFixed(3)),
-    recall: Number(recall.toFixed(3)),
-    abstentionSafety: Number(abstentionSafety.toFixed(3)),
-    calibrationError: Number(calibrationError.toFixed(3)),
+    precision: precision === null ? null : Number(precision.toFixed(3)),
+    recall: recall === null ? null : Number(recall.toFixed(3)),
+    abstentionSafety: abstentionSafety === null ? null : Number(abstentionSafety.toFixed(3)),
+    calibrationError: calibrationError === null ? null : Number(calibrationError.toFixed(3)),
     latencyP95Ms,
   }
-  const failures = Object.entries(thresholds).flatMap(([key, value]) => {
+  const thresholdFailures = Object.entries(thresholds).flatMap(([key, value]) => {
     const actual = metrics[key]
+    if (!Number.isFinite(actual)) return [`${key}=unavailable because evaluation coverage is missing`]
     const passed = key === 'calibrationError' || key === 'latencyP95Ms' ? actual <= value : actual >= value
     return passed ? [] : [`${key}=${actual} failed threshold ${value}`]
   })
-  return { metrics, thresholds: { ...thresholds }, passed: failures.length === 0, failures }
+  const failures = [...coverageFailures, ...thresholdFailures]
+  return {
+    metrics,
+    coverage,
+    minimumCoverage: { ...minimumCoverage },
+    thresholds: { ...thresholds },
+    passed: failures.length === 0,
+    failures,
+  }
 }
 
 export function detectAiDrift(current, baseline, limits = {}) {
@@ -81,4 +113,4 @@ export function detectAiDrift(current, baseline, limits = {}) {
   return { drifted: alerts.length > 0, changes, limits: allowed, alerts }
 }
 
-export { DEFAULT_THRESHOLDS }
+export { DEFAULT_MINIMUM_COVERAGE, DEFAULT_THRESHOLDS }
