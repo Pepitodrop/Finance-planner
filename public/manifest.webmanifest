@@ -19,12 +19,34 @@
   },
   "shortcuts": [
     {
-      "name": "Open dashboard",
-      "short_name": "Dashboard",
-      "description": "Open the finance overview.",
-      "url": "/?source=shortcut"
+      "name": "Finanzübersicht öffnen",
+      "short_name": "Übersicht",
+      "description": "Öffnet die persönliche Finanzübersicht.",
+      "url": "/?source=shortcut&view=dashboard"
+    },
+    {
+      "name": "Transaktionen öffnen",
+      "short_name": "Transaktionen",
+      "description": "Öffnet den Transaktionsverlauf.",
+      "url": "/?source=shortcut&view=transactions"
+    },
+    {
+      "name": "Neue Buchung",
+      "short_name": "Buchung",
+      "description": "Öffnet Finance Planner für eine neue Buchung.",
+      "url": "/?source=shortcut&action=new-transaction"
     }
   ],
+  "share_target": {
+    "action": "/?source=share-target",
+    "method": "GET",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
   "icons": [
     {
       "src": "/icons/app-icon.svg",
