@@ -8,7 +8,7 @@ const DEFAULT_RETRIES = 2
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)) }
 
-async function jsonFetch(url, options = {}, policy = {}) {
+export async function jsonFetch(url, options = {}, policy = {}) {
   const timeoutMs = Number(policy.timeoutMs ?? DEFAULT_TIMEOUT_MS)
   const retries = Number(policy.retries ?? DEFAULT_RETRIES)
   let lastError
@@ -25,15 +25,21 @@ async function jsonFetch(url, options = {}, policy = {}) {
       }
       if (response.ok) return body
 
-      const message = `${response.status} ${body.detail ?? body.error_description ?? body.error ?? 'Provider request failed'}`
+      const error = new Error(`${response.status} ${body.detail ?? body.error_description ?? body.error ?? 'Provider request failed'}`)
       const retryable = response.status === 429 || response.status >= 500
-      if (!retryable || attempt === retries) throw new Error(message)
+      if (!retryable || attempt === retries) throw error
+
+      lastError = error
       const retryAfter = Number(response.headers.get('retry-after'))
       await sleep(Number.isFinite(retryAfter) ? retryAfter * 1000 : 250 * (2 ** attempt))
+      continue
     } catch (error) {
       lastError = error
-      if (error?.name !== 'AbortError' || attempt === retries) break
-      await sleep(250 * (2 ** attempt))
+      if (error?.name === 'AbortError' && attempt < retries) {
+        await sleep(250 * (2 ** attempt))
+        continue
+      }
+      break
     } finally {
       clearTimeout(timer)
     }
@@ -90,7 +96,7 @@ export async function syncGoCardless(credential, env) {
   if (!token?.access || (token.access_expires && token.access_expires < 120)) token = await gocardlessToken(env)
   const policy = providerPolicy(env)
   const requisition = await jsonFetch(`${GC_BASE}/requisitions/${credential.requisitionId}/`, { headers: { Authorization: `Bearer ${token.access}` } }, policy)
-  if (!['LN', 'EX'].includes(requisition.status)) throw new Error(`GoCardless consent is not ready: ${requisition.status || 'unknown'}`)
+  if (requisition.status !== 'LN') throw new Error(`GoCardless consent is not ready: ${requisition.status || 'unknown'}`)
   const accounts = []
   const transactions = []
   const seen = new Set()
@@ -115,7 +121,7 @@ export async function syncGoCardless(credential, env) {
       }
     }
   }
-  return { accounts, transactions, credential: { ...credential, token }, reconciliation: { accountCount: accounts.length, transactionCount: transactions.length, syncedAt: new Date().toISOString() }, consentExpiresAt: requisition.status === 'LN' ? undefined : null }
+  return { accounts, transactions, credential: { ...credential, token }, reconciliation: { accountCount: accounts.length, transactionCount: transactions.length, syncedAt: new Date().toISOString() }, consentExpiresAt: undefined }
 }
 
 async function paypalAccessToken(env) {
