@@ -9,6 +9,7 @@ import { createFinanceRouter } from './finance-router.js'
 import { createSession, issueState, verifySession, verifyState } from './security.js'
 import { startGoCardless, startPayPal, syncGoCardless, syncPayPal } from './providers.js'
 import { HttpError, SlidingWindowRateLimiter, classifyError, clientIp, requestId, validateProductionConfig } from './runtime-security.js'
+import { bankProductionCapabilities, processWebhook } from './webhook-security.js'
 
 const env = process.env
 const port = Number(env.PORT || 8787)
@@ -22,6 +23,7 @@ validateProductionConfig(env, origin)
 
 const persistence = await createConnectorStore(env)
 const store = persistence.store
+const bankCapabilities = () => bankProductionCapabilities(env, persistence)
 let ready = true
 let shuttingDown = false
 const generalLimit = Number(env.RATE_LIMIT_PER_MINUTE || 120)
@@ -199,6 +201,20 @@ async function sync(request, response) {
   }
 }
 
+async function handleWebhook(provider, request, response) {
+  const secret = env[`${provider.toUpperCase()}_WEBHOOK_SECRET`]
+  const result = await processWebhook({
+    request,
+    provider,
+    secret,
+    store,
+    handler: async ({ eventId, occurredAt, payload }) => {
+      console.log(JSON.stringify({ level: 'info', event: 'bank_webhook_verified', provider, eventId, occurredAt, eventType: payload?.event_type || payload?.type || payload?.action || 'unknown' }))
+    },
+  })
+  return send(response, result.duplicate ? 200 : 202, result, { 'Idempotency-Replayed': String(result.duplicate) })
+}
+
 const handleAuth = await createAuthRouter({ env, origin, sessionSecret, send })
 const handleFinance = createFinanceRouter({ env, send, body, userId })
 const handleAi = createAiRouter({ env, send, body, userId })
@@ -217,7 +233,17 @@ const server = createServer(async (request, response) => {
       return response.end()
     }
     if (request.method === 'GET' && url.pathname === '/health/live') return send(response, 200, { status: 'ok', service: 'finance-planner-connector' })
-    if (request.method === 'GET' && (url.pathname === '/health' || url.pathname === '/health/ready')) return send(response, ready ? 200 : 503, { status: ready ? 'ready' : 'not_ready', service: 'finance-planner-connector', version: '0.1.0', persistence: persistence.driver, distributedRateLimiting: Boolean(distributedLimiters?.distributed) })
+    if (request.method === 'GET' && url.pathname === '/health/bank') {
+      const capabilities = bankCapabilities()
+      return send(response, capabilities.ready ? 200 : 503, capabilities)
+    }
+    if (request.method === 'GET' && (url.pathname === '/health' || url.pathname === '/health/ready')) {
+      const capabilities = bankCapabilities()
+      const serviceReady = ready && (!capabilities.production || capabilities.ready)
+      return send(response, serviceReady ? 200 : 503, { status: serviceReady ? 'ready' : 'not_ready', service: 'finance-planner-connector', version: '0.1.0', persistence: persistence.driver, distributedRateLimiting: Boolean(distributedLimiters?.distributed), bank: capabilities })
+    }
+    const webhook = url.pathname.match(/^\/api\/connectors\/webhooks\/(gocardless|finapi|paypal)$/)
+    if (request.method === 'POST' && webhook) return await handleWebhook(webhook[1], request, response)
     if (await handleAuth(request, response, url)) return
     if (await handleFinance(request, response, url)) return
     if (await handleAi(request, response, url)) return
@@ -292,4 +318,4 @@ process.on('unhandledRejection', (error) => {
   shutdown('unhandledRejection')
 })
 
-server.listen(port, host, () => console.log(JSON.stringify({ level: 'info', event: 'server_listening', host, port, persistence: persistence.driver, distributedRateLimiting: Boolean(distributedLimiters?.distributed) })))
+server.listen(port, host, () => console.log(JSON.stringify({ level: 'info', event: 'server_listening', host, port, persistence: persistence.driver, distributedRateLimiting: Boolean(distributedLimiters?.distributed), bank: bankCapabilities() })))
