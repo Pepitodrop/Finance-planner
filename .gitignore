@@ -5,5 +5,6 @@ dist
 *.dylib
 .DS_Store
 .env
+.launch-evidence/
 server/data/
 server/*.env
