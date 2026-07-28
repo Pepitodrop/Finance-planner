@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-07-28",
+  "models": [
+    {
+      "id": "Qwen/Qwen3-4B-Thinking-2507",
+      "providerAlias": "Qwen/Qwen3-4B-Thinking-2507:fastest",
+      "revision": "768f209d9ea81521153ed38c47d515654e938aea",
+      "license": "Apache-2.0",
+      "licenseFile": "LICENSE",
+      "capability": "financial-reasoning",
+      "integrationStatus": "integrated",
+      "productionEligible": true,
+      "weightsBundled": false,
+      "reviewNotes": "Hosted inference remains subject to provider routing. The immutable upstream revision and licence are recorded here and must be reviewed before changing the configured model."
+    }
+  ]
+}
