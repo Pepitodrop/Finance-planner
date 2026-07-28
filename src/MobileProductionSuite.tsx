@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BrainCircuit, DatabaseBackup, Link2, Menu, MessageCircleQuestion, Repeat2, Target, WalletCards, X } from 'lucide-react'
 
 const destinations = [
@@ -11,7 +11,8 @@ const destinations = [
   { key: 'data', label: 'Daten', icon: DatabaseBackup },
 ] as const
 
-type DestinationKey = typeof destinations[number]['key']
+type Destination = typeof destinations[number]
+type DestinationKey = Destination['key']
 
 function activateDestination(label: string) {
   const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('.sidebar nav button'))
@@ -24,26 +25,32 @@ function activeDestination(): DestinationKey {
 }
 
 export function MobileProductionSuite() {
-  const [active, setActive] = useState<DestinationKey>(() => activeDestination())
+  const [active, setActive] = useState<DestinationKey>('dashboard')
   const [sheetOpen, setSheetOpen] = useState(false)
   const sheetRef = useRef<HTMLDivElement>(null)
   const swipeStart = useRef<{ x: number; y: number } | null>(null)
   const dragStart = useRef<number | null>(null)
   const primary = useMemo(() => destinations.slice(0, 4), [])
 
-  const navigate = (destination: typeof destinations[number]) => {
+  const navigate = useCallback((destination: Destination) => {
     activateDestination(destination.label)
     setActive(destination.key)
     setSheetOpen(false)
     window.scrollTo({ top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
-  }
+  }, [])
 
   useEffect(() => {
-    const observer = new MutationObserver(() => setActive(activeDestination()))
-    const nav = document.querySelector('.sidebar nav')
-    if (nav) observer.observe(nav, { attributes: true, subtree: true, attributeFilter: ['class'] })
-    return () => observer.disconnect()
-  }, [])
+    const sync = () => setActive(activeDestination())
+    const observer = new MutationObserver(sync)
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] })
+    const timer = window.setTimeout(() => {
+      sync()
+      const requested = new URLSearchParams(window.location.search).get('view') as DestinationKey | null
+      const destination = destinations.find((item) => item.key === requested)
+      if (destination) navigate(destination)
+    }, 0)
+    return () => { observer.disconnect(); window.clearTimeout(timer) }
+  }, [navigate])
 
   useEffect(() => {
     const viewport = window.visualViewport
@@ -60,6 +67,7 @@ export function MobileProductionSuite() {
       viewport?.removeEventListener('resize', updateViewport)
       viewport?.removeEventListener('scroll', updateViewport)
       window.removeEventListener('resize', updateViewport)
+      document.documentElement.classList.remove('mobile-keyboard-open')
     }
   }, [])
 
@@ -76,7 +84,7 @@ export function MobileProductionSuite() {
   useEffect(() => {
     const start = (event: TouchEvent) => {
       const touch = event.touches[0]
-      if (!touch || (event.target as HTMLElement | null)?.closest('input, textarea, select, .chart, .mobile-sheet')) return
+      if (!touch || (event.target as HTMLElement | null)?.closest('input, textarea, select, .chart, .mobile-sheet, [data-disable-page-swipe]')) return
       swipeStart.current = { x: touch.clientX, y: touch.clientY }
     }
     const end = (event: TouchEvent) => {
@@ -97,7 +105,7 @@ export function MobileProductionSuite() {
       document.removeEventListener('touchstart', start)
       document.removeEventListener('touchend', end)
     }
-  }, [active])
+  }, [active, navigate])
 
   useEffect(() => {
     if (!sheetOpen) return
@@ -121,8 +129,8 @@ export function MobileProductionSuite() {
   useEffect(() => {
     const images = Array.from(document.querySelectorAll<HTMLImageElement>('img'))
     images.forEach((image) => {
-      image.loading ||= 'lazy'
-      image.decoding ||= 'async'
+      if (!image.loading) image.loading = 'lazy'
+      if (!image.decoding) image.decoding = 'async'
     })
   }, [active])
 
