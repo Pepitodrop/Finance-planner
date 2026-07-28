@@ -38,10 +38,10 @@ button,
   outline-offset: 3px;
 }
 
-.mobile-pull-indicator {
+.mobile-pull-indicator,
+.mobile-queue-status {
   position: fixed;
   z-index: 10020;
-  top: calc(var(--mobile-safe-top) + 0.5rem);
   left: 50%;
   display: flex;
   align-items: center;
@@ -55,9 +55,18 @@ button,
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
   font-size: 0.875rem;
   font-weight: 700;
+}
+
+.mobile-pull-indicator {
+  top: calc(var(--mobile-safe-top) + 0.5rem);
   pointer-events: none;
   transform: translate(-50%, -100%);
   transition: transform 120ms ease-out;
+}
+
+.mobile-queue-status {
+  bottom: calc(var(--mobile-safe-bottom) + 0.75rem);
+  transform: translateX(-50%);
 }
 
 .mobile-pull-indicator__spinner {
