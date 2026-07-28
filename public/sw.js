@@ -1,6 +1,7 @@
-const CACHE_NAME = 'finance-planner-shell-v3'
+const CACHE_NAME = 'finance-planner-shell-v4'
 const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icons/app-icon.svg']
 const SENSITIVE_PATHS = ['/api/', '/connectors/', '/oauth/', '/healthz']
+const MAX_RUNTIME_ENTRIES = 80
 
 function isSensitiveRequest(url) {
   return SENSITIVE_PATHS.some((path) => url.pathname === path.slice(0, -1) || url.pathname.startsWith(path))
@@ -10,6 +11,12 @@ function isStaticAsset(request, url) {
   return ['script', 'style', 'image', 'font', 'worker'].includes(request.destination)
     || url.pathname.startsWith('/assets/')
     || url.pathname.startsWith('/icons/')
+}
+
+async function trimRuntimeCache(cache) {
+  const keys = await cache.keys()
+  if (keys.length <= MAX_RUNTIME_ENTRIES) return
+  await Promise.all(keys.slice(0, keys.length - MAX_RUNTIME_ENTRIES).map((key) => cache.delete(key)))
 }
 
 self.addEventListener('message', (event) => {
@@ -48,7 +55,7 @@ self.addEventListener('fetch', (event) => {
         }
         return response
       } catch {
-        return await caches.match('/index.html') || Response.error()
+        return await caches.match('/index.html') || await caches.match('/') || Response.error()
       }
     })())
     return
@@ -57,14 +64,23 @@ self.addEventListener('fetch', (event) => {
   if (!isStaticAsset(request, url)) return
 
   event.respondWith((async () => {
-    const cached = await caches.match(request)
-    const network = fetch(request).then(async (response) => {
-      if (response.ok && response.type === 'basic') {
-        const cache = await caches.open(CACHE_NAME)
-        await cache.put(request, response.clone())
-      }
-      return response
-    })
-    return cached || network
+    const cache = await caches.open(CACHE_NAME)
+    const cached = await cache.match(request)
+    const network = fetch(request)
+      .then(async (response) => {
+        if (response.ok && response.type === 'basic') {
+          await cache.put(request, response.clone())
+          await trimRuntimeCache(cache)
+        }
+        return response
+      })
+      .catch(() => undefined)
+
+    if (cached) {
+      event.waitUntil(network)
+      return cached
+    }
+
+    return await network || Response.error()
   })())
 })
