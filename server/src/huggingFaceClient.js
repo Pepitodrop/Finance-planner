@@ -20,7 +20,8 @@ export function createHuggingFaceChatTransport({
   if (!token) throw new Error('HF_TOKEN is required for Hugging Face inference')
 
   return {
-    async chatCompletion({ model, messages, temperature = 0.1, maxTokens = 900, signal }) {
+    async chatCompletion({ model, revision, messages, temperature = 0.1, maxTokens = 900, signal }) {
+      if (!revision || !/^[0-9a-f]{40}$/.test(revision)) throw new Error('An immutable Hugging Face model revision is required')
       const controller = new AbortController()
       const unlink = linkAbortSignals(controller, signal)
       const timeout = setTimeout(() => controller.abort(new Error('Hugging Face inference timed out')), timeoutMs)
@@ -30,9 +31,11 @@ export function createHuggingFaceChatTransport({
           headers: {
             authorization: `Bearer ${token}`,
             'content-type': 'application/json',
+            'x-hf-model-revision': revision,
           },
           body: JSON.stringify({
             model,
+            revision,
             messages,
             temperature,
             max_tokens: maxTokens,
