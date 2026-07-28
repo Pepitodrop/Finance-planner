@@ -3,28 +3,45 @@ import { Bot, CalendarClock, DatabaseBackup, Link2, Menu, MessageCircleQuestion,
 
 type NavItem = {
   label: string
+  view: string
   icon: ReactNode
 }
 
 const ITEMS: NavItem[] = [
-  { label: 'Übersicht', icon: <WalletCards size={20} /> },
-  { label: 'Transaktionen', icon: <Repeat2 size={20} /> },
-  { label: 'Sparziele', icon: <Target size={20} /> },
-  { label: 'Verbindungen', icon: <Link2 size={20} /> },
-  { label: 'Verträge', icon: <CalendarClock size={20} /> },
-  { label: 'KI-Lernen', icon: <Bot size={20} /> },
-  { label: 'Assistent', icon: <MessageCircleQuestion size={20} /> },
-  { label: 'Daten', icon: <DatabaseBackup size={20} /> },
+  { label: 'Übersicht', view: 'dashboard', icon: <WalletCards size={20} /> },
+  { label: 'Transaktionen', view: 'transactions', icon: <Repeat2 size={20} /> },
+  { label: 'Sparziele', view: 'goals', icon: <Target size={20} /> },
+  { label: 'Verbindungen', view: 'connections', icon: <Link2 size={20} /> },
+  { label: 'Verträge', view: 'recurring', icon: <CalendarClock size={20} /> },
+  { label: 'KI-Lernen', view: 'ai', icon: <Bot size={20} /> },
+  { label: 'Assistent', view: 'assistant', icon: <MessageCircleQuestion size={20} /> },
+  { label: 'Daten', view: 'data', icon: <DatabaseBackup size={20} /> },
 ]
 
 function sidebarButtons() {
   return Array.from(document.querySelectorAll<HTMLButtonElement>('.sidebar nav button'))
 }
 
-function activate(label: string) {
+function activate(label: string, updateHistory = true) {
+  const item = ITEMS.find((candidate) => candidate.label === label)
   const target = sidebarButtons().find((button) => button.textContent?.trim().includes(label))
   target?.click()
   target?.scrollIntoView({ block: 'nearest' })
+  if (updateHistory && item) {
+    const url = new URL(window.location.href)
+    url.searchParams.set('view', item.view)
+    url.searchParams.delete('action')
+    window.history.pushState({ view: item.view }, '', url)
+  }
+}
+
+function activateFromUrl() {
+  const url = new URL(window.location.href)
+  const item = ITEMS.find((candidate) => candidate.view === url.searchParams.get('view'))
+  if (item) activate(item.label, false)
+  if (url.searchParams.get('action') === 'new-transaction') {
+    window.setTimeout(() => document.querySelector<HTMLButtonElement>('.topbar .primary')?.click(), 0)
+  }
 }
 
 export function MobileExperience() {
@@ -35,10 +52,20 @@ export function MobileExperience() {
   const primaryItems = useMemo(() => ITEMS.slice(0, 4), [])
 
   useEffect(() => {
+    const timer = window.setTimeout(activateFromUrl, 0)
+    const onPopState = () => activateFromUrl()
+    window.addEventListener('popstate', onPopState)
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener('popstate', onPopState)
+    }
+  }, [])
+
+  useEffect(() => {
     const sync = () => {
       const current = sidebarButtons().find((button) => button.classList.contains('active'))
-      const label = ITEMS.find((item) => current?.textContent?.includes(item.label))?.label
-      if (label) setActive(label)
+      const item = ITEMS.find((candidate) => current?.textContent?.includes(candidate.label))
+      if (item) setActive(item.label)
     }
     sync()
     const observer = new MutationObserver(sync)
@@ -96,7 +123,8 @@ export function MobileExperience() {
       const current = buttons.findIndex((button) => button.classList.contains('active'))
       if (current < 0) return
       const next = dx < 0 ? Math.min(buttons.length - 1, current + 1) : Math.max(0, current - 1)
-      buttons[next]?.click()
+      const item = ITEMS[next]
+      if (item) activate(item.label)
       window.scrollTo({ top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
     }
     document.addEventListener('touchstart', onTouchStart, { passive: true })
