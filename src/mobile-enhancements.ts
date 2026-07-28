@@ -22,3 +22,12 @@ export function pullProgress(distance: number, threshold = 84) {
 export function shouldRefreshFromPull(distance: number, threshold = 84) {
   return distance >= threshold
 }
+
+export function keyboardInset(layoutHeight: number, viewportHeight: number, viewportOffsetTop = 0) {
+  return Math.max(0, Math.round(layoutHeight - viewportHeight - viewportOffsetTop))
+}
+
+export function isEditableTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false
+  return target.matches('input, textarea, select, [contenteditable="true"]')
+}
