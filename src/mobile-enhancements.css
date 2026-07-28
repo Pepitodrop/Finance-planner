@@ -3,6 +3,9 @@
   --mobile-safe-right: env(safe-area-inset-right, 0px);
   --mobile-safe-bottom: env(safe-area-inset-bottom, 0px);
   --mobile-safe-left: env(safe-area-inset-left, 0px);
+  --mobile-viewport-height: 100dvh;
+  --mobile-viewport-offset-top: 0px;
+  --mobile-keyboard-inset: 0px;
 }
 
 html,
@@ -12,10 +15,17 @@ body,
 }
 
 body {
+  min-height: var(--mobile-viewport-height);
   padding-left: var(--mobile-safe-left);
   padding-right: var(--mobile-safe-right);
-  padding-bottom: var(--mobile-safe-bottom);
+  padding-bottom: max(var(--mobile-safe-bottom), var(--mobile-keyboard-inset));
+  scroll-padding-top: calc(var(--mobile-safe-top) + 1rem);
+  scroll-padding-bottom: calc(var(--mobile-keyboard-inset) + var(--mobile-safe-bottom) + 1.5rem);
   overscroll-behavior-y: contain;
+}
+
+.mobile-keyboard-open body {
+  overscroll-behavior-y: none;
 }
 
 button,
@@ -33,6 +43,14 @@ button,
   min-height: 44px;
 }
 
+input,
+select,
+textarea,
+[contenteditable='true'] {
+  scroll-margin-top: calc(var(--mobile-safe-top) + 1rem);
+  scroll-margin-bottom: calc(var(--mobile-keyboard-inset) + 1.5rem);
+}
+
 :focus-visible {
   outline: 3px solid currentColor;
   outline-offset: 3px;
@@ -41,7 +59,7 @@ button,
 .mobile-pull-indicator {
   position: fixed;
   z-index: 10020;
-  top: calc(var(--mobile-safe-top) + 0.5rem);
+  top: calc(var(--mobile-safe-top) + var(--mobile-viewport-offset-top) + 0.5rem);
   left: 50%;
   display: flex;
   align-items: center;
@@ -60,6 +78,10 @@ button,
   transition: transform 120ms ease-out;
 }
 
+.mobile-keyboard-open .mobile-pull-indicator {
+  display: none;
+}
+
 .mobile-pull-indicator__spinner {
   display: inline-block;
   animation: mobile-spin 700ms linear infinite;
@@ -68,7 +90,8 @@ button,
 .mobile-boot-skeleton {
   position: fixed;
   z-index: 10015;
-  inset: 0;
+  inset: var(--mobile-viewport-offset-top) 0 auto;
+  min-height: var(--mobile-viewport-height);
   padding: calc(var(--mobile-safe-top) + 1rem) calc(var(--mobile-safe-right) + 1rem) calc(var(--mobile-safe-bottom) + 1rem) calc(var(--mobile-safe-left) + 1rem);
   background: Canvas;
   color: CanvasText;
