@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, DatabaseBackup, Link2, Menu, Repeat2, Share2, Target, WalletCards } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Bot, CalendarClock, DatabaseBackup, Link2, Menu, MessageCircleQuestion, Repeat2, Share2, Target, WalletCards } from 'lucide-react'
 
 type NavItem = {
   label: string
-  icon: React.ReactNode
+  icon: ReactNode
 }
 
 const ITEMS: NavItem[] = [
@@ -11,7 +11,9 @@ const ITEMS: NavItem[] = [
   { label: 'Transaktionen', icon: <Repeat2 size={20} /> },
   { label: 'Sparziele', icon: <Target size={20} /> },
   { label: 'Verbindungen', icon: <Link2 size={20} /> },
+  { label: 'Verträge', icon: <CalendarClock size={20} /> },
   { label: 'KI-Lernen', icon: <Bot size={20} /> },
+  { label: 'Assistent', icon: <MessageCircleQuestion size={20} /> },
   { label: 'Daten', icon: <DatabaseBackup size={20} /> },
 ]
 
@@ -150,7 +152,7 @@ export function MobileExperience() {
             <h2>Weitere Bereiche</h2>
             <div className="mobile-bottom-sheet__grid">
               {ITEMS.slice(4).map((item) => (
-                <button key={item.label} type="button" onClick={() => { activate(item.label); setMoreOpen(false) }}>
+                <button key={item.label} type="button" className={active === item.label ? 'active' : ''} aria-current={active === item.label ? 'page' : undefined} onClick={() => { activate(item.label); setMoreOpen(false) }}>
                   {item.icon}<span>{item.label}</span>
                 </button>
               ))}
