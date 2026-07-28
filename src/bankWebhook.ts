@@ -59,6 +59,7 @@ export async function processBankWebhook(input: {
   repository: BankWebhookRepository
   scheduleSyncOnce: (consentId: string, eventId: string) => Promise<boolean>
   now?: Date
+  replayWindowMs?: number
 }): Promise<BankWebhookResult> {
   const signatureValid = await verifyBankWebhookSignature(input.rawBody, input.signatureHex, input.secret)
   if (!signatureValid) return { accepted: false, action: 'ignored' }
@@ -67,7 +68,7 @@ export async function processBankWebhook(input: {
   try { event = parseBankWebhook(input.rawBody) } catch { return { accepted: false, action: 'ignored' } }
 
   const now = input.now ?? new Date()
-  if (!validateWebhookTimestamp(event.occurredAt, now.getTime())) return { accepted: false, action: 'ignored' }
+  if (!validateWebhookTimestamp(event.occurredAt, now.getTime(), input.replayWindowMs)) return { accepted: false, action: 'ignored' }
   if (await input.repository.hasWebhookEvent(event.id)) return { accepted: false, action: 'ignored' }
 
   const consent = await input.repository.findConsentByProviderConnection(event.provider, event.connectionId)
