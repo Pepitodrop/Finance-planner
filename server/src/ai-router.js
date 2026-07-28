@@ -3,9 +3,14 @@ import { HttpError } from './runtime-security.js'
 import { publicModelCatalog } from './ai-model-catalog.js'
 import { learnBehaviorPatterns } from './behavior-learning.js'
 
-const DEFAULT_MODEL = 'Qwen/Qwen3-4B-Thinking-2507:fastest'
+const GOVERNED_MODEL = Object.freeze({
+  id: 'Qwen/Qwen3-4B-Thinking-2507',
+  providerAlias: 'Qwen/Qwen3-4B-Thinking-2507:fastest',
+  revision: '768f209d9ea81521153ed38c47d515654e938aea',
+})
 const ALLOWED_SIGNAL_TYPES = new Set(['cashflow', 'recurring-cost', 'goal-risk', 'anomaly', 'data-quality'])
 const ALLOWED_SEVERITIES = new Set(['info', 'warning', 'critical'])
+const UNSAFE_MODEL_TEXT = /(?:ignore\s+(?:all\s+)?previous|system\s*prompt|developer\s*message|reveal\s+(?:the\s+)?prompt|\b(?:iban|swift|bic|access[_ -]?token|refresh[_ -]?token|password|secret)\b|(?:transfer|send|wire|withdraw|invest|buy|sell|trade|borrow|cancel)\s+(?:€|eur|money|funds?|all|now|immediately)|execute\s+(?:this|now)|without\s+(?:approval|confirmation))/i
 
 function finiteInteger(value, field, { min = -Number.MAX_SAFE_INTEGER, max = Number.MAX_SAFE_INTEGER } = {}) {
   if (!Number.isSafeInteger(value) || value < min || value > max) throw new HttpError(400, 'invalid_ai_snapshot', `${field} must be a safe integer.`)
@@ -40,10 +45,15 @@ function clampConfidence(value) {
 }
 
 function extractJson(text) {
+  if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > 32768) throw new Error('AI response exceeds the production response limit')
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]
   const start = text.indexOf('{')
   const end = text.lastIndexOf('}')
   return JSON.parse(fenced ?? (start >= 0 && end >= start ? text.slice(start, end + 1) : text))
+}
+
+function assertSafeModelText(text, field) {
+  if (UNSAFE_MODEL_TEXT.test(text)) throw new Error(`Unsafe model content in ${field}`)
 }
 
 function validateModelResult(value) {
@@ -51,6 +61,7 @@ function validateModelResult(value) {
   const allowedRoot = new Set(['summary', 'confidence', 'signals'])
   for (const key of Object.keys(value)) if (!allowedRoot.has(key)) throw new Error(`Unexpected AI response field: ${key}`)
   if (typeof value.summary !== 'string' || value.summary.trim().length < 1 || value.summary.length > 800) throw new Error('AI summary is invalid')
+  assertSafeModelText(value.summary, 'summary')
   if (!Array.isArray(value.signals) || value.signals.length > 8) throw new Error('AI signals are invalid')
   const signals = value.signals.map((item) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('AI signal is invalid')
@@ -62,9 +73,13 @@ function validateModelResult(value) {
     if (typeof item.explanation !== 'string' || item.explanation.trim().length < 1 || item.explanation.length > 600) throw new Error('AI signal explanation is invalid')
     if (!Array.isArray(item.evidence) || item.evidence.length > 5 || !item.evidence.every((entry) => typeof entry === 'string' && entry.length <= 200)) throw new Error('AI evidence is invalid')
     if (item.suggestedAction !== undefined && (typeof item.suggestedAction !== 'string' || item.suggestedAction.length > 300)) throw new Error('AI suggested action is invalid')
-    return { type: item.type, severity: item.severity, title: item.title, explanation: item.explanation, confidence: clampConfidence(item.confidence), modelRationale: item.evidence, ...(item.suggestedAction ? { suggestedAction: item.suggestedAction } : {}), requiresApproval: true }
+    assertSafeModelText(item.title, 'signal.title')
+    assertSafeModelText(item.explanation, 'signal.explanation')
+    for (const evidence of item.evidence) assertSafeModelText(evidence, 'signal.evidence')
+    if (item.suggestedAction) assertSafeModelText(item.suggestedAction, 'signal.suggestedAction')
+    return { type: item.type, severity: item.severity, title: item.title, explanation: item.explanation, confidence: clampConfidence(item.confidence), ...(item.suggestedAction ? { suggestedAction: item.suggestedAction } : {}), requiresApproval: true }
   })
-  return { modelSummary: value.summary, confidence: clampConfidence(value.confidence), signals }
+  return { confidence: clampConfidence(value.confidence), signals }
 }
 
 function dataQuality(snapshot) {
@@ -99,52 +114,27 @@ function reconcileModelResult(result, snapshot) {
   const warnings = []
   const confidenceCap = quality.level === 'low' ? 0.6 : quality.level === 'medium' ? 0.8 : 0.95
   const signals = []
-
   for (const original of result.signals) {
-    if (original.type === 'recurring-cost' && snapshot.recurringExpenseCents === 0) {
-      warnings.push('Removed recurring-cost signal because the verified snapshot contains no recurring expenses.')
-      continue
-    }
-    if (original.type === 'goal-risk' && snapshot.goals.length === 0) {
-      warnings.push('Removed goal-risk signal because the verified snapshot contains no goals.')
-      continue
-    }
-
-    const signal = { ...original }
-    signal.confidence = Math.min(signal.confidence, confidenceCap)
-
+    if (original.type === 'recurring-cost' && snapshot.recurringExpenseCents === 0) { warnings.push('Removed recurring-cost signal because the verified snapshot contains no recurring expenses.'); continue }
+    if (original.type === 'goal-risk' && snapshot.goals.length === 0) { warnings.push('Removed goal-risk signal because the verified snapshot contains no goals.'); continue }
+    const signal = { ...original, confidence: Math.min(original.confidence, confidenceCap) }
     if (signal.type === 'cashflow') {
       if (snapshot.freeCashCents <= 0) signal.severity = 'critical'
-      else if (signal.severity === 'critical') {
-        signal.severity = 'warning'
-        warnings.push('Downgraded unsupported critical cashflow severity because verified free cash is positive.')
-      }
+      else if (signal.severity === 'critical') { signal.severity = 'warning'; warnings.push('Downgraded unsupported critical cashflow severity because verified free cash is positive.') }
     }
-
     if (signal.type === 'anomaly') {
       signal.confidence = Math.min(signal.confidence, 0.55)
       if (signal.severity === 'critical') signal.severity = 'warning'
       warnings.push('Anomaly confidence was capped because only aggregate data was supplied.')
     }
-
     signal.evidence = verifiedEvidence(signal, snapshot)
     signals.push(signal)
   }
-
   const calibratedConfidence = Math.min(result.confidence, confidenceCap)
   if (calibratedConfidence < result.confidence) warnings.push(`Overall confidence was capped at ${confidenceCap} because data quality is ${quality.level}.`)
-
   return {
-    summary: reconciledSummary(signals),
-    modelSummary: result.modelSummary,
-    confidence: calibratedConfidence,
-    signals,
-    confidenceDetails: {
-      modelConfidence: result.confidence,
-      calibratedConfidence,
-      dataQuality: quality,
-      policy: 'Confidence is capped by verified history depth; anomaly claims are additionally capped until transaction-level verification is available. Summary and evidence are generated from accepted verified facts; model rationale is labelled separately.',
-    },
+    summary: reconciledSummary(signals), confidence: calibratedConfidence, signals,
+    confidenceDetails: { modelConfidence: result.confidence, calibratedConfidence, dataQuality: quality, policy: 'Confidence is capped by verified history depth; unsafe model text is rejected; summary and evidence are generated only from accepted verified facts.' },
     warnings,
   }
 }
@@ -159,22 +149,24 @@ function deterministicFallback(snapshot, warning) {
   return { summary: signals.length ? 'Regelbasierte Analyse verfügbar; das Sprachmodell konnte nicht sicher verwendet werden.' : 'Keine dringenden regelbasierten Risiken erkannt.', signals, confidence, confidenceDetails: { modelConfidence: null, calibratedConfidence: confidence, dataQuality: quality, policy: 'Deterministic rule-engine result; no model-generated financial claim was accepted.' }, source: 'deterministic-fallback', generatedAt: new Date().toISOString(), warnings: [String(warning).slice(0, 300)] }
 }
 
+function governedRuntime(env) {
+  const model = String(env.HF_MODEL || GOVERNED_MODEL.providerAlias)
+  const revision = String(env.HF_MODEL_REVISION || GOVERNED_MODEL.revision)
+  if (model !== GOVERNED_MODEL.providerAlias || revision !== GOVERNED_MODEL.revision) throw new HttpError(503, 'ai_model_not_governed', 'Configured AI model and revision must match the reviewed production lock.')
+  return { model, revision }
+}
+
 export function createAiRouter({ env, send, body, userId, transportFactory = createHuggingFaceChatTransport, loadBehaviorEvents = null }) {
   const transport = env.HF_TOKEN ? transportFactory({ token: env.HF_TOKEN, timeoutMs: Number(env.HF_TIMEOUT_MS || 12_000) }) : null
   return async function handleAi(request, response, url) {
-    if (request.method === 'GET' && url.pathname === '/api/ai/models') {
-      userId(request)
-      send(response, 200, { models: publicModelCatalog(), note: 'Only models marked integrated have an active inference path. Catalog-only models require a separately configured worker.' })
-      return true
-    }
+    if (request.method === 'GET' && url.pathname === '/api/ai/models') { userId(request); send(response, 200, { models: publicModelCatalog(), note: 'Only models marked integrated have an active inference path. Catalog-only models require a separately configured worker.' }); return true }
     if (request.method === 'POST' && url.pathname === '/api/ai/behavior-prediction') {
       const user = userId(request)
       const input = await body(request)
       if (input.consentBehaviorLearning !== true) throw new HttpError(400, 'behavior_consent_required', 'Explicit consent is required for behavior learning.')
       if (Object.keys(input).some((key) => !['consentBehaviorLearning'].includes(key))) throw new HttpError(400, 'invalid_behavior_request', 'Behavior history must be loaded by the server and must not be supplied by the client.')
       if (typeof loadBehaviorEvents !== 'function') throw new HttpError(503, 'behavior_history_unavailable', 'Trusted server-side financial history is not configured.')
-      const events = await loadBehaviorEvents(user)
-      send(response, 200, learnBehaviorPatterns(events))
+      send(response, 200, learnBehaviorPatterns(await loadBehaviorEvents(user)))
       return true
     }
     if (request.method !== 'POST' || url.pathname !== '/api/ai/financial-intelligence') return false
@@ -183,11 +175,11 @@ export function createAiRouter({ env, send, body, userId, transportFactory = cre
     if (input.consentExternalAi !== true) throw new HttpError(400, 'ai_consent_required', 'Explicit consent is required before external AI inference.')
     if (!transport) throw new HttpError(503, 'ai_unavailable', 'Hugging Face inference is not configured.')
     const snapshot = validateSnapshot(input.snapshot)
-    const model = String(env.HF_MODEL || DEFAULT_MODEL)
+    const { model, revision } = governedRuntime(env)
     try {
-      const content = await transport.chatCompletion({ model, temperature: 0.1, maxTokens: 900, messages: [{ role: 'system', content: 'Du bist ein vorsichtiger Finanzanalyse-Assistent. Nutze ausschließlich die aggregierten Fakten. Erfinde keine Transaktionen, stelle keine Rechts-, Steuer- oder Anlageberatung als sicher dar und führe keine Aktion aus. Antworte ausschließlich als JSON mit summary, confidence und signals. Zulässige type-Werte: cashflow, recurring-cost, goal-risk, anomaly, data-quality. Jede Empfehlung bleibt genehmigungspflichtig.' }, { role: 'user', content: `Analysiere diesen anonymisierten Finanz-Snapshot: ${JSON.stringify(snapshot)}` }] })
+      const content = await transport.chatCompletion({ model, revision, temperature: 0.1, maxTokens: 900, messages: [{ role: 'system', content: 'Du bist ein vorsichtiger Finanzanalyse-Assistent. Nutze ausschließlich die aggregierten Fakten. Erfinde keine Transaktionen, stelle keine Rechts-, Steuer- oder Anlageberatung als sicher dar und führe keine Aktion aus. Antworte ausschließlich als JSON mit summary, confidence und signals. Zulässige type-Werte: cashflow, recurring-cost, goal-risk, anomaly, data-quality. Jede Empfehlung bleibt genehmigungspflichtig.' }, { role: 'user', content: `Analysiere diesen anonymisierten Finanz-Snapshot: ${JSON.stringify(snapshot)}` }] })
       const reconciled = reconcileModelResult(validateModelResult(extractJson(content)), snapshot)
-      send(response, 200, { ...reconciled, source: 'hugging-face-reconciled', model, generatedAt: new Date().toISOString() })
+      send(response, 200, { ...reconciled, source: 'hugging-face-reconciled', model, modelRevision: revision, generatedAt: new Date().toISOString() })
     } catch (error) {
       send(response, 200, deterministicFallback(snapshot, error instanceof Error ? error.message : 'Hugging Face inference failed'))
     }
