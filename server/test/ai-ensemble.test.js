@@ -51,11 +51,57 @@ test('retains only signals independently agreed by analyst and critic', async ()
   assert.equal(result.agreement, 0.5)
 })
 
-test('computes deterministic liquidity and spending scenarios', () => {
-  const result = deterministicScenarioInsights({ incomeCents: 200000, expenseCents: 180000, freeCashCents: 20000, recurringExpenseCents: 140000, accountBalanceCents: 120000, monthsCovered: 2 })
+test('computes deterministic liquidity, health and stress intelligence', () => {
+  const result = deterministicScenarioInsights({
+    incomeCents: 200000,
+    expenseCents: 180000,
+    freeCashCents: 20000,
+    recurringExpenseCents: 140000,
+    accountBalanceCents: 120000,
+    monthsCovered: 2,
+    goals: [],
+  })
   assert.equal(result.savingsRate, 0.1)
   assert.ok(result.recurringShare > 0.6)
   assert.ok(result.runwayMonths < 3)
+  assert.ok(Number.isInteger(result.healthScore))
+  assert.ok(result.healthScore >= 0 && result.healthScore <= 100)
+  assert.equal(result.methodologyVersion, '2.0.0')
+  assert.equal(result.stressScenarios.length, 3)
   assert.ok(result.insights.some((item) => item.code === 'high_recurring_share'))
   assert.ok(result.insights.some((item) => item.code === 'low_liquidity_runway'))
+  assert.ok(result.insights.every((item, index, items) => index === 0 || items[index - 1].priority >= item.priority))
+})
+
+test('detects infeasible goals and prioritizes them', () => {
+  const result = deterministicScenarioInsights({
+    incomeCents: 300000,
+    expenseCents: 290000,
+    freeCashCents: 10000,
+    recurringExpenseCents: 150000,
+    accountBalanceCents: 400000,
+    monthsCovered: 6,
+    goals: [{ remainingCents: 1200000, targetDate: '2026-08-01' }],
+  })
+  assert.equal(result.goals.length, 1)
+  assert.equal(result.goals[0].status, 'off-track')
+  assert.ok(result.goals[0].requiredMonthlyCents >= 1200000)
+  assert.ok(result.insights.some((item) => item.code === 'goal_feasibility_risk' && item.severity === 'critical'))
+  assert.ok(result.healthScore < 60)
+})
+
+test('returns stable intelligence for zero-expense snapshots', () => {
+  const result = deterministicScenarioInsights({
+    incomeCents: 100000,
+    expenseCents: 0,
+    freeCashCents: 100000,
+    recurringExpenseCents: 0,
+    accountBalanceCents: 500000,
+    monthsCovered: 3,
+    goals: [],
+  })
+  assert.equal(result.recurringShare, 0)
+  assert.equal(result.runwayMonths, null)
+  assert.ok(result.healthScore >= 80)
+  assert.ok(result.stressScenarios.every((scenario) => scenario.stressedRunwayMonths === null))
 })
