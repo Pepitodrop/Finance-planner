@@ -35,6 +35,9 @@ const distributedLimiters = createRateLimiters({
 })
 const generalLimiter = distributedLimiters?.general || new SlidingWindowRateLimiter({ limit: generalLimit, windowMs: 60_000 })
 const sensitiveLimiter = distributedLimiters?.sensitive || new SlidingWindowRateLimiter({ limit: sensitiveLimit, windowMs: 60_000 })
+const activeSyncs = new Map()
+const syncReplayCache = new Map()
+const SYNC_REPLAY_TTL_MS = 2 * 60_000
 
 function send(response, status, payload, headers = {}) {
   const securityHeaders = {
@@ -87,6 +90,7 @@ function cors(request, response) {
   if (requestOrigin && requestOrigin !== origin) return false
   response.setHeader('Access-Control-Allow-Origin', origin)
   response.setHeader('Access-Control-Allow-Credentials', 'true')
+  response.setHeader('Access-Control-Expose-Headers', 'X-Request-ID, Idempotency-Replayed, Retry-After')
   response.setHeader('Vary', 'Origin')
   return true
 }
@@ -141,8 +145,7 @@ async function start(provider, request, response) {
   send(response, 200, { redirectUrl: result.redirectUrl })
 }
 
-async function sync(request, response) {
-  const user = userId(request)
+async function buildSyncPayload(user) {
   const results = []
   for (const provider of ['gocardless', 'finapi', 'paypal']) {
     const stored = await store.get(user, provider)
@@ -153,12 +156,47 @@ async function sync(request, response) {
           : (() => { throw new Error('finAPI adapter is not configured.') })()
       const lastSyncAt = new Date().toISOString()
       await store.set(user, provider, { ...synced.credential, consentId: stored.consentId, redirectUri: stored.redirectUri, lastSyncAt, consentExpiresAt: synced.consentExpiresAt })
-      results.push({ connection: { ...connection(provider, stored), lastSyncAt }, accounts: synced.accounts, transactions: synced.transactions })
+      results.push({ connection: { ...connection(provider, stored), lastSyncAt }, accounts: synced.accounts, transactions: synced.transactions, reconciliation: synced.reconciliation })
     } catch (error) {
       results.push({ connection: connection(provider, stored, error instanceof Error ? error.message : 'Synchronization failed.'), accounts: [], transactions: [] })
     }
   }
-  send(response, 200, { connections: results })
+  return { connections: results, synchronizedAt: new Date().toISOString() }
+}
+
+function syncIdempotencyKey(request, user) {
+  const key = String(request.headers['idempotency-key'] || '').trim()
+  if (!key) return null
+  if (!/^[A-Za-z0-9._:-]{8,128}$/.test(key)) throw new HttpError(400, 'invalid_idempotency_key', 'Invalid Idempotency-Key header.')
+  return `${user}:${key}`
+}
+
+function pruneSyncReplayCache(now = Date.now()) {
+  for (const [key, entry] of syncReplayCache) if (entry.expiresAt <= now) syncReplayCache.delete(key)
+}
+
+async function sync(request, response) {
+  const user = userId(request)
+  const replayKey = syncIdempotencyKey(request, user)
+  pruneSyncReplayCache()
+  if (replayKey) {
+    const cached = syncReplayCache.get(replayKey)
+    if (cached) return send(response, 200, cached.payload, { 'Idempotency-Replayed': 'true' })
+  }
+
+  let operation = activeSyncs.get(user)
+  const joined = Boolean(operation)
+  if (!operation) {
+    operation = buildSyncPayload(user)
+    activeSyncs.set(user, operation)
+  }
+  try {
+    const payload = await operation
+    if (replayKey) syncReplayCache.set(replayKey, { payload, expiresAt: Date.now() + SYNC_REPLAY_TTL_MS })
+    return send(response, 200, payload, joined ? { 'Idempotency-Replayed': 'true' } : {})
+  } finally {
+    if (activeSyncs.get(user) === operation) activeSyncs.delete(user)
+  }
 }
 
 const handleAuth = await createAuthRouter({ env, origin, sessionSecret, send })
