@@ -17,9 +17,30 @@ jobs:
     environment: production-release
     timeout-minutes: 15
     steps:
+      - name: Require dispatch from main
+        env:
+          DISPATCH_REF: ${{ github.ref }}
+        run: |
+          if [ "$DISPATCH_REF" != "refs/heads/main" ]; then
+            echo "Production releases must be dispatched from the main branch, not $DISPATCH_REF"
+            exit 1
+          fi
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
+      - name: Resolve verified main commit
+        id: main
+        run: |
+          git fetch origin main --tags --force
+          git checkout --detach origin/main
+          main_sha="$(git rev-parse origin/main)"
+          checked_out_sha="$(git rev-parse HEAD)"
+          test "$checked_out_sha" = "$main_sha" || {
+            echo "Checked-out commit does not match origin/main"
+            exit 1
+          }
+          echo "sha=$main_sha" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -41,8 +62,19 @@ jobs:
         run: npm test
       - name: Enforce all release evidence gates
         run: npm run verify:release
+      - name: Ensure main did not advance during verification
+        env:
+          VERIFIED_MAIN_SHA: ${{ steps.main.outputs.sha }}
+        run: |
+          git fetch origin main --force
+          current_main_sha="$(git rev-parse origin/main)"
+          if [ "$current_main_sha" != "$VERIFIED_MAIN_SHA" ]; then
+            echo "main advanced during release verification; rerun against the new commit"
+            exit 1
+          fi
       - name: Create governed GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-        run: gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --generate-notes
+          VERIFIED_MAIN_SHA: ${{ steps.main.outputs.sha }}
+        run: gh release create "$RELEASE_TAG" --target "$VERIFIED_MAIN_SHA" --generate-notes
