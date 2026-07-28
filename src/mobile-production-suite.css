@@ -1,0 +1,94 @@
+:root {
+  --mobile-viewport-height: 100dvh;
+  --mobile-nav-height: 72px;
+}
+
+.mobile-bottom-nav,
+.mobile-sheet-backdrop { display: none; }
+
+@media (max-width: 768px), (pointer: coarse) and (max-width: 1024px) {
+  body { padding-bottom: calc(var(--mobile-nav-height) + var(--mobile-safe-bottom)); overflow-x: hidden; }
+  main { min-width: 0; padding-bottom: 1rem; }
+  .sidebar { display: none !important; }
+  .app-shell { display: block; min-width: 0; }
+  .topbar { position: sticky; top: 0; z-index: 30; padding-top: calc(0.75rem + var(--mobile-safe-top)); backdrop-filter: blur(18px); }
+  .topbar .primary { min-height: 48px; }
+  .dashboard-grid, .dashboard-grid.lower, .stats-grid, .goal-card-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .panel, .stat-card, .transaction-row, .account-row, .goal-item { min-width: 0; content-visibility: auto; contain-intrinsic-size: 1px 180px; }
+  .transaction-row { grid-template-columns: auto minmax(0, 1fr) auto !important; }
+  .transaction-row > .pill { display: none; }
+  .transaction-row > b { grid-column: 2; justify-self: start; }
+  .row-actions { grid-column: 3; grid-row: 1 / span 2; }
+  .chart { overflow-x: auto; overscroll-behavior-inline: contain; }
+  img { max-width: 100%; height: auto; }
+
+  .mobile-bottom-nav {
+    position: fixed; z-index: 10010; left: 0; right: 0; bottom: 0;
+    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+    min-height: calc(var(--mobile-nav-height) + var(--mobile-safe-bottom));
+    padding: 6px max(6px, var(--mobile-safe-right)) calc(6px + var(--mobile-safe-bottom)) max(6px, var(--mobile-safe-left));
+    border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+    background: color-mix(in srgb, Canvas 92%, transparent); color: CanvasText;
+    backdrop-filter: blur(22px) saturate(1.4);
+  }
+  .mobile-bottom-nav button {
+    border: 0; background: transparent; color: inherit; border-radius: 14px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    min-width: 0; min-height: 56px; padding: 4px; font: inherit;
+  }
+  .mobile-bottom-nav button span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: .68rem; white-space: nowrap; }
+  .mobile-bottom-nav button.active { background: color-mix(in srgb, currentColor 12%, transparent); font-weight: 750; }
+
+  .mobile-sheet-backdrop {
+    position: fixed; z-index: 10100; inset: 0; display: flex; align-items: flex-end;
+    background: rgb(0 0 0 / .48); padding-top: var(--mobile-safe-top);
+  }
+  .mobile-sheet {
+    width: 100%; max-height: min(78dvh, var(--mobile-viewport-height)); overflow: auto;
+    border-radius: 24px 24px 0 0; padding: 8px 16px calc(18px + var(--mobile-safe-bottom));
+    background: Canvas; color: CanvasText; box-shadow: 0 -20px 60px rgb(0 0 0 / .3);
+    animation: mobile-sheet-enter 180ms ease-out;
+  }
+  .mobile-sheet-handle { width: 44px; height: 5px; margin: 2px auto 12px; border-radius: 999px; background: color-mix(in srgb, currentColor 28%, transparent); }
+  .mobile-sheet-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .mobile-sheet-header strong { font-size: 1.05rem; }
+  .mobile-sheet-header button { border: 0; border-radius: 999px; background: color-mix(in srgb, currentColor 10%, transparent); }
+  .mobile-sheet-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .mobile-sheet-grid button { border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 16px; background: transparent; color: inherit; display: flex; align-items: center; gap: 10px; justify-content: flex-start; padding: 14px; font: inherit; }
+  .mobile-sheet-grid button.active { background: color-mix(in srgb, currentColor 12%, transparent); font-weight: 750; }
+
+  .modal-backdrop { align-items: flex-end !important; padding: 0 !important; }
+  .modal { width: 100% !important; max-width: none !important; max-height: min(90dvh, var(--mobile-viewport-height)); overflow: auto; border-radius: 24px 24px 0 0 !important; padding-bottom: calc(1rem + var(--mobile-safe-bottom)) !important; }
+  .mobile-keyboard-open .mobile-bottom-nav { display: none; }
+  .mobile-keyboard-open body { padding-bottom: var(--mobile-safe-bottom); }
+}
+
+@media (max-width: 390px) {
+  .mobile-bottom-nav button span { font-size: .62rem; }
+  .mobile-sheet-grid { grid-template-columns: 1fr; }
+  .topbar { gap: .5rem; }
+  .topbar h1 { font-size: clamp(1.35rem, 7vw, 1.8rem); }
+}
+
+@media (orientation: landscape) and (max-height: 520px) and (pointer: coarse) {
+  :root { --mobile-nav-height: 58px; }
+  .mobile-bottom-nav button { min-height: 44px; flex-direction: row; }
+  .mobile-sheet { max-height: 92dvh; }
+}
+
+@media (min-width: 600px) and (max-width: 1024px) and (pointer: coarse) {
+  .stats-grid, .goal-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .mobile-sheet { width: min(620px, 100%); margin-inline: auto; border-radius: 24px 24px 0 0; }
+}
+
+@media (prefers-contrast: more) {
+  .mobile-bottom-nav, .mobile-sheet-grid button { border-width: 2px; }
+  .mobile-bottom-nav button.active, .mobile-sheet-grid button.active { outline: 2px solid currentColor; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-sheet { animation: none; }
+  html { scroll-behavior: auto; }
+}
+
+@keyframes mobile-sheet-enter { from { transform: translateY(100%); } }
