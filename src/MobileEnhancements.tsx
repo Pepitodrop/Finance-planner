@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { flushMobileActions, queuedMobileActionCount } from './mobile-action-queue'
 import { canStartPullToRefresh, pullProgress, shouldRefreshFromPull, triggerHaptic } from './mobile-enhancements'
 
 const PULL_THRESHOLD = 84
@@ -8,6 +9,7 @@ export function MobileEnhancements() {
   const [distance, setDistance] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
   const [booting, setBooting] = useState(true)
+  const [queuedActions, setQueuedActions] = useState(() => queuedMobileActionCount())
 
   useEffect(() => {
     const timer = window.setTimeout(() => setBooting(false), 450)
@@ -65,6 +67,24 @@ export function MobileEnhancements() {
     return () => document.removeEventListener('click', handleFeedback)
   }, [])
 
+  useEffect(() => {
+    const handleQueueChange = (event: Event) => {
+      setQueuedActions(Number((event as CustomEvent<number>).detail || 0))
+    }
+    const replay = () => void flushMobileActions().then(({ completed, remaining }) => {
+      setQueuedActions(remaining)
+      if (completed > 0) triggerHaptic('success')
+    })
+
+    window.addEventListener('finance-planner:queue-change', handleQueueChange)
+    window.addEventListener('online', replay)
+    if (navigator.onLine) replay()
+    return () => {
+      window.removeEventListener('finance-planner:queue-change', handleQueueChange)
+      window.removeEventListener('online', replay)
+    }
+  }, [])
+
   const progress = pullProgress(distance, PULL_THRESHOLD)
 
   return (
@@ -74,12 +94,17 @@ export function MobileEnhancements() {
           className="mobile-pull-indicator"
           role="status"
           aria-live="polite"
-          style={{ transform: `translateY(${Math.min(distance, PULL_THRESHOLD)}px)` }}
+          style={{ transform: `translate(-50%, ${Math.min(distance, PULL_THRESHOLD)}px)` }}
         >
           <span className={refreshing ? 'mobile-pull-indicator__spinner' : ''} aria-hidden="true">
             {refreshing ? '↻' : progress >= 1 ? '↑' : '↓'}
           </span>
           {refreshing ? 'Refreshing…' : progress >= 1 ? 'Release to refresh' : 'Pull to refresh'}
+        </div>
+      )}
+      {queuedActions > 0 && (
+        <div className="mobile-queue-status" role="status" aria-live="polite">
+          {queuedActions} change{queuedActions === 1 ? '' : 's'} waiting for connection
         </div>
       )}
       {booting && (
