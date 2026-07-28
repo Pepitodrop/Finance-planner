@@ -7,7 +7,7 @@
   "scope": "/",
   "display": "standalone",
   "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
-  "orientation": "portrait-primary",
+  "orientation": "any",
   "background_color": "#080c18",
   "theme_color": "#0b1020",
   "lang": "de-DE",
@@ -17,12 +17,40 @@
   "launch_handler": {
     "client_mode": ["navigate-existing", "auto"]
   },
+  "share_target": {
+    "action": "/?source=share-target",
+    "method": "GET",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
   "shortcuts": [
     {
-      "name": "Open dashboard",
-      "short_name": "Dashboard",
-      "description": "Open the finance overview.",
-      "url": "/?source=shortcut"
+      "name": "Finanzübersicht öffnen",
+      "short_name": "Übersicht",
+      "description": "Öffnet die persönliche Finanzübersicht.",
+      "url": "/?source=shortcut&tab=dashboard"
+    },
+    {
+      "name": "Transaktionen öffnen",
+      "short_name": "Buchungen",
+      "description": "Öffnet die Transaktionsübersicht.",
+      "url": "/?source=shortcut&tab=transactions"
+    },
+    {
+      "name": "Neue Buchung",
+      "short_name": "Neue Buchung",
+      "description": "Öffnet Finance Planner für eine neue Buchung.",
+      "url": "/?source=shortcut&action=new-transaction"
+    },
+    {
+      "name": "Finanzassistent öffnen",
+      "short_name": "Assistent",
+      "description": "Öffnet den Finanzassistenten.",
+      "url": "/?source=shortcut&tab=assistant"
     }
   ],
   "icons": [
