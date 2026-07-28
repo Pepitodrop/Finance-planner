@@ -1,5 +1,16 @@
 const DEFAULT_BASE_URL = 'https://router.huggingface.co/v1'
 
+function linkAbortSignals(controller, signal) {
+  if (!signal) return () => {}
+  if (signal.aborted) {
+    controller.abort(signal.reason)
+    return () => {}
+  }
+  const onAbort = () => controller.abort(signal.reason)
+  signal.addEventListener('abort', onAbort, { once: true })
+  return () => signal.removeEventListener('abort', onAbort)
+}
+
 export function createHuggingFaceChatTransport({
   token,
   baseUrl = DEFAULT_BASE_URL,
@@ -9,9 +20,10 @@ export function createHuggingFaceChatTransport({
   if (!token) throw new Error('HF_TOKEN is required for Hugging Face inference')
 
   return {
-    async chatCompletion({ model, messages, temperature = 0.1, maxTokens = 900 }) {
+    async chatCompletion({ model, messages, temperature = 0.1, maxTokens = 900, signal }) {
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), timeoutMs)
+      const unlink = linkAbortSignals(controller, signal)
+      const timeout = setTimeout(() => controller.abort(new Error('Hugging Face inference timed out')), timeoutMs)
       try {
         const response = await fetchImpl(`${baseUrl}/chat/completions`, {
           method: 'POST',
@@ -40,6 +52,7 @@ export function createHuggingFaceChatTransport({
         return content
       } finally {
         clearTimeout(timeout)
+        unlink()
       }
     },
   }
