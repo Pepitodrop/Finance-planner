@@ -1,34 +1,36 @@
-const ALLOWED_OPEN_MODELS = Object.freeze({
-  analyst: new Set([
-    'Qwen/Qwen3-4B-Thinking-2507:fastest',
-    'Qwen/Qwen3-4B-Instruct-2507:fastest',
+const REVIEWED_MODEL_REVISIONS = Object.freeze({
+  analyst: new Map([
+    ['Qwen/Qwen3-4B-Thinking-2507:fastest', '768f209d9ea81521153ed38c47d515654e938aea'],
   ]),
-  critic: new Set([
-    'Qwen/Qwen3-4B-Instruct-2507:fastest',
-    'Qwen/Qwen3-4B-Thinking-2507:fastest',
+  critic: new Map([
+    ['Qwen/Qwen3-4B-Instruct-2507:fastest', '1b4199c4f36b0cef378bfb12390c18780c18af4c'],
   ]),
 })
 
-function immutableRevision(value, name) {
-  const revision = String(value || '')
-  if (!/^[0-9a-f]{40}$/.test(revision)) throw new Error(`${name} must be an immutable 40-character Hugging Face revision`)
-  return revision
+function reviewedModel(role, modelValue, revisionValue) {
+  const model = String(modelValue || '')
+  const revision = String(revisionValue || '')
+  if (!/^[0-9a-f]{40}$/.test(revision)) throw new Error(`${role} revision must be an immutable 40-character Hugging Face revision`)
+  const reviewedRevision = REVIEWED_MODEL_REVISIONS[role]?.get(model)
+  if (!reviewedRevision) throw new Error(`${role} model is not in the reviewed model-and-revision allowlist`)
+  if (revision !== reviewedRevision) throw new Error(`${role} model revision does not match the reviewed production lock`)
+  return { model, revision }
 }
 
 export function governedAiModels(env, defaults) {
-  const analyst = {
-    model: String(env.HF_MODEL || defaults.model),
-    revision: immutableRevision(env.HF_MODEL_REVISION || defaults.revision, 'HF_MODEL_REVISION'),
-  }
-  if (!ALLOWED_OPEN_MODELS.analyst.has(analyst.model)) throw new Error('HF_MODEL is not in the reviewed open-model allowlist')
+  const analyst = reviewedModel(
+    'analyst',
+    env.HF_MODEL || defaults.model,
+    env.HF_MODEL_REVISION || defaults.revision,
+  )
 
   const criticEnabled = env.HF_CRITIC_ENABLED === 'true'
   if (!criticEnabled) return { analyst, critic: null }
-  const critic = {
-    model: String(env.HF_CRITIC_MODEL || 'Qwen/Qwen3-4B-Instruct-2507:fastest'),
-    revision: immutableRevision(env.HF_CRITIC_MODEL_REVISION, 'HF_CRITIC_MODEL_REVISION'),
-  }
-  if (!ALLOWED_OPEN_MODELS.critic.has(critic.model)) throw new Error('HF_CRITIC_MODEL is not in the reviewed open-model allowlist')
+  const critic = reviewedModel(
+    'critic',
+    env.HF_CRITIC_MODEL || 'Qwen/Qwen3-4B-Instruct-2507:fastest',
+    env.HF_CRITIC_MODEL_REVISION || '1b4199c4f36b0cef378bfb12390c18780c18af4c',
+  )
   return { analyst, critic }
 }
 
