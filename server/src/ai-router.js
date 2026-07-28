@@ -62,9 +62,91 @@ function validateModelResult(value) {
     if (typeof item.explanation !== 'string' || item.explanation.trim().length < 1 || item.explanation.length > 600) throw new Error('AI signal explanation is invalid')
     if (!Array.isArray(item.evidence) || item.evidence.length > 5 || !item.evidence.every((entry) => typeof entry === 'string' && entry.length <= 200)) throw new Error('AI evidence is invalid')
     if (item.suggestedAction !== undefined && (typeof item.suggestedAction !== 'string' || item.suggestedAction.length > 300)) throw new Error('AI suggested action is invalid')
-    return { type: item.type, severity: item.severity, title: item.title, explanation: item.explanation, confidence: clampConfidence(item.confidence), evidence: item.evidence, ...(item.suggestedAction ? { suggestedAction: item.suggestedAction } : {}), requiresApproval: true }
+    return { type: item.type, severity: item.severity, title: item.title, explanation: item.explanation, confidence: clampConfidence(item.confidence), modelRationale: item.evidence, ...(item.suggestedAction ? { suggestedAction: item.suggestedAction } : {}), requiresApproval: true }
   })
-  return { summary: value.summary, confidence: clampConfidence(value.confidence), signals }
+  return { modelSummary: value.summary, confidence: clampConfidence(value.confidence), signals }
+}
+
+function dataQuality(snapshot) {
+  const transactionScore = Math.min(1, snapshot.transactionCount / 60)
+  const historyScore = Math.min(1, snapshot.monthsCovered / 6)
+  const score = Number(((transactionScore + historyScore) / 2).toFixed(2))
+  const level = score >= 0.8 ? 'high' : score >= 0.45 ? 'medium' : 'low'
+  return { score, level, transactionCount: snapshot.transactionCount, monthsCovered: snapshot.monthsCovered }
+}
+
+function verifiedEvidence(signal, snapshot) {
+  switch (signal.type) {
+    case 'cashflow': return [`freeCashCents=${snapshot.freeCashCents}`, `incomeCents=${snapshot.incomeCents}`, `expenseCents=${snapshot.expenseCents}`]
+    case 'recurring-cost': return [`recurringExpenseCents=${snapshot.recurringExpenseCents}`]
+    case 'goal-risk': return [`goalCount=${snapshot.goals.length}`]
+    case 'data-quality': return [`transactionCount=${snapshot.transactionCount}`, `monthsCovered=${snapshot.monthsCovered}`]
+    case 'anomaly': return [`transactionCount=${snapshot.transactionCount}`, 'anomalyRequiresTransactionLevelVerification=true']
+    default: return []
+  }
+}
+
+function reconciledSummary(signals) {
+  if (signals.length === 0) return 'Nach Abgleich mit den verifizierten Finanzdaten wurden keine belastbaren KI-Hinweise übernommen.'
+  const critical = signals.filter((signal) => signal.severity === 'critical').length
+  const warning = signals.filter((signal) => signal.severity === 'warning').length
+  const info = signals.filter((signal) => signal.severity === 'info').length
+  return `Nach Abgleich mit den verifizierten Finanzdaten wurden ${signals.length} Hinweise übernommen (${critical} kritisch, ${warning} Warnungen, ${info} informativ).`
+}
+
+function reconcileModelResult(result, snapshot) {
+  const quality = dataQuality(snapshot)
+  const warnings = []
+  const confidenceCap = quality.level === 'low' ? 0.6 : quality.level === 'medium' ? 0.8 : 0.95
+  const signals = []
+
+  for (const original of result.signals) {
+    if (original.type === 'recurring-cost' && snapshot.recurringExpenseCents === 0) {
+      warnings.push('Removed recurring-cost signal because the verified snapshot contains no recurring expenses.')
+      continue
+    }
+    if (original.type === 'goal-risk' && snapshot.goals.length === 0) {
+      warnings.push('Removed goal-risk signal because the verified snapshot contains no goals.')
+      continue
+    }
+
+    const signal = { ...original }
+    signal.confidence = Math.min(signal.confidence, confidenceCap)
+
+    if (signal.type === 'cashflow') {
+      if (snapshot.freeCashCents <= 0) signal.severity = 'critical'
+      else if (signal.severity === 'critical') {
+        signal.severity = 'warning'
+        warnings.push('Downgraded unsupported critical cashflow severity because verified free cash is positive.')
+      }
+    }
+
+    if (signal.type === 'anomaly') {
+      signal.confidence = Math.min(signal.confidence, 0.55)
+      if (signal.severity === 'critical') signal.severity = 'warning'
+      warnings.push('Anomaly confidence was capped because only aggregate data was supplied.')
+    }
+
+    signal.evidence = verifiedEvidence(signal, snapshot)
+    signals.push(signal)
+  }
+
+  const calibratedConfidence = Math.min(result.confidence, confidenceCap)
+  if (calibratedConfidence < result.confidence) warnings.push(`Overall confidence was capped at ${confidenceCap} because data quality is ${quality.level}.`)
+
+  return {
+    summary: reconciledSummary(signals),
+    modelSummary: result.modelSummary,
+    confidence: calibratedConfidence,
+    signals,
+    confidenceDetails: {
+      modelConfidence: result.confidence,
+      calibratedConfidence,
+      dataQuality: quality,
+      policy: 'Confidence is capped by verified history depth; anomaly claims are additionally capped until transaction-level verification is available. Summary and evidence are generated from accepted verified facts; model rationale is labelled separately.',
+    },
+    warnings,
+  }
 }
 
 function deterministicFallback(snapshot, warning) {
@@ -72,7 +154,9 @@ function deterministicFallback(snapshot, warning) {
   if (snapshot.freeCashCents <= 0) signals.push({ type: 'cashflow', severity: 'critical', title: 'Cashflow ist nicht positiv', explanation: 'Die erfassten Ausgaben übersteigen oder entsprechen den Einnahmen.', confidence: 0.98, evidence: [`incomeCents=${snapshot.incomeCents}`, `expenseCents=${snapshot.expenseCents}`], suggestedAction: 'Ausgaben prüfen und vor neuen Sparzuweisungen einen Liquiditätspuffer herstellen.', requiresApproval: true })
   if (snapshot.recurringExpenseCents > 0) signals.push({ type: 'recurring-cost', severity: 'warning', title: 'Wiederkehrende Kosten prüfen', explanation: 'Wiederkehrende Ausgaben sollten regelmäßig einzeln überprüft werden.', confidence: 0.95, evidence: [`recurringExpenseCents=${snapshot.recurringExpenseCents}`], suggestedAction: 'Abonnements und feste Verträge einzeln bestätigen oder kündigen.', requiresApproval: true })
   if (snapshot.transactionCount < 15 || snapshot.monthsCovered < 3) signals.push({ type: 'data-quality', severity: 'info', title: 'Noch wenig belastbare Historie', explanation: 'Prognosen und personalisierte Empfehlungen sind wegen der begrenzten Datenbasis vorsichtig zu interpretieren.', confidence: 0.99, evidence: [`transactionCount=${snapshot.transactionCount}`, `monthsCovered=${snapshot.monthsCovered}`], requiresApproval: true })
-  return { summary: signals.length ? 'Regelbasierte Analyse verfügbar; das Sprachmodell konnte nicht sicher verwendet werden.' : 'Keine dringenden regelbasierten Risiken erkannt.', signals, confidence: signals.length ? 0.86 : 0.7, source: 'deterministic-fallback', generatedAt: new Date().toISOString(), warnings: [String(warning).slice(0, 300)] }
+  const quality = dataQuality(snapshot)
+  const confidence = signals.length ? 0.86 : 0.7
+  return { summary: signals.length ? 'Regelbasierte Analyse verfügbar; das Sprachmodell konnte nicht sicher verwendet werden.' : 'Keine dringenden regelbasierten Risiken erkannt.', signals, confidence, confidenceDetails: { modelConfidence: null, calibratedConfidence: confidence, dataQuality: quality, policy: 'Deterministic rule-engine result; no model-generated financial claim was accepted.' }, source: 'deterministic-fallback', generatedAt: new Date().toISOString(), warnings: [String(warning).slice(0, 300)] }
 }
 
 export function createAiRouter({ env, send, body, userId, transportFactory = createHuggingFaceChatTransport, loadBehaviorEvents = null }) {
@@ -102,8 +186,8 @@ export function createAiRouter({ env, send, body, userId, transportFactory = cre
     const model = String(env.HF_MODEL || DEFAULT_MODEL)
     try {
       const content = await transport.chatCompletion({ model, temperature: 0.1, maxTokens: 900, messages: [{ role: 'system', content: 'Du bist ein vorsichtiger Finanzanalyse-Assistent. Nutze ausschließlich die aggregierten Fakten. Erfinde keine Transaktionen, stelle keine Rechts-, Steuer- oder Anlageberatung als sicher dar und führe keine Aktion aus. Antworte ausschließlich als JSON mit summary, confidence und signals. Zulässige type-Werte: cashflow, recurring-cost, goal-risk, anomaly, data-quality. Jede Empfehlung bleibt genehmigungspflichtig.' }, { role: 'user', content: `Analysiere diesen anonymisierten Finanz-Snapshot: ${JSON.stringify(snapshot)}` }] })
-      const validated = validateModelResult(extractJson(content))
-      send(response, 200, { ...validated, source: 'hugging-face', model, generatedAt: new Date().toISOString(), warnings: [] })
+      const reconciled = reconcileModelResult(validateModelResult(extractJson(content)), snapshot)
+      send(response, 200, { ...reconciled, source: 'hugging-face-reconciled', model, generatedAt: new Date().toISOString() })
     } catch (error) {
       send(response, 200, deterministicFallback(snapshot, error instanceof Error ? error.message : 'Hugging Face inference failed'))
     }
