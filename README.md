@@ -11,9 +11,10 @@ Finance Planner is an offline-first personal finance application built with Reac
 - deterministic integer-cent financial calculations
 - GnuCOBOL transaction normalization, balance updates, and savings projections
 - local browser AI using ONNX-compatible Hugging Face models
-- guarded server-side Hugging Face financial reasoning with deterministic fallback
+- governed server-side Hugging Face analyst/critic reasoning with deterministic fallback
+- deterministic savings-rate, recurring-cost-share, and liquidity-runway scenario intelligence
 - adaptive transaction categorization and a privacy-preserving behavior-learning engine
-- governed catalog for lightweight semantic-search, speech, vision, and graph models
+- governed catalog for semantic-search, speech, and vision models
 - authenticated GoCardless and PayPal connector flows
 - encrypted backend persistence with corruption recovery and previous-generation backup
 - production containers, readiness checks, rate limiting, structured logs, and graceful shutdown
@@ -32,7 +33,7 @@ The PWA includes safe-area handling, standalone launch metadata, offline-state f
 
 ## AI architecture
 
-Finance Planner separates exact financial computation from probabilistic AI. Balances, transaction totals, savings projections, and other monetary values remain deterministic. AI output is advisory, schema-validated, bounded, and cannot execute transactions or modify balances.
+Finance Planner separates exact financial computation from probabilistic AI. Balances, transaction totals, savings projections, scenario metrics, and other monetary values remain deterministic. AI output is advisory, schema-validated, bounded, and cannot execute transactions or modify balances.
 
 ### Included Hugging Face models
 
@@ -41,11 +42,12 @@ Finance Planner separates exact financial computation from probabilistic AI. Bal
 | `onnx-community/Qwen2.5-0.5B-Instruct` | Browser/WebGPU or WASM | Local conversational assistance | Enabled where supported |
 | `Xenova/flan-t5-small` | Browser/WASM | Lower-resource local assistant fallback | Enabled as fallback |
 | `Xenova/paraphrase-multilingual-MiniLM-L12-v2` | Browser/ONNX | Local multilingual transaction embeddings and categorization | Enabled |
-| `Qwen/Qwen3-4B-Thinking-2507:fastest` | Hugging Face Inference Provider | Guarded financial reasoning and structured explanations | Optional; requires `HF_TOKEN` and explicit consent |
-| `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | Planned local worker | Multilingual semantic search and pattern similarity | Registered; disabled by default |
-| `openai/whisper-tiny` | Planned local worker | Lightweight German/English voice entry | Registered; disabled by default |
-| `microsoft/Florence-2-base` | Planned local worker | Receipt and invoice image extraction | Registered; disabled by default |
-| `mgalkin/ultra_3g` | Planned isolated graph worker | Experimental relationship and link prediction | Registered; disabled by default |
+| `Qwen/Qwen3-4B-Thinking-2507:fastest` | Hosted or self-hosted Hugging Face runtime | Governed primary financial analyst | Optional; requires `HF_TOKEN` and explicit consent for hosted inference |
+| `Qwen/Qwen3-4B-Instruct-2507:fastest` | Hosted or self-hosted Hugging Face runtime | Independent second-pass critic and confidence calibration | Integrated; disabled by default |
+| `BAAI/bge-m3` | Sandboxed local worker | Multilingual semantic retrieval and clustering | Worker-ready; disabled by default |
+| `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | Sandboxed local worker | Lightweight multilingual semantic search | Worker-ready; disabled by default |
+| `openai/whisper-tiny` | Sandboxed local worker | Lightweight German/English voice entry | Worker-ready; disabled by default |
+| `microsoft/Florence-2-base` | Sandboxed local worker | Receipt and invoice image extraction | Worker-ready; disabled by default |
 
 Model weights are not committed to this repository. “Free” means the project introduces no proprietary model licence fee. Hosted Hugging Face inference can still consume provider credits or incur usage charges, while local execution consumes CPU, RAM, storage, and possibly GPU capacity.
 
@@ -72,25 +74,44 @@ This local model stack does not send financial data to a hosted inference API.
 
 ### Guarded external financial reasoning
 
-`Qwen/Qwen3-4B-Thinking-2507:fastest` is the default optional server-side reasoning model. It receives only a restricted aggregate snapshot after authentication and explicit external-AI consent.
+`Qwen/Qwen3-4B-Thinking-2507:fastest` is the governed primary server-side analyst. An optional independent `Qwen/Qwen3-4B-Instruct-2507:fastest` critic can review the analyst output. When enabled, only signals independently supported by both models are retained, confidence is capped across both passes, and agreement metadata is exposed.
 
-The snapshot may include integer-cent totals, transaction count, covered months, ranked category totals, and remaining savings-goal amounts. It excludes raw merchant descriptions, account names, transaction identifiers, IBANs, credentials, and access tokens.
+Both runtime models are locked to reviewed immutable revisions. An unknown model, malformed revision, or revision that differs from the reviewed production lock fails closed to deterministic output.
+
+The hosted path receives only a restricted aggregate snapshot after authentication and explicit external-AI consent. The snapshot may include integer-cent totals, transaction count, covered months, ranked category totals, and remaining savings-goal amounts. It excludes raw merchant descriptions, account names, transaction identifiers, IBANs, credentials, and access tokens.
 
 ```http
 POST /api/ai/financial-intelligence
 Content-Type: application/json
 ```
 
-The backend validates the model response against strict allowlists and size limits. Unsupported, malformed, timed-out, or unavailable model output is replaced with deterministic financial signals. Every suggested action remains approval-gated.
+The backend validates each model response against strict allowlists and size limits. Unsupported, malformed, timed-out, unavailable, or unreviewed model output is replaced with deterministic financial signals. Every suggested action remains approval-gated.
 
 Configure the hosted reasoning layer with:
 
 ```bash
 HF_TOKEN=hf_...
 HF_MODEL=Qwen/Qwen3-4B-Thinking-2507:fastest
+HF_MODEL_REVISION=768f209d9ea81521153ed38c47d515654e938aea
+
+# Optional independent critic
+HF_CRITIC_ENABLED=true
+HF_CRITIC_MODEL=Qwen/Qwen3-4B-Instruct-2507:fastest
+HF_CRITIC_MODEL_REVISION=1b4199c4f36b0cef378bfb12390c18780c18af4c
 ```
 
 Never expose `HF_TOKEN` through Vite variables or client-side bundles.
+
+### Deterministic scenario intelligence
+
+Scenario intelligence does not require external inference. It calculates savings rate, recurring-expense share, liquidity runway, and bounded warning signals directly from the validated aggregate snapshot.
+
+```http
+POST /api/ai/scenario-intelligence
+Content-Type: application/json
+```
+
+The same scenario metrics are included with deterministic fallback responses from the financial-intelligence endpoint.
 
 ### Behavior learning and predictions
 
@@ -122,11 +143,11 @@ Current privacy and safety constraints:
 - unknown fields are rejected;
 - all recommendations remain approval-gated.
 
-The current first-stage learner is deterministic and inspectable. The registered graph model is experimental and remains disabled until it has a dedicated isolated worker, pinned revision, representative evaluation data, measurable accuracy thresholds, resource budgets, and privacy review.
+The current first-stage learner is deterministic and inspectable. Additional semantic, speech, and vision capabilities remain disabled until their sandboxed workers have representative evaluation data, measurable accuracy thresholds, resource budgets, and privacy review.
 
 ## Backend and COBOL API
 
-The Node.js backend provides authentication, provider synchronization, encrypted connector storage, deterministic COBOL calculations, guarded AI routing, and behavior-pattern prediction.
+The Node.js backend provides authentication, provider synchronization, encrypted connector storage, deterministic COBOL calculations, guarded AI routing, scenario intelligence, and behavior-pattern prediction.
 
 Authenticated savings projection endpoint:
 
@@ -239,7 +260,7 @@ GitHub Actions validates:
 - COBOL transaction behavior;
 - production container builds and Compose configuration;
 - PWA and mobile invariants;
-- guarded AI schemas and behavior-learning constraints.
+- governed AI ensemble, immutable model locks, scenario intelligence, schemas, safety controls, and behavior-learning constraints.
 
 A production release should require green CI for the exact commit, verified backups and restoration, documented rollback artifacts, validated OAuth callbacks, no unresolved critical/high vulnerabilities, and an accountable release owner.
 
@@ -268,10 +289,10 @@ The largest remaining gaps are tracked in the production-readiness roadmap and i
 - Playwright end-to-end, accessibility, load, and physical-device test matrices;
 - signed native mobile and desktop releases;
 - formal threat modeling, penetration testing, privacy review, retention controls, data export, and account deletion;
-- pinned model revisions and software-bill-of-materials coverage for every enabled model;
+- pinned revisions and software-bill-of-materials coverage for every model enabled in production;
 - representative AI and behavior-prediction evaluation datasets;
-- measurable accuracy, abstention, drift, latency, memory, fallback-rate, and safety thresholds;
-- dedicated sandboxed workers for speech, vision, semantic search, and graph inference before those capabilities are enabled in production.
+- measurable accuracy, abstention, agreement, drift, latency, memory, fallback-rate, and safety thresholds;
+- dedicated sandboxed workers for speech, vision, and semantic-search inference before those capabilities are enabled in production.
 
 ## Security
 
