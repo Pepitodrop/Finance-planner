@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import { AuthGate } from './AuthGate'
 import { ErrorBoundary } from './ErrorBoundary'
+import { MobileConnectivityStatus } from './MobileConnectivityStatus'
 import { MobileRuntime } from './MobileRuntime'
 import { VaultGate } from './VaultGate'
 import './styles.css'
@@ -17,6 +18,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>
       <MobileRuntime />
+      <MobileConnectivityStatus />
       <AuthGate><VaultGate><App /></VaultGate></AuthGate>
     </ErrorBoundary>
   </React.StrictMode>,
