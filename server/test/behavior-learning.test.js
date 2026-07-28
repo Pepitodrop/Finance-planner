@@ -3,12 +3,14 @@ import test from 'node:test'
 import { learnBehaviorPatterns, validateBehaviorHistory } from '../src/behavior-learning.js'
 import { publicModelCatalog } from '../src/ai-model-catalog.js'
 
-test('catalog distinguishes integrated and catalog-only capabilities', () => {
+test('catalog distinguishes integrated and worker-ready capabilities', () => {
   const models = publicModelCatalog()
-  assert.equal(models.length, 5)
+  assert.equal(models.length, 6)
   assert.equal(models.filter((model) => model.integrationStatus === 'integrated').length, 1)
-  assert.equal(models.filter((model) => model.integrationStatus === 'catalog-only').length, 4)
+  assert.equal(models.filter((model) => model.integrationStatus === 'integrated-optional').length, 1)
+  assert.equal(models.filter((model) => model.integrationStatus === 'worker-ready').length, 4)
   assert.equal(models.filter((model) => model.enabledByDefault).length, 1)
+  assert.ok(models.every((model) => typeof model.license === 'string' && model.license.length > 0))
 })
 
 test('learns bounded behavior patterns without descriptions or identifiers', () => {
