@@ -20,16 +20,18 @@ export async function probeSameOrigin(
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
-    const url = new URL('/manifest.webmanifest', origin)
+    const url = new URL('/health/ready', origin)
     url.searchParams.set('connectivity-check', String(Date.now()))
     const response = await fetcher(url, {
       method: 'GET',
       cache: 'no-store',
       credentials: 'same-origin',
       signal: controller.signal,
-      headers: { Accept: 'application/manifest+json, application/json;q=0.9, */*;q=0.1' },
+      headers: { Accept: 'application/json' },
     })
-    return response.ok
+    if (!response.ok) return false
+    const payload = await response.json().catch(() => null) as { status?: unknown } | null
+    return payload?.status === 'ready'
   } catch {
     return false
   } finally {
