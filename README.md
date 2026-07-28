@@ -1,6 +1,6 @@
 # Finance Planner
 
-Finance Planner is an offline-first personal finance application built with React, TypeScript, Node.js, and GnuCOBOL. It combines responsive financial dashboards, deterministic money calculations, local AI assistance, and optional bank/payment-provider connections.
+Finance Planner is an offline-first personal finance application built with React, TypeScript, Node.js, and GnuCOBOL. It combines responsive financial dashboards, deterministic money calculations, local AI assistance, optional privacy-minimised Hugging Face reasoning, behavior-pattern learning, and optional bank/payment-provider connections.
 
 > **Project status:** hardened MVP. The repository includes production-oriented containers, CI, encrypted connector storage, backup and restore tooling, health checks, and operational documentation. It has not yet completed an independent security audit, live-provider certification, or multi-instance database migration.
 
@@ -11,7 +11,9 @@ Finance Planner is an offline-first personal finance application built with Reac
 - deterministic integer-cent financial calculations
 - GnuCOBOL transaction normalization, balance updates, and savings projections
 - local browser AI using ONNX-compatible Hugging Face models
-- adaptive transaction categorization and a local behavior-learning graph
+- guarded server-side Hugging Face financial reasoning with deterministic fallback
+- adaptive transaction categorization and a privacy-preserving behavior-learning engine
+- governed catalog for lightweight semantic-search, speech, vision, and graph models
 - authenticated GoCardless and PayPal connector flows
 - encrypted backend persistence with corruption recovery and previous-generation backup
 - production containers, readiness checks, rate limiting, structured logs, and graceful shutdown
@@ -30,24 +32,101 @@ The PWA includes safe-area handling, standalone launch metadata, offline-state f
 
 ## AI architecture
 
-### Semantic transaction intelligence
+Finance Planner separates exact financial computation from probabilistic AI. Balances, transaction totals, savings projections, and other monetary values remain deterministic. AI output is advisory, schema-validated, bounded, and cannot execute transactions or modify balances.
+
+### Included Hugging Face models
+
+| Model | Runtime | Purpose | Current state |
+|---|---|---|---|
+| `onnx-community/Qwen2.5-0.5B-Instruct` | Browser/WebGPU or WASM | Local conversational assistance | Enabled where supported |
+| `Xenova/flan-t5-small` | Browser/WASM | Lower-resource local assistant fallback | Enabled as fallback |
+| `Xenova/paraphrase-multilingual-MiniLM-L12-v2` | Browser/ONNX | Local multilingual transaction embeddings and categorization | Enabled |
+| `Qwen/Qwen3-4B-Thinking-2507:fastest` | Hugging Face Inference Provider | Guarded financial reasoning and structured explanations | Optional; requires `HF_TOKEN` and explicit consent |
+| `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | Planned local worker | Multilingual semantic search and pattern similarity | Registered; disabled by default |
+| `openai/whisper-tiny` | Planned local worker | Lightweight German/English voice entry | Registered; disabled by default |
+| `microsoft/Florence-2-base` | Planned local worker | Receipt and invoice image extraction | Registered; disabled by default |
+| `mgalkin/ultra_3g` | Planned isolated graph worker | Experimental relationship and link prediction | Registered; disabled by default |
+
+Model weights are not committed to this repository. “Free” means the project introduces no proprietary model licence fee. Hosted Hugging Face inference can still consume provider credits or incur usage charges, while local execution consumes CPU, RAM, storage, and possibly GPU capacity.
+
+The model catalog is available through the authenticated endpoint:
+
+```http
+GET /api/ai/models
+```
+
+### Local semantic transaction intelligence
 
 `Xenova/paraphrase-multilingual-MiniLM-L12-v2` provides multilingual embeddings for transaction categorization, merchant normalization, similarity analysis, and explainable confidence scoring.
 
-### Adaptive assistant
+### Local adaptive assistant
 
-The local assistant uses:
+The browser assistant uses:
 
-1. `onnx-community/Qwen2.5-0.5B-Instruct` as the primary browser model, using WebGPU where available;
+1. `onnx-community/Qwen2.5-0.5B-Instruct` as the primary local model, using WebGPU where available;
 2. `Xenova/flan-t5-small` as a lower-resource fallback;
 3. deterministic routing for balances, recurring costs, cash flow, and other exact monetary answers;
 4. local conversational context and a user-confirmed merchant/category behavior graph.
 
-Financial data is not sent to a hosted inference API by this model stack. The assistant is advisory and cannot execute transactions or modify balances directly.
+This local model stack does not send financial data to a hosted inference API.
+
+### Guarded external financial reasoning
+
+`Qwen/Qwen3-4B-Thinking-2507:fastest` is the default optional server-side reasoning model. It receives only a restricted aggregate snapshot after authentication and explicit external-AI consent.
+
+The snapshot may include integer-cent totals, transaction count, covered months, ranked category totals, and remaining savings-goal amounts. It excludes raw merchant descriptions, account names, transaction identifiers, IBANs, credentials, and access tokens.
+
+```http
+POST /api/ai/financial-intelligence
+Content-Type: application/json
+```
+
+The backend validates the model response against strict allowlists and size limits. Unsupported, malformed, timed-out, or unavailable model output is replaced with deterministic financial signals. Every suggested action remains approval-gated.
+
+Configure the hosted reasoning layer with:
+
+```bash
+HF_TOKEN=hf_...
+HF_MODEL=Qwen/Qwen3-4B-Thinking-2507:fastest
+```
+
+Never expose `HF_TOKEN` through Vite variables or client-side bundles.
+
+### Behavior learning and predictions
+
+The behavior learner derives user-specific patterns from structured financial history without accepting raw descriptions, merchant names, account identifiers, credentials, or arbitrary text.
+
+It can learn from a bounded rolling history and identify:
+
+- typical income and expense levels;
+- recurring-cost pressure;
+- category concentration;
+- weekday spending patterns;
+- weekly volatility;
+- changes that may affect the next finance plan.
+
+It produces bounded advisory predictions for the next 30 days, including expected income, expenses, and free cash flow. Predictions include confidence and evidence, require explicit behavior-learning consent, and never execute financial actions.
+
+```http
+POST /api/ai/behavior-prediction
+Content-Type: application/json
+```
+
+Current privacy and safety constraints:
+
+- maximum 5,000 structured events;
+- rolling 120-day learning window;
+- user-specific input only;
+- no raw descriptions or identifiers;
+- no persistence inside the learner;
+- unknown fields are rejected;
+- all recommendations remain approval-gated.
+
+The current first-stage learner is deterministic and inspectable. The registered graph model is experimental and remains disabled until it has a dedicated isolated worker, pinned revision, representative evaluation data, measurable accuracy thresholds, resource budgets, and privacy review.
 
 ## Backend and COBOL API
 
-The Node.js backend provides authentication, provider synchronization, encrypted connector storage, and deterministic COBOL calculations.
+The Node.js backend provides authentication, provider synchronization, encrypted connector storage, deterministic COBOL calculations, guarded AI routing, and behavior-pattern prediction.
 
 Authenticated savings projection endpoint:
 
@@ -129,8 +208,9 @@ Public deployments must:
 - use a configured production authentication mode, never `AUTH_MODE=local`;
 - generate independent high-entropy `SESSION_SECRET` and `CONNECTOR_MASTER_KEY` values;
 - keep the connector port private;
+- keep all model-provider tokens server-side;
 - configure live provider credentials explicitly;
-- centralize logs and alert on readiness failures, restart loops, HTTP 5xx rates, provider errors, disk usage, and backup age.
+- centralize logs and alert on readiness failures, restart loops, HTTP 5xx rates, provider errors, AI fallback rates, schema failures, latency, disk usage, and backup age.
 
 The complete deployment, monitoring, rollback, incident-response, and disaster-recovery requirements are in [`docs/PRODUCTION.md`](docs/PRODUCTION.md).
 
@@ -158,7 +238,8 @@ GitHub Actions validates:
 - backend tests, syntax, dependency audit, and GnuCOBOL compilation;
 - COBOL transaction behavior;
 - production container builds and Compose configuration;
-- PWA and mobile invariants.
+- PWA and mobile invariants;
+- guarded AI schemas and behavior-learning constraints.
 
 A production release should require green CI for the exact commit, verified backups and restoration, documented rollback artifacts, validated OAuth callbacks, no unresolved critical/high vulnerabilities, and an accountable release owner.
 
@@ -167,12 +248,12 @@ A production release should require green CI for the exact commit, verified back
 ```text
 src/                    React/TypeScript web app, PWA runtime, and local AI
 public/                 manifest, service worker, and install assets
-server/                 authentication, providers, encrypted storage, and COBOL API
+server/                 authentication, providers, encrypted storage, COBOL and AI APIs
 core/cobol/             deterministic fixed-point financial calculations
 deploy/                 web-server deployment configuration
-docs/                   production operations guidance
+docs/                   production, AI, privacy, and operations guidance
 scripts/                backup and restore tooling
-.github/workflows/      frontend, backend, container, mobile, and COBOL CI
+.github/workflows/      frontend, backend, container, mobile, AI, and COBOL CI
 ```
 
 ## Known production gaps
@@ -187,13 +268,16 @@ The largest remaining gaps are tracked in the production-readiness roadmap and i
 - Playwright end-to-end, accessibility, load, and physical-device test matrices;
 - signed native mobile and desktop releases;
 - formal threat modeling, penetration testing, privacy review, retention controls, data export, and account deletion;
-- representative AI evaluation datasets and measurable accuracy, abstention, latency, and safety thresholds.
+- pinned model revisions and software-bill-of-materials coverage for every enabled model;
+- representative AI and behavior-prediction evaluation datasets;
+- measurable accuracy, abstention, drift, latency, memory, fallback-rate, and safety thresholds;
+- dedicated sandboxed workers for speech, vision, semantic search, and graph inference before those capabilities are enabled in production.
 
 ## Security
 
 Report vulnerabilities privately according to [`SECURITY.md`](SECURITY.md). Do not include credentials, access tokens, financial records, or exploit details in public issues.
 
-This application has not undergone a formal independent security assessment. Do not use it as the sole record of important financial information. Generated analyses and plans are advisory and are not professional financial advice.
+This application has not undergone a formal independent security assessment. Do not use it as the sole record of important financial information. Generated analyses, predictions, and plans are advisory and are not professional financial advice.
 
 ## License
 
