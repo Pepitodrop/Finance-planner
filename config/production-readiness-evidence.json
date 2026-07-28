@@ -1,5 +1,8 @@
 {
   "schemaVersion": 1,
+  "notApplicablePolicy": {
+    "allowedGates": []
+  },
   "gates": {
     "aiWorkers": { "status": "pending", "evidence": [] },
     "modelLicensesAndRevisions": { "status": "pending", "evidence": ["config/ai-model-lock.json"] },
