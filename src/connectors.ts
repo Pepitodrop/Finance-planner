@@ -13,6 +13,13 @@ export interface SyncPreview { accountsToCreate: Account[]; transactionsToImport
 const REQUEST_TIMEOUT_MS = 15_000
 const RETRY_DELAYS_MS = [350, 900]
 
+class BankingRequestError extends Error {
+  constructor(message: string, readonly retryable: boolean) {
+    super(message)
+    this.name = 'BankingRequestError'
+  }
+}
+
 function normalizeDescription(value: string): string { return value.replace(/\s+/g, ' ').trim().slice(0, 160) || 'Unbenannte Transaktion' }
 export function transactionFingerprint(transaction: Pick<Transaction, 'accountId' | 'date' | 'amountCents' | 'description'>): string { return [transaction.accountId, transaction.date, transaction.amountCents, normalizeDescription(transaction.description).toLocaleLowerCase('de-DE')].join('|') }
 
@@ -63,15 +70,19 @@ async function requestJson<T>(url: string, init: RequestInit, options: { retry?:
       const payload = await response.json().catch(() => ({})) as { error?: { message?: string }; requestId?: string } & T
       if (!response.ok) {
         const requestSuffix = payload.requestId ? ` Referenz: ${payload.requestId}` : ''
-        const error = new Error(`${payload.error?.message || `Anfrage fehlgeschlagen (${response.status}).`}${requestSuffix}`)
-        if (response.status < 500 && response.status !== 429) throw error
-        lastError = error
-      } else {
-        return payload
+        const retryable = response.status === 429 || response.status >= 500
+        throw new BankingRequestError(`${payload.error?.message || `Anfrage fehlgeschlagen (${response.status}).`}${requestSuffix}`, retryable)
       }
+      return payload
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') lastError = new Error('Das Banking-Backend hat nicht rechtzeitig geantwortet.')
-      else lastError = error
+      if (error instanceof BankingRequestError) {
+        if (!error.retryable) throw error
+        lastError = error
+      } else if (error instanceof DOMException && error.name === 'AbortError') {
+        lastError = new Error('Das Banking-Backend hat nicht rechtzeitig geantwortet.')
+      } else {
+        lastError = error
+      }
     } finally {
       window.clearTimeout(timeout)
     }
