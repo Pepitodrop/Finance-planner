@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFile } from 'node:fs/promises'
-import { decimalToCents, jsonFetch, syncGoCardless } from '../src/providers.js'
+import { decimalToCents, jsonFetch, retryDelayMs, syncGoCardless, syncWindow } from '../src/providers.js'
 
 test('converts provider decimal strings to integer cents without floating-point rounding', () => {
   assert.equal(decimalToCents('12.34'), 1234)
@@ -10,6 +10,23 @@ test('converts provider decimal strings to integer cents without floating-point 
   assert.equal(decimalToCents('1.2'), 120)
   assert.throws(() => decimalToCents('1.234'))
   assert.throws(() => decimalToCents('NaN'))
+})
+
+test('calculates bounded Retry-After delays for seconds and HTTP dates', () => {
+  assert.equal(retryDelayMs('2', 1_000), 2_000)
+  assert.equal(retryDelayMs(new Date(6_000).toUTCString(), 1_000), 5_000)
+  assert.equal(retryDelayMs('999', 1_000), 30_000)
+  assert.equal(retryDelayMs('invalid', 1_000), null)
+})
+
+test('builds incremental sync windows with overlap and bounded history', () => {
+  const now = new Date('2026-07-28T12:00:00.000Z')
+  const incremental = syncWindow('2026-07-27T12:00:00.000Z', now, 31, 3)
+  assert.equal(incremental.dateFrom, '2026-07-24')
+  assert.equal(incremental.dateTo, '2026-07-28')
+
+  const bounded = syncWindow('2020-01-01T00:00:00.000Z', now, 31, 3)
+  assert.equal(bounded.dateFrom, '2026-06-27')
 })
 
 test('retries retryable provider responses before succeeding', async () => {
@@ -44,13 +61,14 @@ test('rejects expired GoCardless consent before account synchronization', async 
   }
 })
 
-test('bank connectors enforce timeout, retry, consent, pagination and reconciliation controls', async () => {
+test('bank connectors enforce incremental, pagination and reconciliation controls', async () => {
   const source = await readFile(new URL('../src/providers.js', import.meta.url), 'utf8')
   assert.match(source, /AbortController/)
   assert.match(source, /response\.status === 429 \|\| response\.status >= 500/)
   assert.match(source, /requisition\.status !== 'LN'/)
-  assert.match(source, /seen\.has\(externalId\)/)
-  assert.match(source, /url\.searchParams\.set\('page'/)
-  assert.match(source, /page <= 100/)
+  assert.match(source, /date_from/)
+  assert.match(source, /lastSyncedAt/)
+  assert.match(source, /MAX_PAYPAL_PAGES/)
+  assert.match(source, /pagination exceeds safety limit/)
   assert.match(source, /reconciliation:/)
 })
