@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { canStartPullToRefresh, pullProgress, shouldRefreshFromPull, triggerHaptic } from './mobile-enhancements'
+import {
+  canStartPullToRefresh,
+  isEditableTarget,
+  keyboardInset,
+  pullProgress,
+  shouldRefreshFromPull,
+  triggerHaptic,
+} from './mobile-enhancements'
 
 const PULL_THRESHOLD = 84
 
@@ -12,6 +19,44 @@ export function MobileEnhancements() {
   useEffect(() => {
     const timer = window.setTimeout(() => setBooting(false), 450)
     return () => window.clearTimeout(timer)
+  }, [])
+
+  useEffect(() => {
+    const viewport = window.visualViewport
+    const root = document.documentElement
+
+    const syncViewport = () => {
+      const height = viewport?.height ?? window.innerHeight
+      const offsetTop = viewport?.offsetTop ?? 0
+      const inset = keyboardInset(window.innerHeight, height, offsetTop)
+      root.style.setProperty('--mobile-viewport-height', `${Math.round(height)}px`)
+      root.style.setProperty('--mobile-keyboard-inset', `${inset}px`)
+      root.classList.toggle('mobile-keyboard-open', inset > 120)
+    }
+
+    const revealFocusedControl = (event: FocusEvent) => {
+      if (!isEditableTarget(event.target)) return
+      window.setTimeout(() => {
+        const target = event.target as HTMLElement
+        target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+      }, 120)
+    }
+
+    syncViewport()
+    viewport?.addEventListener('resize', syncViewport)
+    viewport?.addEventListener('scroll', syncViewport)
+    window.addEventListener('resize', syncViewport)
+    document.addEventListener('focusin', revealFocusedControl)
+
+    return () => {
+      viewport?.removeEventListener('resize', syncViewport)
+      viewport?.removeEventListener('scroll', syncViewport)
+      window.removeEventListener('resize', syncViewport)
+      document.removeEventListener('focusin', revealFocusedControl)
+      root.style.removeProperty('--mobile-viewport-height')
+      root.style.removeProperty('--mobile-keyboard-inset')
+      root.classList.remove('mobile-keyboard-open')
+    }
   }, [])
 
   useEffect(() => {
