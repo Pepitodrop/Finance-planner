@@ -63,18 +63,21 @@ export async function runGovernedEnsemble({ transport, models, snapshot, analyst
 
 const round = (value, digits = 3) => Number(value.toFixed(digits))
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
+const finiteNumber = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback
 
 function insight(code, value, severity, priority, explanation, suggestedAction) {
   return { code, value, severity, priority, explanation, suggestedAction, requiresApproval: true }
 }
 
-export function deterministicScenarioInsights(snapshot) {
-  const income = Math.max(0, snapshot.incomeCents)
-  const expenses = Math.max(0, snapshot.expenseCents)
-  const freeCash = snapshot.freeCashCents
-  const recurring = Math.max(0, snapshot.recurringExpenseCents)
-  const balance = snapshot.accountBalanceCents
-  const historyMonths = Math.max(0, snapshot.monthsCovered)
+export function deterministicScenarioInsights(inputSnapshot = {}) {
+  const snapshot = inputSnapshot && typeof inputSnapshot === 'object' ? inputSnapshot : {}
+  const income = Math.max(0, finiteNumber(snapshot.incomeCents))
+  const expenses = Math.max(0, finiteNumber(snapshot.expenseCents))
+  const freeCash = finiteNumber(snapshot.freeCashCents, income - expenses)
+  const recurring = Math.max(0, finiteNumber(snapshot.recurringExpenseCents))
+  const balance = Math.max(0, finiteNumber(snapshot.accountBalanceCents))
+  const historyMonths = Math.max(0, finiteNumber(snapshot.monthsCovered))
+  const transactionCount = Math.max(0, finiteNumber(snapshot.transactionCount))
   const goals = Array.isArray(snapshot.goals) ? snapshot.goals : []
   const savingsRate = income > 0 ? freeCash / income : 0
   const expenseRatio = income > 0 ? expenses / income : null
@@ -82,7 +85,7 @@ export function deterministicScenarioInsights(snapshot) {
   const monthlyBurn = historyMonths > 0 ? expenses / historyMonths : expenses
   const runwayMonths = monthlyBurn > 0 ? balance / monthlyBurn : null
   const recurringCoverageMonths = recurring > 0 ? balance / recurring : null
-  const goalRemainingCents = goals.reduce((sum, goal) => sum + Math.max(0, goal.remainingCents), 0)
+  const goalRemainingCents = goals.reduce((sum, goal) => sum + Math.max(0, finiteNumber(goal?.remainingCents)), 0)
   const monthsToFundGoals = freeCash > 0 && goalRemainingCents > 0 ? goalRemainingCents / freeCash : null
 
   const stressedIncome = income * 0.9
@@ -90,7 +93,7 @@ export function deterministicScenarioInsights(snapshot) {
   const stressedFreeCash = stressedIncome - stressedExpenses
   const incomeShockSurvivable = stressedFreeCash >= 0
 
-  const historyConfidence = clamp((Math.min(snapshot.transactionCount, 90) / 90 + Math.min(historyMonths, 12) / 12) / 2, 0, 1)
+  const historyConfidence = clamp((Math.min(transactionCount, 90) / 90 + Math.min(historyMonths, 12) / 12) / 2, 0, 1)
   const savingsScore = clamp((savingsRate + 0.05) / 0.3, 0, 1)
   const runwayScore = runwayMonths === null ? 0.5 : clamp(runwayMonths / 6, 0, 1)
   const recurringScore = clamp(1 - recurringShare, 0, 1)
@@ -105,7 +108,7 @@ export function deterministicScenarioInsights(snapshot) {
   if (!incomeShockSurvivable) insights.push(insight('stress_test_negative', Math.round(stressedFreeCash), 'warning', 88, 'Bei 10 % weniger Einnahmen und 10 % höheren Ausgaben würde der Cashflow negativ.', 'Einen Puffer für Einkommens- und Ausgabenschwankungen aufbauen.'))
   if (goalRemainingCents > 0 && freeCash <= 0) insights.push(insight('goals_unfunded', goalRemainingCents, 'critical', 92, 'Aktuelle Ziele können aus dem derzeitigen freien Cashflow nicht finanziert werden.', 'Zieltermine oder Zielbeträge prüfen, ohne automatische Änderungen vorzunehmen.'))
   if (monthsToFundGoals !== null && monthsToFundGoals > 36) insights.push(insight('goals_slow_progress', round(monthsToFundGoals, 1), 'warning', 65, 'Bei unverändertem freien Cashflow benötigen die erfassten Ziele mehr als 36 Monate.', 'Zielprioritäten und monatliche Zuweisung prüfen.'))
-  if (snapshot.transactionCount < 15 || historyMonths < 3) insights.push(insight('insufficient_history', round(historyConfidence), 'info', 60, 'Die Datenhistorie ist für belastbare Prognosen noch begrenzt.', 'Mehr Historie sammeln und Prognosen bis dahin vorsichtig behandeln.'))
+  if (transactionCount < 15 || historyMonths < 3) insights.push(insight('insufficient_history', round(historyConfidence), 'info', 60, 'Die Datenhistorie ist für belastbare Prognosen noch begrenzt.', 'Mehr Historie sammeln und Prognosen bis dahin vorsichtig behandeln.'))
 
   insights.sort((a, b) => b.priority - a.priority || a.code.localeCompare(b.code))
   return {
