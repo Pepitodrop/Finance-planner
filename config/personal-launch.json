@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "launchDate": "2026-08-01",
+  "mode": "single-user-personal-pilot",
+  "locales": ["de-DE", "en-GB"],
+  "currency": "EUR",
+  "ai": {
+    "enabled": true,
+    "requireExplicitExternalAiConsent": true,
+    "requireDeterministicFallback": true,
+    "requireHumanApprovalForActions": true,
+    "modelLock": "ai/model-lock.json",
+    "evaluationBaseline": "ai/evaluation/personal-launch-baseline.json"
+  },
+  "telemetry": {
+    "enabled": true,
+    "privacyMode": "aggregate-only",
+    "retentionDays": 30,
+    "allowedFields": [
+      "timestamp",
+      "modelRevision",
+      "locale",
+      "source",
+      "signalTypes",
+      "signalCount",
+      "abstained",
+      "correctnessLabel",
+      "confidenceBucket",
+      "latencyMs",
+      "fallbackReason"
+    ],
+    "forbiddenFields": [
+      "userPrompt",
+      "transactionDescription",
+      "accountIdentifier",
+      "iban",
+      "credential",
+      "accessToken",
+      "refreshToken"
+    ]
+  },
+  "launchRequirements": {
+    "minimumEvaluationCases": 12,
+    "minimumGermanCases": 4,
+    "minimumEnglishCases": 4,
+    "minimumAbstentionCases": 2,
+    "maximumP95LatencyMs": 12000,
+    "maximumCalibrationError": 0.15,
+    "minimumPrecision": 0.9,
+    "minimumRecall": 0.85,
+    "requiredSafeAbstentionRate": 1
+  }
+}
