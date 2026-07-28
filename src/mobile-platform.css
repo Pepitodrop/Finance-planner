@@ -1,0 +1,77 @@
+@media (max-width: 768px) {
+  body { padding-bottom: calc(5.25rem + env(safe-area-inset-bottom, 0px)); overflow-x: clip; }
+  main { min-width: 0; }
+  .topbar { align-items: flex-start; gap: .75rem; }
+  .topbar h1 { font-size: clamp(1.55rem, 7vw, 2.15rem); }
+  .topbar .primary { width: auto; min-width: 44px; }
+  .stats-grid, .dashboard-grid, .dashboard-grid.lower, .goal-card-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .panel, .stat-card, .big-goal { min-width: 0; content-visibility: auto; contain-intrinsic-size: 1px 320px; }
+  .chart, .recharts-responsive-container { min-width: 0; max-width: 100%; }
+  .transaction-row { grid-template-columns: auto minmax(0, 1fr) auto; gap: .65rem; }
+  .transaction-row > .pill { display: none; }
+  .transaction-row > b { grid-column: 2; justify-self: start; }
+  .row-actions { grid-column: 3; grid-row: 1 / span 2; }
+  .modal-backdrop { align-items: flex-end; padding: 0; }
+  .modal { width: 100%; max-height: min(92dvh, 760px); overflow-y: auto; border-radius: 1.25rem 1.25rem 0 0; padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px)); overscroll-behavior: contain; }
+  input, select, textarea { font-size: 16px !important; scroll-margin-bottom: 35dvh; }
+}
+
+.mobile-bottom-nav { display: none; }
+.mobile-sheet-backdrop { display: none; }
+
+@media (max-width: 768px) {
+  .mobile-bottom-nav {
+    position: fixed; z-index: 10030; left: 0; right: 0; bottom: 0;
+    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+    padding: .35rem max(.35rem, env(safe-area-inset-right, 0px)) calc(.35rem + env(safe-area-inset-bottom, 0px)) max(.35rem, env(safe-area-inset-left, 0px));
+    border-top: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+    background: color-mix(in srgb, Canvas 92%, transparent); color: CanvasText;
+    backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  }
+  .mobile-bottom-nav button {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .18rem;
+    min-width: 0; min-height: 52px; border: 0; border-radius: .8rem; background: transparent; color: inherit;
+    font: inherit; font-size: .68rem; font-weight: 700;
+  }
+  .mobile-bottom-nav button.active { background: color-mix(in srgb, currentColor 12%, transparent); }
+  .mobile-bottom-nav button:active { transform: scale(.96); }
+  .mobile-sheet-backdrop {
+    position: fixed; z-index: 10040; inset: 0; display: flex; align-items: flex-end;
+    background: rgba(0,0,0,.48); padding-top: env(safe-area-inset-top, 0px);
+  }
+  .mobile-sheet {
+    width: 100%; max-height: 75dvh; overflow: auto; border-radius: 1.4rem 1.4rem 0 0;
+    background: Canvas; color: CanvasText; padding: .55rem 1rem calc(1rem + env(safe-area-inset-bottom, 0px));
+    box-shadow: 0 -18px 50px rgba(0,0,0,.28); animation: mobile-sheet-enter 180ms ease-out;
+  }
+  .mobile-sheet-handle { width: 2.8rem; height: .3rem; border-radius: 99px; margin: 0 auto .7rem; background: color-mix(in srgb, currentColor 24%, transparent); }
+  .mobile-sheet-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: .8rem; }
+  .mobile-sheet-header button { border: 0; background: transparent; color: inherit; font-size: 1.7rem; }
+  .mobile-sheet-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .65rem; }
+  .mobile-sheet-grid button { display: flex; align-items: center; gap: .65rem; min-height: 58px; padding: .8rem; border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: .9rem; background: transparent; color: inherit; font: inherit; font-weight: 700; }
+  .mobile-sheet-grid button.active { background: color-mix(in srgb, currentColor 10%, transparent); }
+}
+
+@media (max-width: 380px) {
+  .mobile-bottom-nav button span { font-size: .6rem; }
+  .mobile-sheet-grid { grid-template-columns: 1fr; }
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .mobile-bottom-nav button { min-height: 44px; flex-direction: row; }
+  .mobile-bottom-nav button span { display: none; }
+  .mobile-sheet { max-height: 90dvh; }
+}
+
+@media (prefers-contrast: more) {
+  .mobile-bottom-nav, .mobile-sheet-grid button { border-width: 2px; }
+  .mobile-bottom-nav button.active, .mobile-sheet-grid button.active { outline: 2px solid currentColor; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-bottom-nav button:active { transform: none; }
+  .mobile-sheet { animation: none; }
+  * { scroll-behavior: auto !important; }
+}
+
+@keyframes mobile-sheet-enter { from { transform: translateY(100%); } to { transform: translateY(0); } }
