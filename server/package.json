@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "test": "node --test",
+    "test:ai-evaluation": "node --test test/ai-evaluation.test.js",
     "migrate": "node src/migrate.js"
   },
   "dependencies": {
