@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "description": "Representative deterministic baseline set for multilingual finance categorisation. No personal or production data.",
+  "cases": [
+    {"id":"de-grocery-1","locale":"de-DE","text":"REWE MARKT KARLSRUHE","expectedCategory":"groceries"},
+    {"id":"de-rent-1","locale":"de-DE","text":"MIETE JULI HAUSVERWALTUNG","expectedCategory":"housing"},
+    {"id":"de-salary-1","locale":"de-DE","text":"GEHALT SC MEDIA HOUSE","expectedCategory":"income"},
+    {"id":"de-transport-1","locale":"de-DE","text":"DB VERTRIEB GMBH TICKET","expectedCategory":"transport"},
+    {"id":"de-utilities-1","locale":"de-DE","text":"STADTWERKE KARLSRUHE STROM","expectedCategory":"utilities"},
+    {"id":"en-grocery-1","locale":"en-GB","text":"TESCO STORES 3142","expectedCategory":"groceries"},
+    {"id":"en-rent-1","locale":"en-GB","text":"MONTHLY RENT PROPERTY MANAGEMENT","expectedCategory":"housing"},
+    {"id":"en-salary-1","locale":"en-GB","text":"SALARY PAYMENT ACME LTD","expectedCategory":"income"},
+    {"id":"en-transport-1","locale":"en-GB","text":"UBER TRIP","expectedCategory":"transport"},
+    {"id":"en-utilities-1","locale":"en-GB","text":"ELECTRICITY DIRECT DEBIT","expectedCategory":"utilities"},
+    {"id":"ambiguous-1","locale":"de-DE","text":"PAYPAL *MUSTER","expectedCategory":"abstain"},
+    {"id":"ambiguous-2","locale":"en-GB","text":"CARD PAYMENT 12345","expectedCategory":"abstain"}
+  ]
+}
