@@ -7,7 +7,7 @@
   "scope": "/",
   "display": "standalone",
   "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
-  "orientation": "portrait-primary",
+  "orientation": "any",
   "background_color": "#080c18",
   "theme_color": "#0b1020",
   "lang": "de-DE",
@@ -17,12 +17,34 @@
   "launch_handler": {
     "client_mode": ["navigate-existing", "auto"]
   },
+  "share_target": {
+    "action": "/?source=share-target",
+    "method": "GET",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
   "shortcuts": [
     {
-      "name": "Open dashboard",
-      "short_name": "Dashboard",
-      "description": "Open the finance overview.",
-      "url": "/?source=shortcut"
+      "name": "Finanzübersicht öffnen",
+      "short_name": "Übersicht",
+      "description": "Öffnet die Finanzübersicht.",
+      "url": "/?source=shortcut&view=dashboard"
+    },
+    {
+      "name": "Transaktionen öffnen",
+      "short_name": "Buchungen",
+      "description": "Öffnet die Transaktionsliste.",
+      "url": "/?source=shortcut&view=transactions"
+    },
+    {
+      "name": "Finanzassistent öffnen",
+      "short_name": "Assistent",
+      "description": "Öffnet die Finanzanalyse und Planung.",
+      "url": "/?source=shortcut&view=assistant"
     }
   ],
   "icons": [
