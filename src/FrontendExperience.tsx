@@ -2,6 +2,12 @@ import { useEffect } from 'react'
 
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
+type BackgroundState = {
+  element: HTMLElement
+  ariaHidden: string | null
+  inert: boolean
+}
+
 function enhanceChartAccessibility(root: ParentNode = document) {
   for (const chart of root.querySelectorAll<HTMLElement>('.chart, .recharts-responsive-container')) {
     if (chart.hasAttribute('role')) continue
@@ -12,9 +18,37 @@ function enhanceChartAccessibility(root: ParentNode = document) {
   }
 }
 
+function hideModalBackground(modal: HTMLElement) {
+  const backdrop = modal.closest<HTMLElement>('.modal-backdrop')
+  const parent = backdrop?.parentElement
+  if (!backdrop || !parent) return []
+
+  const states: BackgroundState[] = []
+  for (const sibling of Array.from(parent.children)) {
+    if (!(sibling instanceof HTMLElement) || sibling === backdrop) continue
+    states.push({
+      element: sibling,
+      ariaHidden: sibling.getAttribute('aria-hidden'),
+      inert: sibling.inert,
+    })
+    sibling.setAttribute('aria-hidden', 'true')
+    sibling.inert = true
+  }
+  return states
+}
+
+function restoreModalBackground(states: BackgroundState[]) {
+  for (const { element, ariaHidden, inert } of states) {
+    if (ariaHidden === null) element.removeAttribute('aria-hidden')
+    else element.setAttribute('aria-hidden', ariaHidden)
+    element.inert = inert
+  }
+}
+
 function enhanceModal(modal: HTMLElement) {
   modal.setAttribute('role', 'dialog')
   modal.setAttribute('aria-modal', 'true')
+  if (!modal.hasAttribute('tabindex')) modal.tabIndex = -1
 
   const title = modal.querySelector<HTMLElement>('h2')
   if (title) {
@@ -22,11 +56,10 @@ function enhanceModal(modal: HTMLElement) {
     modal.setAttribute('aria-labelledby', title.id)
   }
 
-  const background = document.querySelector<HTMLElement>('.app-shell')
   const previousOverflow = document.body.style.overflow
   const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  const backgroundStates = hideModalBackground(modal)
   document.body.style.overflow = 'hidden'
-  background?.setAttribute('aria-hidden', 'true')
 
   const focusable = Array.from(modal.querySelectorAll<HTMLElement>(FOCUSABLE))
   window.setTimeout(() => (focusable[0] || modal).focus(), 0)
@@ -60,7 +93,7 @@ function enhanceModal(modal: HTMLElement) {
   return () => {
     modal.removeEventListener('keydown', onKeyDown)
     document.body.style.overflow = previousOverflow
-    background?.removeAttribute('aria-hidden')
+    restoreModalBackground(backgroundStates)
     previousFocus?.focus({ preventScroll: true })
   }
 }
