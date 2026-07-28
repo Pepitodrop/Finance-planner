@@ -12,6 +12,8 @@ const destinations = [
   { label: 'Daten', icon: DatabaseBackup },
 ] as const
 
+const shortcutViews: Record<string, number> = { dashboard: 0, transactions: 1, assistant: 6 }
+
 function sidebarButtons() {
   return Array.from(document.querySelectorAll<HTMLButtonElement>('.sidebar nav button'))
 }
@@ -30,6 +32,14 @@ export function MobilePlatform() {
     setMoreOpen(false)
     window.scrollTo({ top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
   }
+
+  useEffect(() => {
+    const requestedView = new URLSearchParams(window.location.search).get('view')
+    const requestedIndex = requestedView ? shortcutViews[requestedView] : undefined
+    if (requestedIndex === undefined) return
+    const timer = window.setTimeout(() => navigate(requestedIndex), 0)
+    return () => window.clearTimeout(timer)
+  }, [])
 
   useEffect(() => {
     const sync = () => {
