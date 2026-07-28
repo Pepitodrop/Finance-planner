@@ -72,8 +72,8 @@ test('returns only validated, approval-gated and calibrated model signals', asyn
   assert.equal(response.payload.signals[0].confidence, 0.6)
   assert.equal(response.payload.signals[0].requiresApproval, true)
   assert.deepEqual(response.payload.signals[0].evidence, ['freeCashCents=127000', 'incomeCents=250000', 'expenseCents=123000'])
-  assert.deepEqual(response.payload.signals[0].modelRationale, ['Aggregierte Ausgaben'])
-  assert.equal(response.payload.modelSummary, 'Auswertung abgeschlossen.')
+  assert.equal('modelRationale' in response.payload.signals[0], false)
+  assert.equal('modelSummary' in response.payload, false)
   assert.match(response.payload.summary, /1 Hinweise übernommen/)
 })
 
@@ -89,14 +89,14 @@ test('removes signals that contradict verified snapshot facts and replaces the s
   const response = responseRecorder()
   await router({ method: 'POST' }, response, new URL('http://localhost/api/ai/financial-intelligence'))
   assert.deepEqual(response.payload.signals, [])
-  assert.equal(response.payload.modelSummary, 'Risiken erkannt.')
+  assert.equal('modelSummary' in response.payload, false)
   assert.match(response.payload.summary, /keine belastbaren KI-Hinweise übernommen/i)
   assert.equal(response.payload.warnings.length, 3)
   assert.match(response.payload.warnings.join(' '), /no recurring expenses/i)
   assert.match(response.payload.warnings.join(' '), /no goals/i)
 })
 
-test('keeps model rationale separate from verified evidence', async () => {
+test('does not expose model rationale while retaining verified evidence', async () => {
   const router = routerWithCompletion(JSON.stringify({
     summary: 'Cashflow-Hinweis.', confidence: 0.7,
     signals: [{ type: 'cashflow', severity: 'warning', title: 'Cashflow prüfen', explanation: 'Prüfung empfohlen.', confidence: 0.7, evidence: ['Nicht verifizierte Modellbegründung'] }],
@@ -104,7 +104,7 @@ test('keeps model rationale separate from verified evidence', async () => {
   const response = responseRecorder()
   await router({ method: 'POST' }, response, new URL('http://localhost/api/ai/financial-intelligence'))
   assert.deepEqual(response.payload.signals[0].evidence, ['freeCashCents=127000', 'incomeCents=250000', 'expenseCents=123000'])
-  assert.deepEqual(response.payload.signals[0].modelRationale, ['Nicht verifizierte Modellbegründung'])
+  assert.equal('modelRationale' in response.payload.signals[0], false)
   assert.ok(!response.payload.signals[0].evidence.includes('Nicht verifizierte Modellbegründung'))
 })
 
@@ -118,7 +118,7 @@ test('caps aggregate-only anomaly claims and downgrades critical severity', asyn
   assert.equal(response.payload.signals[0].severity, 'warning')
   assert.equal(response.payload.signals[0].confidence, 0.55)
   assert.ok(response.payload.signals[0].evidence.includes('anomalyRequiresTransactionLevelVerification=true'))
-  assert.deepEqual(response.payload.signals[0].modelRationale, ['Modellmuster'])
+  assert.equal('modelRationale' in response.payload.signals[0], false)
 })
 
 test('normalizes cashflow severity against verified free cash', async () => {
