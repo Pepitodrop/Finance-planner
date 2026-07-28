@@ -18,12 +18,7 @@ function reviewedModel(role, modelValue, revisionValue) {
 }
 
 export function governedAiModels(env, defaults) {
-  const analyst = reviewedModel(
-    'analyst',
-    env.HF_MODEL || defaults.model,
-    env.HF_MODEL_REVISION || defaults.revision,
-  )
-
+  const analyst = reviewedModel('analyst', env.HF_MODEL || defaults.model, env.HF_MODEL_REVISION || defaults.revision)
   const criticEnabled = env.HF_CRITIC_ENABLED === 'true'
   if (!criticEnabled) return { analyst, critic: null }
   const critic = reviewedModel(
@@ -66,14 +61,68 @@ export async function runGovernedEnsemble({ transport, models, snapshot, analyst
   }
 }
 
+const round = (value, digits = 3) => Number(value.toFixed(digits))
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
+
+function insight(code, value, severity, priority, explanation, suggestedAction) {
+  return { code, value, severity, priority, explanation, suggestedAction, requiresApproval: true }
+}
+
 export function deterministicScenarioInsights(snapshot) {
+  const income = Math.max(0, snapshot.incomeCents)
+  const expenses = Math.max(0, snapshot.expenseCents)
+  const freeCash = snapshot.freeCashCents
+  const recurring = Math.max(0, snapshot.recurringExpenseCents)
+  const balance = snapshot.accountBalanceCents
+  const historyMonths = Math.max(0, snapshot.monthsCovered)
+  const savingsRate = income > 0 ? freeCash / income : 0
+  const expenseRatio = income > 0 ? expenses / income : null
+  const recurringShare = expenses > 0 ? recurring / expenses : 0
+  const monthlyBurn = historyMonths > 0 ? expenses / historyMonths : expenses
+  const runwayMonths = monthlyBurn > 0 ? balance / monthlyBurn : null
+  const recurringCoverageMonths = recurring > 0 ? balance / recurring : null
+  const goalRemainingCents = snapshot.goals.reduce((sum, goal) => sum + Math.max(0, goal.remainingCents), 0)
+  const monthsToFundGoals = freeCash > 0 && goalRemainingCents > 0 ? goalRemainingCents / freeCash : null
+
+  const stressedIncome = income * 0.9
+  const stressedExpenses = expenses * 1.1
+  const stressedFreeCash = stressedIncome - stressedExpenses
+  const incomeShockSurvivable = stressedFreeCash >= 0
+
+  const historyConfidence = clamp((Math.min(snapshot.transactionCount, 90) / 90 + Math.min(historyMonths, 12) / 12) / 2, 0, 1)
+  const savingsScore = clamp((savingsRate + 0.05) / 0.3, 0, 1)
+  const runwayScore = runwayMonths === null ? 0.5 : clamp(runwayMonths / 6, 0, 1)
+  const recurringScore = clamp(1 - recurringShare, 0, 1)
+  const shockScore = incomeShockSurvivable ? 1 : clamp(1 + stressedFreeCash / Math.max(income, 1), 0, 1)
+  const resilienceScore = Math.round(100 * (0.3 * savingsScore + 0.3 * runwayScore + 0.15 * recurringScore + 0.15 * shockScore + 0.1 * historyConfidence))
+
   const insights = []
-  const savingsRate = snapshot.incomeCents > 0 ? snapshot.freeCashCents / snapshot.incomeCents : 0
-  const recurringShare = snapshot.expenseCents > 0 ? snapshot.recurringExpenseCents / snapshot.expenseCents : 0
-  if (savingsRate < 0.1) insights.push({ code: 'low_savings_rate', value: Number(savingsRate.toFixed(3)), severity: savingsRate <= 0 ? 'critical' : 'warning' })
-  if (recurringShare > 0.6) insights.push({ code: 'high_recurring_share', value: Number(recurringShare.toFixed(3)), severity: 'warning' })
-  const monthlyBurn = snapshot.monthsCovered > 0 ? snapshot.expenseCents / snapshot.monthsCovered : snapshot.expenseCents
-  const runwayMonths = monthlyBurn > 0 ? snapshot.accountBalanceCents / monthlyBurn : null
-  if (runwayMonths !== null && runwayMonths < 3) insights.push({ code: 'low_liquidity_runway', value: Number(runwayMonths.toFixed(2)), severity: runwayMonths < 1 ? 'critical' : 'warning' })
-  return { savingsRate: Number(savingsRate.toFixed(3)), recurringShare: Number(recurringShare.toFixed(3)), runwayMonths: runwayMonths === null ? null : Number(runwayMonths.toFixed(2)), insights }
+  if (income === 0 && expenses > 0) insights.push(insight('no_income_with_expenses', expenses, 'critical', 100, 'Ausgaben sind vorhanden, aber im Analysezeitraum wurden keine Einnahmen erfasst.', 'Einnahmen-Daten prüfen und bis zur Klärung keine neuen freiwilligen Verpflichtungen eingehen.'))
+  if (savingsRate < 0.1) insights.push(insight('low_savings_rate', round(savingsRate), savingsRate <= 0 ? 'critical' : 'warning', savingsRate <= 0 ? 95 : 75, 'Die freie Liquidität liegt unter 10 % der Einnahmen.', 'Variable Ausgaben und Sparziele prüfen; Änderungen erst nach Bestätigung übernehmen.'))
+  if (recurringShare > 0.6) insights.push(insight('high_recurring_share', round(recurringShare), 'warning', 70, 'Mehr als 60 % der Ausgaben sind wiederkehrend und kurzfristig schwer anpassbar.', 'Wiederkehrende Verträge einzeln prüfen.'))
+  if (runwayMonths !== null && runwayMonths < 3) insights.push(insight('low_liquidity_runway', round(runwayMonths, 2), runwayMonths < 1 ? 'critical' : 'warning', runwayMonths < 1 ? 98 : 85, 'Der verfügbare Kontostand deckt weniger als drei durchschnittliche Ausgabenmonate.', 'Liquiditätspuffer priorisieren und größere neue Ausgaben zurückstellen.'))
+  if (!incomeShockSurvivable) insights.push(insight('stress_test_negative', Math.round(stressedFreeCash), 'warning', 88, 'Bei 10 % weniger Einnahmen und 10 % höheren Ausgaben würde der Cashflow negativ.', 'Einen Puffer für Einkommens- und Ausgabenschwankungen aufbauen.'))
+  if (goalRemainingCents > 0 && freeCash <= 0) insights.push(insight('goals_unfunded', goalRemainingCents, 'critical', 92, 'Aktuelle Ziele können aus dem derzeitigen freien Cashflow nicht finanziert werden.', 'Zieltermine oder Zielbeträge prüfen, ohne automatische Änderungen vorzunehmen.'))
+  if (monthsToFundGoals !== null && monthsToFundGoals > 36) insights.push(insight('goals_slow_progress', round(monthsToFundGoals, 1), 'warning', 65, 'Bei unverändertem freien Cashflow benötigen die erfassten Ziele mehr als 36 Monate.', 'Zielprioritäten und monatliche Zuweisung prüfen.'))
+  if (snapshot.transactionCount < 15 || historyMonths < 3) insights.push(insight('insufficient_history', round(historyConfidence), 'info', 60, 'Die Datenhistorie ist für belastbare Prognosen noch begrenzt.', 'Mehr Historie sammeln und Prognosen bis dahin vorsichtig behandeln.'))
+
+  insights.sort((a, b) => b.priority - a.priority || a.code.localeCompare(b.code))
+  return {
+    savingsRate: round(savingsRate),
+    expenseRatio: expenseRatio === null ? null : round(expenseRatio),
+    recurringShare: round(recurringShare),
+    runwayMonths: runwayMonths === null ? null : round(runwayMonths, 2),
+    recurringCoverageMonths: recurringCoverageMonths === null ? null : round(recurringCoverageMonths, 2),
+    goalRemainingCents,
+    monthsToFundGoals: monthsToFundGoals === null ? null : round(monthsToFundGoals, 1),
+    resilienceScore,
+    confidence: round(historyConfidence, 2),
+    stressTest: {
+      incomeChangePercent: -10,
+      expenseChangePercent: 10,
+      stressedFreeCashCents: Math.round(stressedFreeCash),
+      survivable: incomeShockSurvivable,
+    },
+    insights,
+  }
 }
