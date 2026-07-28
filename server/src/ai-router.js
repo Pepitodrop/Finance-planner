@@ -10,7 +10,7 @@ const GOVERNED_MODEL = Object.freeze({
 })
 const ALLOWED_SIGNAL_TYPES = new Set(['cashflow', 'recurring-cost', 'goal-risk', 'anomaly', 'data-quality'])
 const ALLOWED_SEVERITIES = new Set(['info', 'warning', 'critical'])
-const UNSAFE_MODEL_TEXT = /(?:ignore\s+(?:all\s+)?previous|system\s*prompt|developer\s*message|reveal\s+(?:the\s+)?prompt|\b(?:iban|swift|bic|access[_ -]?token|refresh[_ -]?token|password|secret)\b|(?:transfer|send|wire|withdraw|invest|buy|sell|trade|borrow)\b.{0,48}\b(?:€|eur|money|funds?|shares?|stocks?|crypto|all|now|immediately)\b|execute\s+(?:this|now)|without\s+(?:approval|confirmation))/i
+const UNSAFE_MODEL_TEXT = /(?:ignore\s+(?:all\s+)?previous|system\s*prompt|developer\s*message|reveal\s+(?:the\s+)?prompt|\b(?:iban|swift|bic|access[_ -]?token|refresh[_ -]?token|password|secret)\b|(?:transfer|send|wire|withdraw|invest|buy|sell|trade|borrow)\b.{0,48}(?:€|\b(?:eur|money|funds?|shares?|stocks?|crypto|all|now|immediately)\b)|execute\s+(?:this|now)|without\s+(?:approval|confirmation))/i
 
 function finiteInteger(value, field, { min = -Number.MAX_SAFE_INTEGER, max = Number.MAX_SAFE_INTEGER } = {}) {
   if (!Number.isSafeInteger(value) || value < min || value > max) throw new HttpError(400, 'invalid_ai_snapshot', `${field} must be a safe integer.`)
