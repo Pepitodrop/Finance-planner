@@ -1,26 +1,49 @@
-name: Release readiness
+name: Controlled production release
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
+    inputs:
+      release_tag:
+        description: Semver release tag to create after all readiness gates pass (for example v1.0.0)
+        required: true
+        type: string
 
 permissions:
-  contents: read
+  contents: write
+
+environment: production-release
 
 jobs:
-  verify-release-evidence:
+  verify-and-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
+            echo "release_tag must be a semantic version beginning with v"
+            exit 1
+          }
+          if git rev-parse "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Tag already exists: $RELEASE_TAG"
+            exit 1
+          fi
       - name: Install dependencies
         run: npm install --no-fund --no-audit --silent
       - name: Run normal verification
         run: npm test
       - name: Enforce all release evidence gates
         run: npm run verify:release
+      - name: Create governed GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --generate-notes --verify-tag=false
