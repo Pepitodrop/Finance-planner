@@ -4,12 +4,14 @@ This runbook prepares Finance Planner for a single-user personal pilot. It does 
 
 ## Before launch
 
-1. Deploy the current `main` build behind HTTPS.
-2. Configure `DATABASE_URL`, a randomly generated `SESSION_SECRET` of at least 32 characters, and `HF_TOKEN` in the deployment secret store. Never commit them.
-3. Run `npm ci`, `npm test`, `npm run build`, and `npm run verify:launch:runtime` in the deployed environment.
-4. Confirm that database backups are enabled and perform one restore test.
-5. Sign in, enable external AI consent explicitly, and verify that deterministic fallback remains available when the provider is unavailable.
-6. Import only the accounts and transactions needed for the personal pilot. Start with read-only bank access where supported.
+1. Deploy the current `main` build behind HTTPS with external AI disabled.
+2. Configure `DATABASE_URL`, a randomly generated `SESSION_SECRET` of at least 32 diverse characters, and `HF_TOKEN` in the deployment secret store. Never commit them.
+3. Run `npm ci`, `npm test`, and `npm run build`.
+4. Keep `EXTERNAL_AI_ENABLED` unset or set to `false`, then run `npm run verify:launch:runtime` in the deployed environment.
+5. Confirm that `.launch-evidence/hosted-ai.json` exists, records the immutable model revision, has five successful hosted samples, a 0% provider error rate, p95 latency of at most 12 seconds, and `externalAiMayBeEnabled: true`.
+6. Only after that evidence exists, enable external AI in the deployment and require explicit in-app consent. If the runtime command fails, leave external AI disabled and use deterministic analysis.
+7. Confirm that database backups are enabled and perform one restore test.
+8. Import only the accounts and transactions needed for the personal pilot. Start with read-only bank access where supported.
 
 ## Launch-day acceptance test
 
@@ -18,8 +20,8 @@ This runbook prepares Finance Planner for a single-user personal pilot. It does 
 - Run one German and one English AI analysis.
 - Confirm that every proposed financial action requires explicit approval.
 - Remove or invalidate `HF_TOKEN` temporarily and confirm deterministic fallback.
-- Confirm that telemetry contains only aggregate allowlisted fields and no prompts, descriptions, account identifiers, IBANs, or credentials.
-- Record the observed hosted p95 latency and provider errors. Do not keep external AI enabled if p95 latency exceeds 12 seconds, safe abstention falls below 100%, or the provider is unreliable.
+- Confirm that telemetry contains only aggregate allowlisted fields and no prompts, descriptions, account identifiers, IBANs, credentials, or tokens.
+- Re-run `npm run verify:launch:runtime` after any model revision, provider route, deployment region, or infrastructure change.
 
 ## First seven days
 
@@ -32,8 +34,9 @@ Disable external AI and continue with deterministic analysis if:
 - precision or recall drops by more than 0.05;
 - calibration error rises by more than 0.05;
 - p95 latency increases by more than 50%;
+- any hosted validation sample fails;
 - the Hugging Face revision, licence, or provider routing changes unexpectedly.
 
 ## Scope boundary
 
-The 1 August launch is suitable for Luis's own controlled use after the runtime checks pass. Public release, use by other people, automated money movement, or financial-advice positioning still requires bank-provider certification, independent security and privacy review, production observability, and platform-specific release validation.
+The 1 August launch is suitable for Luis's own controlled use only after the static checks, live hosted-provider gate, backup restore test, and acceptance test all pass. Public release, use by other people, automated money movement, or financial-advice positioning still requires bank-provider certification, independent security and privacy review, production observability, and platform-specific release validation.
