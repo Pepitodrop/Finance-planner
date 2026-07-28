@@ -1,0 +1,67 @@
+.skip-link {
+  position: fixed;
+  top: max(0.75rem, env(safe-area-inset-top));
+  left: max(0.75rem, env(safe-area-inset-left));
+  z-index: 10000;
+  transform: translateY(-180%);
+  padding: 0.75rem 1rem;
+  border-radius: 0.75rem;
+  background: Canvas;
+  color: CanvasText;
+  box-shadow: 0 0.5rem 2rem rgb(0 0 0 / 0.24);
+  font-weight: 700;
+  text-decoration: none;
+  transition: transform 140ms ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+  outline: 3px solid Highlight;
+  outline-offset: 3px;
+}
+
+:focus-visible {
+  outline: 3px solid Highlight;
+  outline-offset: 3px;
+}
+
+main:focus {
+  outline: none;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  touch-action: manipulation;
+}
+
+@media (pointer: coarse) {
+  button,
+  a,
+  input,
+  select {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .active,
+  .primary,
+  .pill,
+  .mobile-bottom-nav button {
+    border: 1px solid ButtonText;
+  }
+}
