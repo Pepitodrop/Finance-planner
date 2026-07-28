@@ -55,6 +55,22 @@ describe('bank webhook security and orchestration', () => {
     expect(scheduleSync).toHaveBeenCalledTimes(1)
   })
 
+  it('leaves a failed event retryable until its action succeeds', async () => {
+    const secret = encoder.encode('webhook-secret')
+    const body = event('transactions.available')
+    const repo = repository(activeConsent)
+    const scheduleSync = vi.fn()
+      .mockRejectedValueOnce(new Error('queue unavailable'))
+      .mockResolvedValueOnce(undefined)
+    const input = { rawBody: body, signatureHex: await signature(body, secret), secret, repository: repo, scheduleSync, now: new Date('2026-07-28T12:01:00.000Z') }
+
+    await expect(processBankWebhook(input)).rejects.toThrow('queue unavailable')
+    expect(repo.commitWebhookEvent).not.toHaveBeenCalled()
+    await expect(processBankWebhook(input)).resolves.toEqual({ accepted: true, action: 'sync-scheduled', consentId: 'consent-1' })
+    expect(scheduleSync).toHaveBeenCalledTimes(2)
+    expect(repo.commitWebhookEvent).toHaveBeenCalledTimes(1)
+  })
+
   it('revokes consent and clears credentials without scheduling sync', async () => {
     const secret = encoder.encode('webhook-secret')
     const body = event('consent.revoked')
