@@ -1,0 +1,26 @@
+name: Release readiness
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-release-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install --no-fund --no-audit --silent
+      - name: Run normal verification
+        run: npm test
+      - name: Enforce all release evidence gates
+        run: npm run verify:release
