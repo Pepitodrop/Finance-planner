@@ -67,7 +67,12 @@ export async function processWebhook({ request, provider, secret, store, handler
     now: now.toISOString(),
     leaseUntil: new Date(now.getTime() + leaseSeconds * 1000).toISOString(),
   })
-  if (!leaseToken) return { accepted: true, duplicate: true, eventId: verified.eventId }
+  if (!leaseToken) {
+    if (typeof store.getWebhookEventState !== 'function') throw new Error('Webhook store does not expose delivery state.')
+    const state = await store.getWebhookEventState(provider, verified.eventId, now)
+    if (state === 'completed') return { accepted: true, duplicate: true, eventId: verified.eventId }
+    throw new HttpError(503, 'webhook_processing', 'A matching webhook delivery is still being processed; retry later.')
+  }
 
   try {
     await handler({ provider, eventId: verified.eventId, occurredAt: verified.occurredAt, payload })
