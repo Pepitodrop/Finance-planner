@@ -5,8 +5,32 @@ const PAYPAL_SANDBOX = 'https://api-m.sandbox.paypal.com'
 const PAYPAL_LIVE = 'https://api-m.paypal.com'
 const DEFAULT_TIMEOUT_MS = 15_000
 const DEFAULT_RETRIES = 2
+const DEFAULT_SYNC_DAYS = 31
+const DEFAULT_OVERLAP_DAYS = 3
+const MAX_PAYPAL_PAGES = 100
+const MAX_RETRY_DELAY_MS = 30_000
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)) }
+function isoDate(value) { return new Date(value).toISOString().slice(0, 10) }
+
+export function retryDelayMs(value, now = Date.now()) {
+  if (!value) return null
+  const seconds = Number(value)
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, MAX_RETRY_DELAY_MS)
+  const date = Date.parse(value)
+  if (!Number.isFinite(date)) return null
+  return Math.min(Math.max(0, date - now), MAX_RETRY_DELAY_MS)
+}
+
+export function syncWindow(lastSyncedAt, now = new Date(), fallbackDays = DEFAULT_SYNC_DAYS, overlapDays = DEFAULT_OVERLAP_DAYS) {
+  const end = new Date(now)
+  if (!Number.isFinite(end.getTime())) throw new Error('Invalid synchronization time.')
+  const fallback = new Date(end.getTime() - fallbackDays * 86_400_000)
+  const previous = lastSyncedAt ? new Date(lastSyncedAt) : fallback
+  const safePrevious = Number.isFinite(previous.getTime()) && previous <= end ? previous : fallback
+  const start = new Date(Math.max(fallback.getTime(), safePrevious.getTime() - overlapDays * 86_400_000))
+  return { start, end, dateFrom: isoDate(start), dateTo: isoDate(end) }
+}
 
 export async function jsonFetch(url, options = {}, policy = {}) {
   const timeoutMs = Number(policy.timeoutMs ?? DEFAULT_TIMEOUT_MS)
@@ -30,8 +54,8 @@ export async function jsonFetch(url, options = {}, policy = {}) {
       if (!retryable || attempt === retries) throw error
 
       lastError = error
-      const retryAfter = Number(response.headers.get('retry-after'))
-      await sleep(Number.isFinite(retryAfter) ? retryAfter * 1000 : 250 * (2 ** attempt))
+      const providerDelay = retryDelayMs(response.headers.get('retry-after'))
+      await sleep(providerDelay ?? 250 * (2 ** attempt))
       continue
     } catch (error) {
       lastError = error
@@ -66,11 +90,23 @@ function providerPolicy(env) {
   }
 }
 
+function tokenIsUsable(token, now = Date.now()) {
+  if (!token?.access) return false
+  if (!token.accessExpiresAt) return true
+  return Date.parse(token.accessExpiresAt) - now >= 120_000
+}
+
 export async function gocardlessToken(env) {
-  return jsonFetch(`${GC_BASE}/token/new/`, {
+  const token = await jsonFetch(`${GC_BASE}/token/new/`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ secret_id: env.GOCARDLESS_SECRET_ID, secret_key: env.GOCARDLESS_SECRET_KEY }),
   }, providerPolicy(env))
+  const issuedAt = new Date()
+  return {
+    ...token,
+    issuedAt: issuedAt.toISOString(),
+    accessExpiresAt: Number(token.access_expires) > 0 ? new Date(issuedAt.getTime() + Number(token.access_expires) * 1000).toISOString() : undefined,
+  }
 }
 
 export async function startGoCardless({ env, state, redirectUri, country = 'DE' }) {
@@ -92,19 +128,24 @@ export async function startGoCardless({ env, state, redirectUri, country = 'DE' 
 }
 
 export async function syncGoCardless(credential, env) {
+  const completedAt = new Date()
   let token = credential.token
-  if (!token?.access || (token.access_expires && token.access_expires < 120)) token = await gocardlessToken(env)
+  if (!tokenIsUsable(token, completedAt.getTime())) token = await gocardlessToken(env)
   const policy = providerPolicy(env)
   const requisition = await jsonFetch(`${GC_BASE}/requisitions/${credential.requisitionId}/`, { headers: { Authorization: `Bearer ${token.access}` } }, policy)
   if (requisition.status !== 'LN') throw new Error(`GoCardless consent is not ready: ${requisition.status || 'unknown'}`)
+  const window = syncWindow(credential.lastSyncedAt, completedAt, 90)
   const accounts = []
   const transactions = []
   const seen = new Set()
   for (const accountId of requisition.accounts ?? []) {
+    const txUrl = new URL(`${GC_BASE}/accounts/${accountId}/transactions/`)
+    txUrl.searchParams.set('date_from', window.dateFrom)
+    txUrl.searchParams.set('date_to', window.dateTo)
     const [details, balances, tx] = await Promise.all([
       jsonFetch(`${GC_BASE}/accounts/${accountId}/details/`, { headers: { Authorization: `Bearer ${token.access}` } }, policy),
       jsonFetch(`${GC_BASE}/accounts/${accountId}/balances/`, { headers: { Authorization: `Bearer ${token.access}` } }, policy),
-      jsonFetch(`${GC_BASE}/accounts/${accountId}/transactions/`, { headers: { Authorization: `Bearer ${token.access}` } }, policy),
+      jsonFetch(txUrl, { headers: { Authorization: `Bearer ${token.access}` } }, policy),
     ])
     const account = details.account ?? {}
     const balance = balances.balances?.find((item) => item.balanceAmount?.currency === 'EUR')?.balanceAmount?.amount ?? '0'
@@ -117,11 +158,11 @@ export async function syncGoCardless(credential, env) {
         const externalId = item.transactionId || `${accountId}:${item.bookingDate || item.valueDate}:${item.transactionAmount.amount}:${item.remittanceInformationUnstructured || ''}`
         if (seen.has(externalId)) continue
         seen.add(externalId)
-        transactions.push({ externalId, externalAccountId: accountId, description: item.creditorName || item.debtorName || item.remittanceInformationUnstructured || item.additionalInformation || 'Banktransaktion', amountCents: signedCents, currency: 'EUR', bookingDate: item.bookingDate || item.valueDate || new Date().toISOString().slice(0, 10), pending })
+        transactions.push({ externalId, externalAccountId: accountId, description: item.creditorName || item.debtorName || item.remittanceInformationUnstructured || item.additionalInformation || 'Banktransaktion', amountCents: signedCents, currency: 'EUR', bookingDate: item.bookingDate || item.valueDate || window.dateTo, pending })
       }
     }
   }
-  return { accounts, transactions, credential: { ...credential, token }, reconciliation: { accountCount: accounts.length, transactionCount: transactions.length, syncedAt: new Date().toISOString() }, consentExpiresAt: undefined }
+  return { accounts, transactions, credential: { ...credential, token, lastSyncedAt: completedAt.toISOString() }, reconciliation: { accountCount: accounts.length, transactionCount: transactions.length, dateFrom: window.dateFrom, dateTo: window.dateTo, syncedAt: completedAt.toISOString() }, consentExpiresAt: undefined }
 }
 
 async function paypalAccessToken(env) {
@@ -144,9 +185,9 @@ export async function startPayPal({ env, state, redirectUri }) {
 }
 
 export async function syncPayPal(credential, env) {
+  const completedAt = new Date()
   const { base, token } = await paypalAccessToken(env)
-  const end = new Date()
-  const start = new Date(end.getTime() - 31 * 86400000)
+  const window = syncWindow(credential.lastSyncedAt, completedAt)
   const transactions = []
   const seen = new Set()
   let balanceCents = 0
@@ -154,13 +195,14 @@ export async function syncPayPal(credential, env) {
   let totalPages = 1
   do {
     const url = new URL(`${base}/v1/reporting/transactions`)
-    url.searchParams.set('start_date', start.toISOString())
-    url.searchParams.set('end_date', end.toISOString())
+    url.searchParams.set('start_date', window.start.toISOString())
+    url.searchParams.set('end_date', window.end.toISOString())
     url.searchParams.set('fields', 'all')
     url.searchParams.set('page_size', '500')
     url.searchParams.set('page', String(page))
     const report = await jsonFetch(url, { headers: { Authorization: `Bearer ${token.access_token}` } }, providerPolicy(env))
     totalPages = Math.max(1, Number(report.total_pages || 1))
+    if (!Number.isSafeInteger(totalPages) || totalPages > MAX_PAYPAL_PAGES) throw new Error(`PayPal report pagination exceeds safety limit: ${totalPages}`)
     for (const row of report.transaction_details ?? []) {
       const info = row.transaction_info ?? {}
       if (info.transaction_amount?.currency_code !== 'EUR' || !info.transaction_id || seen.has(info.transaction_id)) continue
@@ -168,9 +210,9 @@ export async function syncPayPal(credential, env) {
       const signedCents = decimalToCents(info.transaction_amount.value)
       await normalizeSignedAmount(signedCents, env)
       balanceCents += signedCents
-      transactions.push({ externalId: info.transaction_id, externalAccountId: 'paypal-eur', description: info.transaction_subject || info.transaction_note || info.transaction_event_code || 'PayPal', amountCents: signedCents, currency: 'EUR', bookingDate: String(info.transaction_initiation_date || '').slice(0, 10), pending: info.transaction_status === 'P' })
+      transactions.push({ externalId: info.transaction_id, externalAccountId: 'paypal-eur', description: info.transaction_subject || info.transaction_note || info.transaction_event_code || 'PayPal', amountCents: signedCents, currency: 'EUR', bookingDate: String(info.transaction_initiation_date || '').slice(0, 10) || window.dateTo, pending: info.transaction_status === 'P' })
     }
     page += 1
-  } while (page <= totalPages && page <= 100)
-  return { accounts: [{ externalId: 'paypal-eur', name: 'PayPal EUR', type: 'cash', balanceCents, currency: 'EUR' }], transactions, credential, reconciliation: { pageCount: totalPages, transactionCount: transactions.length, syncedAt: new Date().toISOString() } }
+  } while (page <= totalPages)
+  return { accounts: [{ externalId: 'paypal-eur', name: 'PayPal EUR', type: 'cash', balanceCents, currency: 'EUR' }], transactions, credential: { ...credential, lastSyncedAt: completedAt.toISOString() }, reconciliation: { pageCount: totalPages, transactionCount: transactions.length, dateFrom: window.dateFrom, dateTo: window.dateTo, syncedAt: completedAt.toISOString() } }
 }
