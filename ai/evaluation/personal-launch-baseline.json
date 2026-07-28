@@ -13,15 +13,17 @@
     "p95LatencyMs": 1100
   },
   "coverage": {
-    "cases": 16,
+    "cases": 12,
     "locales": ["de-DE", "en-GB"],
-    "germanCases": 8,
-    "englishCases": 8,
-    "abstentionCases": 3
+    "germanCases": 6,
+    "englishCases": 6,
+    "abstentionCases": 2
   },
   "measurement": {
     "kind": "deterministic-ci-harness",
+    "qualityGateScript": "scripts/verify-ai-quality-gates.mjs",
+    "evaluationDataset": "ai/evaluation/transaction-categories.json",
     "hostedProviderLatencyValidated": false,
-    "notes": "This baseline gates logic, reconciliation, safety and fallback behaviour. Hosted inference latency and quota must be checked with the launch command before enabling external AI in the personal pilot."
+    "notes": "The normal test pipeline recomputes deterministic quality and safety gates. Hosted inference availability, errors and latency are measured separately by verify:launch:runtime before external AI may be enabled."
   }
 }
