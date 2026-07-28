@@ -7,6 +7,8 @@ const REVIEWED_MODEL_REVISIONS = Object.freeze({
   ]),
 })
 
+const MINIMUM_ENSEMBLE_AGREEMENT = 0.67
+
 function reviewedModel(role, modelValue, revisionValue) {
   const model = String(modelValue || '')
   const revision = String(revisionValue || '')
@@ -34,6 +36,10 @@ export function governedAiModels(env, defaults) {
   return { analyst, critic }
 }
 
+function signalKey(signal) {
+  return `${signal.type}:${signal.severity}`
+}
+
 export async function runGovernedEnsemble({ transport, models, snapshot, analystPrompt, parseAndValidate }) {
   const analystContent = await transport.chatCompletion({
     model: models.analyst.model,
@@ -43,7 +49,7 @@ export async function runGovernedEnsemble({ transport, models, snapshot, analyst
     messages: analystPrompt(snapshot),
   })
   const analyst = parseAndValidate(analystContent)
-  if (!models.critic) return { result: analyst, modelsUsed: [models.analyst], agreement: null }
+  if (!models.critic) return { result: analyst, modelsUsed: [models.analyst], agreement: null, abstained: false }
 
   const criticContent = await transport.chatCompletion({
     model: models.critic.model,
@@ -56,24 +62,93 @@ export async function runGovernedEnsemble({ transport, models, snapshot, analyst
     ],
   })
   const critic = parseAndValidate(criticContent)
-  const analystKeys = new Set(analyst.signals.map((signal) => `${signal.type}:${signal.severity}`))
-  const agreedSignals = critic.signals.filter((signal) => analystKeys.has(`${signal.type}:${signal.severity}`))
-  const agreement = analyst.signals.length === 0 ? (critic.signals.length === 0 ? 1 : 0) : agreedSignals.length / analyst.signals.length
+  const analystKeys = new Set(analyst.signals.map(signalKey))
+  const criticKeys = new Set(critic.signals.map(signalKey))
+  const agreedSignals = critic.signals.filter((signal) => analystKeys.has(signalKey(signal)))
+  const unionSize = new Set([...analystKeys, ...criticKeys]).size
+  const agreement = unionSize === 0 ? 1 : agreedSignals.length / unionSize
+  const roundedAgreement = Number(agreement.toFixed(2))
+
+  if (roundedAgreement < MINIMUM_ENSEMBLE_AGREEMENT) {
+    return {
+      result: {
+        summary: 'Die Modelle waren sich nicht ausreichend einig. Es wurden keine KI-Hinweise übernommen.',
+        confidence: Math.min(analyst.confidence, critic.confidence, 0.4),
+        signals: [],
+      },
+      modelsUsed: [models.analyst, models.critic],
+      agreement: roundedAgreement,
+      abstained: true,
+      abstentionReason: 'insufficient_model_agreement',
+    }
+  }
+
   return {
     result: { ...critic, confidence: Math.min(critic.confidence, analyst.confidence, 0.95), signals: agreedSignals },
     modelsUsed: [models.analyst, models.critic],
-    agreement: Number(agreement.toFixed(2)),
+    agreement: roundedAgreement,
+    abstained: false,
   }
+}
+
+function safeRatio(numerator, denominator) {
+  return denominator > 0 ? numerator / denominator : null
+}
+
+function monthsUntil(targetDate) {
+  const target = new Date(`${targetDate}T00:00:00Z`)
+  if (Number.isNaN(target.getTime())) return null
+  const now = new Date()
+  const months = (target.getUTCFullYear() - now.getUTCFullYear()) * 12 + target.getUTCMonth() - now.getUTCMonth()
+  return Math.max(1, months)
 }
 
 export function deterministicScenarioInsights(snapshot) {
   const insights = []
-  const savingsRate = snapshot.incomeCents > 0 ? snapshot.freeCashCents / snapshot.incomeCents : 0
-  const recurringShare = snapshot.expenseCents > 0 ? snapshot.recurringExpenseCents / snapshot.expenseCents : 0
+  const savingsRateRaw = safeRatio(snapshot.freeCashCents, snapshot.incomeCents)
+  const savingsRate = savingsRateRaw ?? 0
+  const recurringShareRaw = safeRatio(snapshot.recurringExpenseCents, snapshot.expenseCents)
+  const recurringShare = recurringShareRaw ?? 0
+
   if (savingsRate < 0.1) insights.push({ code: 'low_savings_rate', value: Number(savingsRate.toFixed(3)), severity: savingsRate <= 0 ? 'critical' : 'warning' })
   if (recurringShare > 0.6) insights.push({ code: 'high_recurring_share', value: Number(recurringShare.toFixed(3)), severity: 'warning' })
+
   const monthlyBurn = snapshot.monthsCovered > 0 ? snapshot.expenseCents / snapshot.monthsCovered : snapshot.expenseCents
   const runwayMonths = monthlyBurn > 0 ? snapshot.accountBalanceCents / monthlyBurn : null
   if (runwayMonths !== null && runwayMonths < 3) insights.push({ code: 'low_liquidity_runway', value: Number(runwayMonths.toFixed(2)), severity: runwayMonths < 1 ? 'critical' : 'warning' })
-  return { savingsRate: Number(savingsRate.toFixed(3)), recurringShare: Number(recurringShare.toFixed(3)), runwayMonths: runwayMonths === null ? null : Number(runwayMonths.toFixed(2)), insights }
+
+  const stressExpenseCents = Math.round(snapshot.expenseCents * 1.15)
+  const stressedFreeCashCents = snapshot.incomeCents - stressExpenseCents
+  const stressResilient = stressedFreeCashCents >= 0
+  if (!stressResilient) insights.push({ code: 'expense_stress_failure', value: stressedFreeCashCents, severity: 'warning' })
+
+  const goalFeasibility = snapshot.goals.map((goal, index) => {
+    const monthsRemaining = monthsUntil(goal.targetDate)
+    const requiredMonthlyCents = monthsRemaining ? Math.ceil(goal.remainingCents / monthsRemaining) : goal.remainingCents
+    const coverageRatio = snapshot.freeCashCents > 0 ? snapshot.freeCashCents / requiredMonthlyCents : 0
+    const feasible = coverageRatio >= 1
+    if (!feasible) insights.push({ code: 'goal_funding_gap', goalIndex: index, value: Number(coverageRatio.toFixed(3)), severity: coverageRatio < 0.5 ? 'critical' : 'warning' })
+    return {
+      goalIndex: index,
+      targetDate: goal.targetDate,
+      monthsRemaining,
+      requiredMonthlyCents,
+      coverageRatio: Number(coverageRatio.toFixed(3)),
+      feasible,
+    }
+  })
+
+  return {
+    savingsRate: Number(savingsRate.toFixed(3)),
+    recurringShare: Number(recurringShare.toFixed(3)),
+    runwayMonths: runwayMonths === null ? null : Number(runwayMonths.toFixed(2)),
+    stressTest: {
+      expenseIncreasePercent: 15,
+      stressedExpenseCents,
+      stressedFreeCashCents,
+      resilient: stressResilient,
+    },
+    goalFeasibility,
+    insights,
+  }
 }
