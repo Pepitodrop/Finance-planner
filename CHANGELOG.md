@@ -25,6 +25,15 @@ All notable changes to this project are documented in this file.
   client IP header.
 - Restored working `lint` command (the project's ESLint configuration was
   missing).
+- The Financial Assistant screen (agent status, data-quality badges, and the
+  "Approval-gated Agent" label) now also renders in German instead of showing
+  raw internal state values like "proposed" or "low".
+- `npm run dev` now proxies `/api` and `/health/ready` requests to the local
+  connector, so the frontend can reach the backend immediately with no manual
+  proxy setup.
+- The "enable biometric login" banner's backdrop and the undo-delete toast no
+  longer share the same stacking layer, so one can no longer accidentally
+  paint over and block the other.
 
 ### Changed
 - Local development setup docs now cover starting the connector backend and its

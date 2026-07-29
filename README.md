@@ -323,10 +323,15 @@ public/                 manifest, service worker, and install assets
 server/                 authentication, providers, encrypted storage, COBOL and AI APIs
 core/cobol/             deterministic fixed-point financial calculations
 deploy/                 web-server deployment configuration
+diagrams/               system architecture diagram (source, editable, and rendered)
 docs/                   production, AI, privacy, and operations guidance
 scripts/                backup and restore tooling
 .github/workflows/      frontend, backend, container, mobile, AI, and COBOL CI
 ```
+
+See [`diagrams/architecture-overview.svg`](diagrams/architecture-overview.svg) for a visual
+system diagram, [`CHANGELOG.md`](CHANGELOG.md) for release history, and [`TODOS.md`](TODOS.md)
+for tracked follow-up work.
 
 ## Known production gaps
 

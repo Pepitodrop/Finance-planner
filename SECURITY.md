@@ -22,7 +22,9 @@ A public deployment is not considered supported unless all of the following are 
 
 - `APP_ORIGIN` uses HTTPS
 - `PUBLIC_DEPLOYMENT=true`
-- `AUTH_MODE` is not `local`
+- `AUTH_MODE` is not `local` (the connector refuses to start with `AUTH_MODE=local`
+  under `NODE_ENV=production` regardless of `PUBLIC_DEPLOYMENT`, since it mints
+  unauthenticated sessions)
 - `SESSION_SECRET` and `CONNECTOR_MASTER_KEY` are independent random secrets with at least 32 characters
 - secrets are injected at runtime and are not stored in source control or container images
 - the connector API is not exposed directly to the public internet
