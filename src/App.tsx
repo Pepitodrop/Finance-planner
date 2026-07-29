@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowDownRight, ArrowUpRight, BrainCircuit, CalendarClock, DatabaseBackup, Landmark, Link2, MessageCircleQuestion, Pencil, PiggyBank, Plus, Repeat2, Target, Trash2, Undo2, WalletCards } from 'lucide-react'
-import { Area, AreaChart, CartesianGrid, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { AiPanel } from './AiPanel'
 import type { AiSuggestion } from './ai'
 import { learnBehavior } from './behavior'
@@ -15,6 +15,8 @@ import type { AppState, Transaction, TransactionType } from './types'
 import { validateTransactionInput } from './validation'
 
 type Tab = 'dashboard' | 'transactions' | 'goals' | 'recurring' | 'connections' | 'ai' | 'assistant' | 'data'
+
+const CATEGORY_COLORS = ['#5878ff', '#5fe0a0', '#ff9f5b', '#ff8b96', '#7dd3fc', '#c084fc', '#f4d35e', '#4dd0c4']
 
 function App() {
   const [state, setState] = useState<AppState>(() => loadState())
@@ -120,7 +122,7 @@ function App() {
         </section>
         <section className="dashboard-grid">
           <article className="panel projection-panel"><div className="panel-header"><div><p className="eyebrow">12 Monate</p><h2>Vermögensprognose</h2></div><span className="pill">Deterministisch</span></div><div className="chart"><ResponsiveContainer width="100%" height={290}><AreaChart data={projection}><CartesianGrid strokeDasharray="4 4" vertical={false}/><XAxis dataKey="month"/><YAxis tickFormatter={(value) => `${Math.round(Number(value) / 1000)}k`}/><Tooltip formatter={(value) => formatMoney(Number(value) * 100)}/><Area type="monotone" dataKey="balance" stroke="currentColor" fill="currentColor" fillOpacity={0.15} strokeWidth={3}/></AreaChart></ResponsiveContainer></div></article>
-          <article className="panel"><div className="panel-header"><div><p className="eyebrow">Ausgaben</p><h2>Kategorien</h2></div></div><div className="donut-layout"><ResponsiveContainer width="100%" height={210}><PieChart><Pie data={categories} dataKey="value" nameKey="name" innerRadius={58} outerRadius={86} paddingAngle={3}/><Tooltip formatter={(value) => formatMoney(Number(value) * 100)}/></PieChart></ResponsiveContainer><div className="category-list">{categories.slice(0, 5).map((category) => <div key={category.name}><span>{category.name}</span><strong>{formatMoney(category.value * 100)}</strong></div>)}</div></div></article>
+          <article className="panel"><div className="panel-header"><div><p className="eyebrow">Ausgaben</p><h2>Kategorien</h2></div></div><div className="donut-layout"><ResponsiveContainer width="100%" height={210}><PieChart><Pie data={categories} dataKey="value" nameKey="name" innerRadius={58} outerRadius={86} paddingAngle={3}>{categories.map((category, index) => <Cell key={category.name} fill={CATEGORY_COLORS[index % CATEGORY_COLORS.length]}/>)}</Pie><Tooltip formatter={(value) => formatMoney(Number(value) * 100)}/></PieChart></ResponsiveContainer><div className="category-list">{categories.slice(0, 5).map((category, index) => <div key={category.name}><span><i className="category-dot" style={{ background: CATEGORY_COLORS[index % CATEGORY_COLORS.length] }}/>{category.name}</span><strong>{formatMoney(category.value * 100)}</strong></div>)}</div></div></article>
         </section>
         <section className="dashboard-grid lower">
           <article className="panel"><div className="panel-header"><div><p className="eyebrow">Konten</p><h2>Deine Guthaben</h2></div></div><div className="account-list">{state.accounts.map((account) => <div className="account-row" key={account.id}><div className="account-icon"><WalletCards size={19}/></div><div><strong>{account.name}</strong><span>{account.type}</span></div><b>{formatMoney(account.balanceCents)}</b></div>)}</div></article>

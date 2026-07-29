@@ -42,7 +42,9 @@ h2 { font-size: 20px; letter-spacing: -.02em; }
 .donut-layout { display: grid; align-items: center; }
 .category-list { display: grid; gap: 9px; }
 .category-list div { display: flex; justify-content: space-between; color: #99a5bb; font-size: 12px; }
+.category-list span { display: flex; align-items: center; gap: 7px; }
 .category-list strong { color: #e8edf8; }
+.category-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .account-list, .goal-list, .transaction-list { display: grid; }
 .account-row, .transaction-row { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 12px; padding: 13px 0; border-bottom: 1px solid #222c43; }
 .account-row:last-child, .transaction-row:last-child { border-bottom: 0; }
