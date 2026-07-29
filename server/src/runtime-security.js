@@ -56,7 +56,9 @@ export function classifyError(error) {
 }
 
 export function validateProductionConfig(env, origin) {
+  if (env.NODE_ENV === 'production' && env.AUTH_MODE === 'local') {
+    throw new Error('AUTH_MODE=local is not allowed when NODE_ENV=production. It mints unauthenticated sessions via POST /api/session/local.')
+  }
   if (env.NODE_ENV !== 'production' || env.PUBLIC_DEPLOYMENT !== 'true') return
-  if (env.AUTH_MODE === 'local') throw new Error('AUTH_MODE=local is not allowed for public production deployments.')
   if (!origin.startsWith('https://')) throw new Error('APP_ORIGIN must use HTTPS for public production deployments.')
 }

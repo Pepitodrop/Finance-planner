@@ -43,6 +43,11 @@ test('public production configuration rejects local auth and insecure origins', 
   assert.throws(() => validateProductionConfig({ ...publicProduction, AUTH_MODE: 'local' }, 'https://app.example'), /AUTH_MODE/)
   assert.throws(() => validateProductionConfig(publicProduction, 'http://app.example'), /HTTPS/)
   assert.doesNotThrow(() => validateProductionConfig(publicProduction, 'https://app.example'))
-  assert.doesNotThrow(() => validateProductionConfig({ NODE_ENV: 'production', AUTH_MODE: 'local' }, 'http://localhost:8080'))
   assert.doesNotThrow(() => validateProductionConfig({ NODE_ENV: 'development', PUBLIC_DEPLOYMENT: 'true', AUTH_MODE: 'local' }, 'http://localhost:5173'))
+})
+
+test('AUTH_MODE=local is rejected whenever NODE_ENV=production, even without PUBLIC_DEPLOYMENT', () => {
+  assert.throws(() => validateProductionConfig({ NODE_ENV: 'production', AUTH_MODE: 'local' }, 'http://localhost:8080'), /AUTH_MODE/)
+  assert.throws(() => validateProductionConfig({ NODE_ENV: 'production', PUBLIC_DEPLOYMENT: 'false', AUTH_MODE: 'local' }, 'http://localhost:8080'), /AUTH_MODE/)
+  assert.doesNotThrow(() => validateProductionConfig({ NODE_ENV: 'production', AUTH_MODE: 'google' }, 'http://localhost:8080'))
 })
