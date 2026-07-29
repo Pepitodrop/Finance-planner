@@ -9,3 +9,4 @@ dist
 .launch-evidence/
 server/data/
 server/*.env
+.gstack/
