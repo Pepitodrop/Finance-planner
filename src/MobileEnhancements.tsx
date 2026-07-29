@@ -79,11 +79,11 @@ export function MobileEnhancements() {
           <span className={refreshing ? 'mobile-pull-indicator__spinner' : ''} aria-hidden="true">
             {refreshing ? '↻' : progress >= 1 ? '↑' : '↓'}
           </span>
-          {refreshing ? 'Refreshing…' : progress >= 1 ? 'Release to refresh' : 'Pull to refresh'}
+          {refreshing ? 'Wird aktualisiert …' : progress >= 1 ? 'Loslassen zum Aktualisieren' : 'Ziehen zum Aktualisieren'}
         </div>
       )}
       {booting && (
-        <div className="mobile-boot-skeleton" role="status" aria-label="Loading Finance Planner">
+        <div className="mobile-boot-skeleton" role="status" aria-label="Finance Planner wird geladen">
           <div className="mobile-boot-skeleton__bar" />
           <div className="mobile-boot-skeleton__card" />
           <div className="mobile-boot-skeleton__card mobile-boot-skeleton__card--short" />

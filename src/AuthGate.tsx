@@ -15,7 +15,7 @@ interface AuthGateProps { children: ReactNode }
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { credentials: 'include', ...init, headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) } })
   const payload = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(payload.error || 'Authentication failed.')
+  if (!response.ok) throw new Error(payload.error || 'Anmeldung fehlgeschlagen.')
   return payload
 }
 
@@ -44,7 +44,7 @@ export function AuthGate({ children }: AuthGateProps) {
       const session = await api<{ user: AuthUser }>('/api/auth/session')
       setUser(session.user)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Biometric login failed.')
+      setError(reason instanceof Error ? reason.message : 'Biometrische Anmeldung fehlgeschlagen.')
     } finally {
       setBusy(false)
     }
@@ -60,25 +60,25 @@ export function AuthGate({ children }: AuthGateProps) {
       const session = await api<{ user: AuthUser }>('/api/auth/session')
       setUser(session.user)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Passkey registration failed.')
+      setError(reason instanceof Error ? reason.message : 'Passkey-Registrierung fehlgeschlagen.')
     } finally {
       setBusy(false)
     }
   }
 
-  if (loading) return <main className="auth-screen"><p>Secure session is loading…</p></main>
+  if (loading) return <main className="auth-screen"><p>Sichere Sitzung wird geladen …</p></main>
 
   if (!user) return <main className="auth-screen">
     <section className="panel auth-card">
       <div className="goal-hero-icon"><ShieldCheck size={28}/></div>
-      <p className="eyebrow">Secure mobile sign-in</p>
-      <h1>Sign in to Finance Planner</h1>
-      <p className="muted">Use Google or a device passkey. Face ID, Touch ID, Android biometrics, or the device PIN stay on your phone and are never sent to Finance Planner.</p>
-      <button className="auth-google" type="button" onClick={() => { window.location.href = '/api/auth/google/start' }}><LogIn size={18}/> Continue with Google</button>
+      <p className="eyebrow">Sichere mobile Anmeldung</p>
+      <h1>Bei Finance Planner anmelden</h1>
+      <p className="muted">Nutze Google oder einen Geräte-Passkey. Face ID, Touch ID, Android-Biometrie oder die Geräte-PIN bleiben auf deinem Gerät und werden niemals an Finance Planner gesendet.</p>
+      <button className="auth-google" type="button" onClick={() => { window.location.href = '/api/auth/google/start' }}><LogIn size={18}/> Mit Google fortfahren</button>
       {passkeysSupported && <>
-        <div className="auth-divider"><span>or</span></div>
-        <label>Email<input autoComplete="email webauthn" inputMode="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com"/></label>
-        <button className="primary" type="button" disabled={busy || !email} onClick={passkeyLogin}><Fingerprint size={19}/>{busy ? 'Checking…' : 'Use Face ID or fingerprint'}</button>
+        <div className="auth-divider"><span>oder</span></div>
+        <label>E-Mail<input autoComplete="email webauthn" inputMode="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="du@beispiel.de"/></label>
+        <button className="primary" type="button" disabled={busy || !email} onClick={passkeyLogin}><Fingerprint size={19}/>{busy ? 'Wird geprüft …' : 'Face ID oder Fingerabdruck verwenden'}</button>
       </>}
       {error && <p className="status-message error-message" role="alert">{error}</p>}
     </section>
@@ -86,8 +86,8 @@ export function AuthGate({ children }: AuthGateProps) {
 
   return <>
     {user.passkeyCount === 0 && passkeysSupported && <div className="passkey-enrolment" role="status">
-      <span>Enable faster sign-in with Face ID or fingerprint.</span>
-      <button type="button" disabled={busy} onClick={registerPasskey}><Fingerprint size={17}/> Enable biometric login</button>
+      <span>Schnellere Anmeldung mit Face ID oder Fingerabdruck aktivieren.</span>
+      <button type="button" disabled={busy} onClick={registerPasskey}><Fingerprint size={17}/> Biometrische Anmeldung aktivieren</button>
     </div>}
     {children}
   </>

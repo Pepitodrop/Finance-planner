@@ -190,57 +190,57 @@ export function MobileRuntime() {
     <div className="mobile-runtime" aria-live="polite">
       {!online && (
         <div className="mobile-runtime__banner" role="status">
-          Offline mode. Your locally stored finance data remains available.
+          Offline-Modus. Deine lokal gespeicherten Finanzdaten bleiben verfügbar.
         </div>
       )}
       {storageHealth.pressure === 'critical' && (
         <div className="mobile-runtime__banner" role="alert">
-          Device storage is almost full. Free space to prevent failed local saves.
+          Der Gerätespeicher ist fast voll. Speicherplatz freigeben, um fehlgeschlagene lokale Speicherungen zu vermeiden.
         </div>
       )}
       {storageHealth.pressure === 'warning' && (
         <div className="mobile-runtime__banner mobile-runtime__banner--warning" role="status">
-          Device storage is running low. Consider freeing space soon.
+          Der Gerätespeicher wird knapp. Bald Speicherplatz freigeben.
         </div>
       )}
       {updateReady && (
         <div className="mobile-runtime__banner mobile-runtime__banner--action" role="status">
-          <span>A safer, newer version is ready.</span>
-          <button type="button" onClick={() => requestServiceWorkerActivation(registration)}>Update now</button>
+          <span>Eine sicherere, neuere Version ist verfügbar.</span>
+          <button type="button" onClick={() => requestServiceWorkerActivation(registration)}>Jetzt aktualisieren</button>
         </div>
       )}
       {canInstall && (
-        <div className="mobile-install-card" role="dialog" aria-label="Install Finance Planner">
+        <div className="mobile-install-card" role="dialog" aria-label="Finance Planner installieren">
           <div>
-            <strong>Install Finance Planner</strong>
-            <p>Open it like an app, use the full screen, and keep the offline shell available.</p>
+            <strong>Finance Planner installieren</strong>
+            <p>Wie eine App öffnen, den Vollbildmodus nutzen und die Offline-Hülle verfügbar halten.</p>
           </div>
           <div className="mobile-install-card__actions">
-            <button type="button" onClick={dismissInstall} className="mobile-install-card__secondary">Not now</button>
-            <button type="button" onClick={install} disabled={installing}>{installing ? 'Opening…' : 'Install'}</button>
+            <button type="button" onClick={dismissInstall} className="mobile-install-card__secondary">Nicht jetzt</button>
+            <button type="button" onClick={install} disabled={installing}>{installing ? 'Wird geöffnet …' : 'Installieren'}</button>
           </div>
         </div>
       )}
       {showIosGuide && (
-        <div className="mobile-install-card" role="dialog" aria-label="Install Finance Planner on iPhone or iPad">
+        <div className="mobile-install-card" role="dialog" aria-label="Finance Planner auf iPhone oder iPad installieren">
           <div>
-            <strong>Add Finance Planner to your Home Screen</strong>
-            <p>Tap Share in Safari, then choose “Add to Home Screen”. This enables the standalone app experience.</p>
+            <strong>Finance Planner zum Home-Bildschirm hinzufügen</strong>
+            <p>In Safari auf „Teilen“ tippen, dann „Zum Home-Bildschirm“ wählen. Das aktiviert die eigenständige App-Ansicht.</p>
           </div>
           <div className="mobile-install-card__actions mobile-install-card__actions--single">
-            <button type="button" onClick={dismissInstall} className="mobile-install-card__secondary">Got it</button>
+            <button type="button" onClick={dismissInstall} className="mobile-install-card__secondary">Verstanden</button>
           </div>
         </div>
       )}
       {shouldOfferStorageProtection && (
-        <div className="mobile-install-card" role="dialog" aria-label="Protect locally stored finance data">
+        <div className="mobile-install-card" role="dialog" aria-label="Lokal gespeicherte Finanzdaten schützen">
           <div>
-            <strong>Protect local data from automatic cleanup</strong>
-            <p>Ask your browser to keep this app’s encrypted local storage during device cleanup.</p>
+            <strong>Lokale Daten vor automatischer Bereinigung schützen</strong>
+            <p>Den Browser bitten, den verschlüsselten lokalen Speicher dieser App bei der Gerätebereinigung zu behalten.</p>
           </div>
           <div className="mobile-install-card__actions">
-            <button type="button" onClick={dismissStorageProtection} className="mobile-install-card__secondary">Later</button>
-            <button type="button" onClick={protectStorage} disabled={protectingStorage}>{protectingStorage ? 'Checking…' : 'Protect data'}</button>
+            <button type="button" onClick={dismissStorageProtection} className="mobile-install-card__secondary">Später</button>
+            <button type="button" onClick={protectStorage} disabled={protectingStorage}>{protectingStorage ? 'Wird geprüft …' : 'Daten schützen'}</button>
           </div>
         </div>
       )}
