@@ -7,6 +7,10 @@ import { createSmartBriefing } from './smartBriefing'
 import { assessSmartness } from './smartness'
 import type { AppState } from './types'
 
+const ACTION_STATUS_LABELS: Record<string, string> = { proposed: 'Vorgeschlagen', approved: 'Genehmigt', rejected: 'Abgelehnt' }
+const DATA_QUALITY_LABELS: Record<string, string> = { low: 'niedrig', medium: 'mittel', high: 'hoch' }
+const SMARTNESS_LEVEL_LABELS: Record<string, string> = { basic: 'Basis', adaptive: 'Adaptiv', advanced: 'Fortgeschritten' }
+
 export function FinanceAssistant({ state }: { state: AppState }) {
   const [mode, setMode] = useState<AssistantMode>('analysis')
   const [question, setQuestion] = useState('Wie kann ich meine Sparziele schneller erreichen?')
@@ -55,15 +59,15 @@ export function FinanceAssistant({ state }: { state: AppState }) {
     </section>
     <section className="panel">
       <div className="panel-header"><div><p className="eyebrow">Messbare Smartness</p><h2>KI-Qualität: {smartness.overall}%</h2></div><Gauge size={20}/></div>
-      <p className="muted">Stufe: {smartness.level}. Der Wert misst Datengrundlage, Personalisierung, Prognosefähigkeit, Erklärbarkeit und Sicherheit getrennt.</p>
+      <p className="muted">Stufe: {SMARTNESS_LEVEL_LABELS[smartness.level] ?? smartness.level}. Der Wert misst Datengrundlage, Personalisierung, Prognosefähigkeit, Erklärbarkeit und Sicherheit getrennt.</p>
       <div className="learning-stats">{smartness.dimensions.map((dimension) => <div key={dimension.key} title={dimension.evidence}><strong>{dimension.score}%</strong><span>{dimension.label}</span></div>)}</div>
       <p><strong>Nächster Qualitätsschritt:</strong> {smartness.nextMilestone}</p>
     </section>
     <section className="panel assistant-answer"><div className="panel-header"><div><p className="eyebrow">Ergebnis</p><h2>Antwort des Finanzassistenten</h2></div></div><div className="answer-text">{answer || 'Starte eine Analyse, stelle eine Frage oder lasse einen Finanzplan erstellen.'}</div></section>
     <section className="panel">
-      <div className="panel-header"><div><p className="eyebrow">Approval-gated Agent</p><h2>Vorgeschlagene nächste Schritte</h2></div><span className="pill">Datenqualität: {plan.dataQuality}</span></div>
+      <div className="panel-header"><div><p className="eyebrow">Freigabepflichtiger Agent</p><h2>Vorgeschlagene nächste Schritte</h2></div><span className="pill">Datenqualität: {DATA_QUALITY_LABELS[plan.dataQuality] ?? plan.dataQuality}</span></div>
       <p className="muted">Der Agent darf analysieren und Vorschläge priorisieren. Er führt niemals Zahlungen, Überweisungen oder Kontenänderungen ohne ausdrückliche Bestätigung aus.</p>
-      <div className="transaction-list">{plan.actions.map((action) => <div className="transaction-row" key={action.id}><div><strong>{action.title}</strong><span>{action.rationale}{action.amountCents ? ` · ${(action.amountCents / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}` : ''}</span></div><span className="pill">{action.status}</span>{action.status === 'proposed' && <div className="row-actions"><button aria-label="Vorschlag genehmigen" onClick={() => decide(action.id, 'approved')}><Check size={16}/></button><button aria-label="Vorschlag ablehnen" onClick={() => decide(action.id, 'rejected')}><X size={16}/></button></div>}</div>)}</div>
+      <div className="transaction-list">{plan.actions.map((action) => <div className="transaction-row" key={action.id}><div><strong>{action.title}</strong><span>{action.rationale}{action.amountCents ? ` · ${(action.amountCents / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}` : ''}</span></div><span className="pill">{ACTION_STATUS_LABELS[action.status] ?? action.status}</span>{action.status === 'proposed' && <div className="row-actions"><button aria-label="Vorschlag genehmigen" onClick={() => decide(action.id, 'approved')}><Check size={16}/></button><button aria-label="Vorschlag ablehnen" onClick={() => decide(action.id, 'rejected')}><X size={16}/></button></div>}</div>)}</div>
     </section>
   </div>
 }
