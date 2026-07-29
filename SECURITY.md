@@ -28,6 +28,8 @@ A public deployment is not considered supported unless all of the following are 
 - `SESSION_SECRET` and `CONNECTOR_MASTER_KEY` are independent random secrets with at least 32 characters
 - secrets are injected at runtime and are not stored in source control or container images
 - the connector API is not exposed directly to the public internet
+- `TRUST_PROXY=true` is set on the connector whenever a reverse proxy sits in front of it (required
+  for per-client rate limiting to use the proxy-set `X-Real-IP` instead of the proxy's own address)
 - encrypted application data is backed up and restore-tested
 - provider applications use production callback URLs and least-privilege credentials
 - CI is green for the exact deployed commit
