@@ -50,6 +50,13 @@ assert.match(nginx, /proxy_pass http:\/\/connector:8787\/health\/ready/)
 assert.match(nginx, /proxy_set_header Host \$http_host/)
 assert.doesNotMatch(nginx, /proxy_set_header Origin \$scheme:\/\/\$host/)
 
+// Regression: nginx.conf had no /api/ proxy at all, so every auth/bank/AI API
+// call fell through to the SPA's try_files and got back index.html instead of
+// JSON. Found by /cso during release-hardening, fixed by proxying /api/ to
+// the connector the same way /health/ready already was.
+assert.match(nginx, /location \/api\//)
+assert.match(nginx, /proxy_pass http:\/\/connector:8787;/)
+
 for (const path of ['/api/', '/connectors/', '/oauth/']) {
   assert.ok(serviceWorker.includes(path), `service worker must exclude sensitive path ${path}`)
 }
