@@ -23,6 +23,10 @@ PAYPAL_ENVIRONMENT=live
 
 Generate each secret independently with at least 256 bits of entropy. Store secrets in the platform secret manager. Never bake them into an image, commit them, or print them in logs.
 
+If a reverse proxy (nginx or otherwise) sits in front of the connector, also set `TRUST_PROXY=true` on the connector so it derives the real client IP from the proxy's `X-Real-IP` header instead of the proxy's own socket address. The Compose stack already sets this, but a manual, non-Compose deployment must set it explicitly. Without it, sign-in, bank-connection, and AI rate limiting collapses every client behind the proxy into a single shared bucket instead of limiting per real client.
+
+`TRUST_PROXY=true` trusts `X-Real-IP` unconditionally — it does not itself verify the request came through nginx. In the bundled Compose stack, the connector's port is also published to the host's loopback interface (`127.0.0.1:${CONNECTOR_PORT:-8787}`, see step 4 below) so the documented health check can reach it directly, which means a process with host-level shell access to the deployment machine can bypass nginx and forge `X-Real-IP` to spoof its rate-limit identity. Restrict host-level access to trusted operators only — the same requirement `SESSION_SECRET`, `CONNECTOR_MASTER_KEY`, and the encrypted store already depend on. If any additional proxy, load balancer, or CDN sits in front of nginx, it must strip or overwrite client-supplied `X-Real-IP`/`X-Forwarded-For` headers before they reach nginx, since nginx passes whatever it receives straight through to the connector.
+
 ## 3. Pre-deployment gate
 
 Before every production release:

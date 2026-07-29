@@ -14,6 +14,12 @@ export function requestId(headers = {}) {
 }
 
 export function clientIp(request) {
+  // Prefer X-Real-IP: nginx always overwrites it with $remote_addr, so a
+  // client cannot forge it. X-Forwarded-For is nginx-appended but not
+  // nginx-sanitized -- a client can prepend an arbitrary value and have it
+  // picked up if we naively took the first comma-separated entry.
+  const realIp = String(request.headers['x-real-ip'] || '').trim()
+  if (realIp) return realIp
   const forwarded = String(request.headers['x-forwarded-for'] || '').split(',')[0].trim()
   return forwarded || request.socket?.remoteAddress || 'unknown'
 }
@@ -56,7 +62,9 @@ export function classifyError(error) {
 }
 
 export function validateProductionConfig(env, origin) {
+  if (env.NODE_ENV === 'production' && env.AUTH_MODE === 'local') {
+    throw new Error('AUTH_MODE=local is not allowed when NODE_ENV=production. It mints unauthenticated sessions via POST /api/session/local.')
+  }
   if (env.NODE_ENV !== 'production' || env.PUBLIC_DEPLOYMENT !== 'true') return
-  if (env.AUTH_MODE === 'local') throw new Error('AUTH_MODE=local is not allowed for public production deployments.')
   if (!origin.startsWith('https://')) throw new Error('APP_ORIGIN must use HTTPS for public production deployments.')
 }

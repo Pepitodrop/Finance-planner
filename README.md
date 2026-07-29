@@ -174,10 +174,54 @@ Requirements:
 - npm
 - optional GnuCOBOL for direct COBOL compilation
 
+`npm install` alone is not enough to see a working app — it only starts the
+frontend shell, which needs the connector backend to reach anything past the
+sign-in screen. Run both:
+
 ```bash
 npm install
 npm run dev
 ```
+
+In a second terminal, start the connector backend (no Docker or Postgres
+required for local dev — it falls back to an encrypted local file store):
+
+```bash
+cd server
+npm install
+mkdir -p data
+cat > .env <<EOF
+PORT=8788
+APP_ORIGIN=http://127.0.0.1:5173
+AUTH_MODE=local
+SESSION_SECRET=$(openssl rand -hex 32)
+CONNECTOR_MASTER_KEY=$(openssl rand -hex 32)
+CONNECTOR_STORE_PATH=./data/connectors.enc.json
+EOF
+set -a; source .env; set +a
+node src/server.js
+```
+
+`vite.config.ts` already proxies `/api` and `/health/ready` from `:5173` to
+`http://127.0.0.1:8788` in dev, so the two servers talk to each other with no
+extra setup. If you change the connector's port, update the `proxy` block in
+`vite.config.ts` to match.
+
+**Signing in locally:** `AUTH_MODE=local` seeds a `local-user` account, but
+there is currently no passwordless local sign-in — the app only supports
+Google OAuth or a WebAuthn passkey, and registering a first passkey requires
+already having a session (a chicken-and-egg gap tracked as a known
+limitation). For local development that needs to reach authenticated screens,
+configure real Google OAuth credentials in `server/.env`:
+
+```bash
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+```
+
+then use "Continue with Google" on the sign-in screen. Set the OAuth
+redirect URI in your Google Cloud Console project to
+`http://127.0.0.1:5173/api/auth/google/callback`.
 
 Run the frontend validation suite:
 
@@ -214,6 +258,13 @@ docker compose build --pull
 docker compose up -d
 docker compose ps
 ```
+
+The connector container always runs with `NODE_ENV=production` (baked into
+`Dockerfile.server`) and now refuses to start with `AUTH_MODE=local` in that
+mode, full stop — you must set `AUTH_MODE` to a real provider (`google`, or
+another configured mode) in `.env` before running Compose. This is
+intentional: `AUTH_MODE=local` mints sessions with no credential check at all,
+so it must never be reachable outside a trusted local dev machine.
 
 Verify service health:
 
@@ -272,10 +323,15 @@ public/                 manifest, service worker, and install assets
 server/                 authentication, providers, encrypted storage, COBOL and AI APIs
 core/cobol/             deterministic fixed-point financial calculations
 deploy/                 web-server deployment configuration
+diagrams/               system architecture diagram (source, editable, and rendered)
 docs/                   production, AI, privacy, and operations guidance
 scripts/                backup and restore tooling
 .github/workflows/      frontend, backend, container, mobile, AI, and COBOL CI
 ```
+
+See [`diagrams/architecture-overview.svg`](diagrams/architecture-overview.svg) for a visual
+system diagram, [`CHANGELOG.md`](CHANGELOG.md) for release history, and [`TODOS.md`](TODOS.md)
+for tracked follow-up work.
 
 ## Known production gaps
 

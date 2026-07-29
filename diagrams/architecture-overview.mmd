@@ -1,0 +1,19 @@
+graph TD
+  Browser["Browser SPA<br/>React + Vault (AES-256-GCM)"]
+  LocalAI["In-browser AI<br/>ONNX / Transformers.js"]
+  Web["Web tier<br/>Nginx (prod) / Vite proxy (dev)"]
+  Connector["Connector<br/>Node http server"]
+  Auth["Auth<br/>Google OAuth / WebAuthn / local-dev"]
+  Cobol["COBOL engine<br/>deterministic money math"]
+  Store["Encrypted store<br/>file or Postgres"]
+  Providers["Bank / PayPal providers<br/>GoCardless, PayPal, finAPI"]
+  HF["Hugging Face (hosted)<br/>analyst + critic, aggregate-only"]
+
+  Browser -- "local inference, no network" --> LocalAI
+  Browser -- HTTPS --> Web
+  Web -- "/api/*" --> Connector
+  Connector --> Auth
+  Connector --> Cobol
+  Connector --> Store
+  Connector -- "HMAC-signed webhooks" --> Providers
+  Connector -- "aggregate snapshot only" --> HF

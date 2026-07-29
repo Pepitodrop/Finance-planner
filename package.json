@@ -1,7 +1,7 @@
 {
   "name": "finance-planner",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -28,6 +28,7 @@
     "@eslint/js": "^9.17.0",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
+    "@types/node": "^26.1.2",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "eslint": "^9.17.0",

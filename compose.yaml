@@ -73,6 +73,10 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8787
+      # The connector is only ever reachable via the web/nginx container on
+      # this network (its published host port is loopback-only). nginx is
+      # therefore always a trusted proxy here, not an operator choice.
+      TRUST_PROXY: "true"
       APP_ORIGIN: ${APP_ORIGIN:-http://localhost:8080}
       AUTH_MODE: ${AUTH_MODE:-local}
       PUBLIC_DEPLOYMENT: ${PUBLIC_DEPLOYMENT:-false}
