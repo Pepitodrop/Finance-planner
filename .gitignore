@@ -1,5 +1,6 @@
 node_modules
 dist
+*.tsbuildinfo
 *.so
 *.dll
 *.dylib
