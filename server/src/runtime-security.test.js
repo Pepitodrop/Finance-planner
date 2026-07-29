@@ -1,6 +1,18 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { HttpError, SlidingWindowRateLimiter, classifyError, requestId, validateProductionConfig } from './runtime-security.js'
+import { HttpError, SlidingWindowRateLimiter, classifyError, clientIp, requestId, validateProductionConfig } from './runtime-security.js'
+
+test('clientIp prefers X-Real-IP (nginx-set, not client-forgeable) over X-Forwarded-For', () => {
+  assert.equal(clientIp({ headers: { 'x-real-ip': '203.0.113.9', 'x-forwarded-for': '10.0.0.1, 203.0.113.9' } }), '203.0.113.9')
+})
+
+test('clientIp falls back to X-Forwarded-For when X-Real-IP is absent (e.g. no proxy in front)', () => {
+  assert.equal(clientIp({ headers: { 'x-forwarded-for': '203.0.113.9, 10.0.0.1' } }), '203.0.113.9')
+})
+
+test('clientIp falls back to the raw socket address when no proxy headers are present', () => {
+  assert.equal(clientIp({ headers: {}, socket: { remoteAddress: '198.51.100.1' } }), '198.51.100.1')
+})
 
 test('requestId accepts safe values and replaces unsafe input', () => {
   assert.equal(requestId({ 'x-request-id': 'request-1234' }), 'request-1234')

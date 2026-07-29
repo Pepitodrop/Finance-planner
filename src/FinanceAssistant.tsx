@@ -3,13 +3,10 @@ import { AlertTriangle, BrainCircuit, ChartNoAxesCombined, Check, CircleCheck, G
 import { ASSISTANT_MODEL, runAssistant, type AssistantMode } from './assistant'
 import { behaviorSummary } from './behavior'
 import { createFinancialAgentPlan, decideAgentAction, type AgentPlan } from './financialAgent'
+import { ACTION_STATUS_LABELS, DATA_QUALITY_LABELS, SMARTNESS_LEVEL_LABELS } from './financeLabels'
 import { createSmartBriefing } from './smartBriefing'
 import { assessSmartness } from './smartness'
 import type { AppState } from './types'
-
-const ACTION_STATUS_LABELS: Record<string, string> = { proposed: 'Vorgeschlagen', approved: 'Genehmigt', rejected: 'Abgelehnt' }
-const DATA_QUALITY_LABELS: Record<string, string> = { low: 'niedrig', medium: 'mittel', high: 'hoch' }
-const SMARTNESS_LEVEL_LABELS: Record<string, string> = { basic: 'Basis', adaptive: 'Adaptiv', advanced: 'Fortgeschritten' }
 
 export function FinanceAssistant({ state }: { state: AppState }) {
   const [mode, setMode] = useState<AssistantMode>('analysis')

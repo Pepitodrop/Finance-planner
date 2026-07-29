@@ -14,6 +14,12 @@ export function requestId(headers = {}) {
 }
 
 export function clientIp(request) {
+  // Prefer X-Real-IP: nginx always overwrites it with $remote_addr, so a
+  // client cannot forge it. X-Forwarded-For is nginx-appended but not
+  // nginx-sanitized -- a client can prepend an arbitrary value and have it
+  // picked up if we naively took the first comma-separated entry.
+  const realIp = String(request.headers['x-real-ip'] || '').trim()
+  if (realIp) return realIp
   const forwarded = String(request.headers['x-forwarded-for'] || '').split(',')[0].trim()
   return forwarded || request.socket?.remoteAddress || 'unknown'
 }
