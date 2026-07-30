@@ -39,7 +39,94 @@ export function createHuggingFaceChatTransport({
             messages,
             temperature,
             max_tokens: maxTokens,
-            response_format: { type: 'json_object' },
+            response_format: {
+              type: 'json_schema',
+              json_schema: {
+                name: 'financial_intelligence',
+                strict: true,
+                schema: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['summary', 'confidence', 'signals'],
+                  properties: {
+                    summary: {
+                      type: 'string',
+                      minLength: 1,
+                      maxLength: 800
+                    },
+                    confidence: {
+                      type: 'number',
+                      minimum: 0,
+                      maximum: 1
+                    },
+                    signals: {
+                      type: 'array',
+                      maxItems: 8,
+                      items: {
+                        type: 'object',
+                        additionalProperties: false,
+                        required: [
+                          'type',
+                          'severity',
+                          'title',
+                          'explanation',
+                          'confidence',
+                          'evidence',
+                          'suggestedAction',
+                          'requiresApproval'
+                        ],
+                        properties: {
+                          type: {
+                            type: 'string',
+                            enum: [
+                              'cashflow',
+                              'recurring-cost',
+                              'goal-risk',
+                              'anomaly',
+                              'data-quality'
+                            ]
+                          },
+                          severity: {
+                            type: 'string',
+                            enum: ['info', 'warning', 'critical']
+                          },
+                          title: {
+                            type: 'string',
+                            minLength: 1,
+                            maxLength: 140
+                          },
+                          explanation: {
+                            type: 'string',
+                            minLength: 1,
+                            maxLength: 600
+                          },
+                          confidence: {
+                            type: 'number',
+                            minimum: 0,
+                            maximum: 1
+                          },
+                          evidence: {
+                            type: 'array',
+                            maxItems: 5,
+                            items: {
+                              type: 'string',
+                              maxLength: 200
+                            }
+                          },
+                          suggestedAction: {
+                            type: 'string',
+                            maxLength: 300
+                          },
+                          requiresApproval: {
+                            type: 'boolean'
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
           }),
           signal: controller.signal,
         })
