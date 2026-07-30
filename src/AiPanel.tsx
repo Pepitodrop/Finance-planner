@@ -144,7 +144,7 @@ export function AiPanel({ transactions, onApply }: AiPanelProps) {
             const reviewRequired = suggestion ? requiresHumanReview(suggestion) : false
             const applied = appliedIds.has(transaction.id)
             return (
-              <div className={`ai-result ${reviewRequired ? 'review-required' : ''}`} key={transaction.id}>
+              <div className={`ai-result ${reviewRequired ? 'review-required' : ''} ${suggestion ? '' : 'unanalyzed'}`} key={transaction.id}>
                 <div className="ai-result-main">
                   <strong>{transaction.description}</strong>
                   <span>{formatMoney(transaction.amountCents)} · aktuell: {transaction.category}</span>
