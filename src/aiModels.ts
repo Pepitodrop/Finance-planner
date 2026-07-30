@@ -125,7 +125,7 @@ export async function loadAiModel(key: AiModelKey): Promise<LocalPipeline> {
   }
 
   const promise = (async () => {
-    const moduleUrl = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.2'
+    const moduleUrl = '/vendor/transformers-3.8.1.min.js'
     const transformers = await import(/* @vite-ignore */ moduleUrl) as { pipeline: PipelineFactory }
     return transformers.pipeline(definition.task, definition.model, { dtype: definition.dtype })
   })()
