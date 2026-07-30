@@ -26,7 +26,8 @@ export function pendingTrustedSuggestionIds(
 ): string[] {
   return transactionIds.filter((transactionId) => {
     const suggestion = suggestions[transactionId]
-    return Boolean(suggestion) && !appliedIds.has(transactionId) && isTrustedSuggestion(suggestion)
+    if (!suggestion || appliedIds.has(transactionId)) return false
+    return isTrustedSuggestion(suggestion)
   })
 }
 
