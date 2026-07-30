@@ -2,15 +2,22 @@ import { formatMoney, monthlyProjection, totalBalance } from './finance'
 import type { AppState } from './types'
 import { getSecureValue, removeSecureValue, setSecureValue } from './vault'
 
-export const ASSISTANT_MODEL = 'Hosted Hugging Face ensemble'
+export const HOSTED_ASSISTANT_MODEL = 'Qwen3 4B analyst + Qwen3 4B critic'
+export const PRIMARY_LOCAL_ASSISTANT_MODEL = 'onnx-community/Qwen2.5-0.5B-Instruct'
+export const FALLBACK_LOCAL_ASSISTANT_MODEL = 'Xenova/flan-t5-small'
+export const ASSISTANT_MODEL = HOSTED_ASSISTANT_MODEL
 export type AssistantMode = 'analysis' | 'question' | 'planning'
+export type AssistantEngine = 'hosted' | 'local'
 
 interface AssistantMemoryItem { mode: AssistantMode; question: string; answer: string; createdAt: string }
+interface GeneratedItem { generated_text?: string }
+type Generator = (input: string, options?: Record<string, unknown>) => Promise<GeneratedItem[]>
 interface AiSignal { title: string; explanation: string; suggestedAction?: string; severity: 'info' | 'warning' | 'critical' }
 interface AiResponse { summary: string; confidence: number; signals: AiSignal[]; source?: string; warning?: string }
 
 const SECURE_MEMORY_KEY = 'assistant-memory-v1'
 const LEGACY_MEMORY_KEY = 'finance-planner-assistant-memory-v1'
+let localGeneratorPromise: Promise<{ generator: Generator; model: string }> | null = null
 
 function validMemory(value: unknown): value is AssistantMemoryItem[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'object' && item !== null
@@ -85,19 +92,54 @@ function snapshot(state: AppState) {
   }
 }
 
+function buildFinancialContext(state: AppState): string {
+  const expenses = state.transactions.filter((item) => item.type === 'expense')
+  const income = state.transactions.filter((item) => item.type === 'income')
+  const recurring = expenses.filter((item) => item.recurring)
+  const expenseTotal = expenses.reduce((sum, item) => sum + item.amountCents, 0)
+  const incomeTotal = income.reduce((sum, item) => sum + item.amountCents, 0)
+  const projection = monthlyProjection(state, 12)
+  return [
+    `Gesamtvermögen: ${formatMoney(totalBalance(state))}.`,
+    `Einnahmen: ${formatMoney(incomeTotal)}.`,
+    `Ausgaben: ${formatMoney(expenseTotal)}.`,
+    `Netto-Cashflow: ${formatMoney(incomeTotal - expenseTotal)}.`,
+    `Feste Zahlungen: ${formatMoney(recurring.reduce((sum, item) => sum + item.amountCents, 0))}.`,
+    `Prognose nach 12 Monaten: ${formatMoney(Math.round((projection.at(-1)?.balance ?? 0) * 100))}.`,
+    `Sparziele: ${state.goals.map((goal) => `${goal.name}: ${formatMoney(goal.currentCents)} von ${formatMoney(goal.targetCents)} bis ${goal.targetDate}`).join('; ') || 'keine'}.`,
+  ].join(' ')
+}
+
 function formatAiResponse(result: AiResponse, mode: AssistantMode, question: string): string {
   const heading = mode === 'planning' ? `Plan für „${question}“` : mode === 'question' ? `Antwort auf „${question}“` : 'Persönliche Finanzanalyse'
   const signals = result.signals?.map((signal, index) => `${index + 1}. ${signal.title}: ${signal.explanation}${signal.suggestedAction ? ` Nächster Schritt: ${signal.suggestedAction}` : ''}`).join('\n')
   return `${heading}\n\n${result.summary}${signals ? `\n\n${signals}` : ''}\n\nKonfidenz: ${Math.round((result.confidence || 0) * 100)} %.`
 }
 
-export async function runAssistant(mode: AssistantMode, state: AppState, question: string): Promise<string> {
-  if (mode === 'question') {
-    const exact = exactAnswer(state, question)
-    if (exact) { saveMemory({ mode, question, answer: exact, createdAt: new Date().toISOString() }); return exact }
+function supportsWebGpu(): boolean {
+  return typeof navigator !== 'undefined' && 'gpu' in navigator
+}
+
+async function getLocalGenerator(): Promise<{ generator: Generator; model: string }> {
+  if (!localGeneratorPromise) {
+    localGeneratorPromise = (async () => {
+      const { pipeline } = await import('@huggingface/transformers')
+      try {
+        const options: Record<string, unknown> = supportsWebGpu() ? { device: 'webgpu', dtype: 'q4' } : { dtype: 'q4' }
+        const generator = await pipeline('text-generation', PRIMARY_LOCAL_ASSISTANT_MODEL, options)
+        return { generator: generator as unknown as Generator, model: PRIMARY_LOCAL_ASSISTANT_MODEL }
+      } catch {
+        const generator = await pipeline('text2text-generation', FALLBACK_LOCAL_ASSISTANT_MODEL, { dtype: 'q8' })
+        return { generator: generator as unknown as Generator, model: FALLBACK_LOCAL_ASSISTANT_MODEL }
+      }
+    })()
   }
+  return localGeneratorPromise
+}
+
+async function runHostedAssistant(mode: AssistantMode, state: AppState, question: string): Promise<string> {
   const controller = new AbortController()
-  const timeout = window.setTimeout(() => controller.abort(), 55_000)
+  const timeout = globalThis.setTimeout(() => controller.abort(), 55_000)
   try {
     const response = await fetch('/api/ai/financial-intelligence', {
       method: 'POST', credentials: 'include', signal: controller.signal,
@@ -106,12 +148,35 @@ export async function runAssistant(mode: AssistantMode, state: AppState, questio
     })
     const payload = await response.json().catch(() => ({})) as AiResponse & { error?: string }
     if (!response.ok) throw new Error(payload.error || 'Die KI-Analyse ist momentan nicht erreichbar.')
-    const answer = formatAiResponse(payload, mode, question)
+    return formatAiResponse(payload, mode, question)
+  } finally { globalThis.clearTimeout(timeout) }
+}
+
+async function runLocalAssistant(mode: AssistantMode, state: AppState, question: string): Promise<string> {
+  const loaded = await getLocalGenerator()
+  const instruction = mode === 'analysis'
+    ? 'Erstelle eine vorsichtige persönliche Finanzanalyse mit Mustern, Risiken, Einsparpotenzial und drei priorisierten Maßnahmen.'
+    : mode === 'planning'
+      ? `Erstelle einen realistischen Plan für: ${question || 'meine finanzielle Situation verbessern'}. Gliedere in Sofort, diesen Monat, 3 Monate und 12 Monate.`
+      : `Beantworte ausschließlich aus dem Kontext. Frage: ${question}`
+  const prompt = `System: Du bist ein vorsichtiger deutschsprachiger persönlicher Finanzassistent. Erfinde keine Daten.\nAufgabe: ${instruction}\nFinanzkontext: ${buildFinancialContext(state)}\nAntwort:`
+  const output = await loaded.generator(prompt, { max_new_tokens: mode === 'question' ? 220 : 360, temperature: 0.15, top_p: 0.9, repetition_penalty: 1.12, do_sample: false, return_full_text: false })
+  return output[0]?.generated_text?.trim() || fallbackAnswer(mode, state, question)
+}
+
+export async function runAssistant(mode: AssistantMode, state: AppState, question: string, engine: AssistantEngine = 'hosted'): Promise<string> {
+  if (mode === 'question') {
+    const exact = exactAnswer(state, question)
+    if (exact) { saveMemory({ mode, question, answer: exact, createdAt: new Date().toISOString() }); return exact }
+  }
+  try {
+    const answer = engine === 'local' ? await runLocalAssistant(mode, state, question) : await runHostedAssistant(mode, state, question)
     saveMemory({ mode, question, answer, createdAt: new Date().toISOString() })
     return answer
   } catch {
     const answer = fallbackAnswer(mode, state, question)
     saveMemory({ mode, question, answer, createdAt: new Date().toISOString() })
-    return `${answer}\n\nHinweis: Die gehostete KI war nicht erreichbar; deshalb wurde die lokale deterministische Ersatzanalyse verwendet.`
-  } finally { window.clearTimeout(timeout) }
+    const source = engine === 'local' ? 'Das lokale KI-Modell' : 'Die gehostete KI'
+    return `${answer}\n\nHinweis: ${source} war nicht erreichbar; deshalb wurde die deterministische Ersatzanalyse verwendet.`
+  }
 }
