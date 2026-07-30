@@ -150,7 +150,44 @@ function deterministicFallback(snapshot, warning) {
 }
 
 function analystPrompt(snapshot) {
-  return [{ role: 'system', content: 'Du bist ein vorsichtiger Finanzanalyse-Assistent. Nutze ausschließlich die aggregierten Fakten. Erfinde keine Transaktionen, stelle keine Rechts-, Steuer- oder Anlageberatung als sicher dar und führe keine Aktion aus. Antworte ausschließlich als JSON mit summary, confidence und signals. Zulässige type-Werte: cashflow, recurring-cost, goal-risk, anomaly, data-quality. Jede Empfehlung bleibt genehmigungspflichtig.' }, { role: 'user', content: `Analysiere diesen anonymisierten Finanz-Snapshot: ${JSON.stringify(snapshot)}` }]
+  const schema = {
+    summary: "string, 1-800 characters",
+    confidence: "number between 0 and 1",
+    signals: [
+      {
+        type: "cashflow | recurring-cost | goal-risk | anomaly | data-quality",
+        severity: "info | warning | critical",
+        title: "string, maximum 140 characters",
+        explanation: "string, maximum 600 characters",
+        confidence: "number between 0 and 1",
+        evidence: ["string, maximum 200 characters"],
+        suggestedAction: "optional string, maximum 300 characters",
+        requiresApproval: true
+      }
+    ]
+  }
+
+  return [
+    {
+      role: 'system',
+      content: [
+        'Du bist ein vorsichtiger Finanzanalyse-Assistent.',
+        'Nutze ausschließlich die aggregierten Fakten.',
+        'Erfinde keine Transaktionen.',
+        'Führe keine Aktion aus.',
+        'Antworte ausschließlich mit einem einzelnen JSON-Objekt.',
+        'Das JSON-Objekt darf auf der obersten Ebene ausschließlich die Felder summary, confidence und signals enthalten.',
+        'Kopiere keine Eingabefelder wie incomeCents, expenseCents oder accountBalanceCents auf die oberste Ebene.',
+        'Jedes Signal darf ausschließlich type, severity, title, explanation, confidence, evidence, suggestedAction und requiresApproval enthalten.',
+        'Gib keinen Markdown-Codeblock und keinen erklärenden Text vor oder nach dem JSON aus.',
+        `Verbindliches Ausgabeschema: ${JSON.stringify(schema)}`
+      ].join(' ')
+    },
+    {
+      role: 'user',
+      content: `Analysiere diesen anonymisierten Finanz-Snapshot und liefere nur das vorgeschriebene Ausgabeobjekt: ${JSON.stringify(snapshot)}`
+    }
+  ]
 }
 
 export function createAiRouter({ env, send, body, userId, transportFactory = createHuggingFaceChatTransport, loadBehaviorEvents = null }) {
