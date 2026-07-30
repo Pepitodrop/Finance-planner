@@ -19,6 +19,17 @@ export function requiresHumanReview(suggestion: AiSuggestion): boolean {
   return !isTrustedSuggestion(suggestion)
 }
 
+export function pendingTrustedSuggestionIds(
+  transactionIds: readonly string[],
+  suggestions: Record<string, AiSuggestion>,
+  appliedIds: ReadonlySet<string>,
+): string[] {
+  return transactionIds.filter((transactionId) => {
+    const suggestion = suggestions[transactionId]
+    return Boolean(suggestion) && !appliedIds.has(transactionId) && isTrustedSuggestion(suggestion)
+  })
+}
+
 export function buildAiReviewSummary(suggestions: Record<string, AiSuggestion>): AiReviewSummary {
   const values = Object.values(suggestions)
   const analyzed = values.length
