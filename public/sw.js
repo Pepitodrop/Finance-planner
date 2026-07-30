@@ -64,7 +64,7 @@ self.addEventListener('fetch', (event) => {
   if (request.mode === 'navigate') {
     event.respondWith((async () => {
       try {
-        const response = event.preloadResponse || await fetch(request)
+        const response = (await event.preloadResponse) || await fetch(request)
         if (response?.ok) {
           const shellCache = await caches.open(SHELL_CACHE_NAME)
           await shellCache.put('/index.html', response.clone())
