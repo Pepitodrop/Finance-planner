@@ -18,6 +18,8 @@ assert.match(index, /apple-mobile-web-app-capable/)
 assert.match(serviceWorker, /SENSITIVE_PATHS/)
 assert.match(serviceWorker, /\/api\//)
 assert.match(serviceWorker, /request\.mode === 'navigate'/)
+assert.match(serviceWorker, /\(await event\.preloadResponse\) \|\| await fetch\(request\)/, 'Navigation preload must resolve before the network fallback is selected')
+assert.doesNotMatch(serviceWorker, /const response = event\.preloadResponse \|\|/, 'An unresolved preload promise must never bypass the navigation fetch fallback')
 assert.doesNotMatch(serviceWorker, /cache\.put\(event\.request/)
 
 console.log('PWA policy verified')
