@@ -25,10 +25,10 @@ async function trimRuntimeCache(cache) {
   await Promise.all(keys.slice(0, keys.length - MAX_RUNTIME_ENTRIES).map((key) => cache.delete(key)))
 }
 
-async function cacheRuntimeResponse(cache, request, response) {
+async function cacheRuntimeResponse(runtimeCache, request, response) {
   if (response.ok && response.type === 'basic') {
-    await cache.put(request, response.clone())
-    await trimRuntimeCache(cache)
+    await runtimeCache.put(request, response.clone())
+    await trimRuntimeCache(runtimeCache)
   }
   return response
 }
