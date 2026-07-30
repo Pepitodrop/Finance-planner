@@ -17,6 +17,7 @@ interface AiResponse { summary: string; confidence: number; signals: AiSignal[];
 
 const SECURE_MEMORY_KEY = 'assistant-memory-v1'
 const LEGACY_MEMORY_KEY = 'finance-planner-assistant-memory-v1'
+const TRANSFORMERS_MODULE_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1'
 let localGeneratorPromise: Promise<{ generator: Generator; model: string }> | null = null
 
 function validMemory(value: unknown): value is AssistantMemoryItem[] {
@@ -132,17 +133,21 @@ function supportsWebGpu(): boolean {
   return typeof navigator !== 'undefined' && 'gpu' in navigator
 }
 
+async function loadTransformers(): Promise<{ pipeline: (task: string, model: string, options?: Record<string, unknown>) => Promise<Generator> }> {
+  return await import(/* @vite-ignore */ TRANSFORMERS_MODULE_URL) as {
+    pipeline: (task: string, model: string, options?: Record<string, unknown>) => Promise<Generator>
+  }
+}
+
 async function getLocalGenerator(): Promise<{ generator: Generator; model: string }> {
   if (!localGeneratorPromise) {
     localGeneratorPromise = (async () => {
-      const { pipeline } = await import('@huggingface/transformers')
+      const { pipeline } = await loadTransformers()
       try {
         const options: Record<string, unknown> = supportsWebGpu() ? { device: 'webgpu', dtype: 'q4' } : { dtype: 'q4' }
-        const generator = await pipeline('text-generation', PRIMARY_LOCAL_ASSISTANT_MODEL, options)
-        return { generator: generator as unknown as Generator, model: PRIMARY_LOCAL_ASSISTANT_MODEL }
+        return { generator: await pipeline('text-generation', PRIMARY_LOCAL_ASSISTANT_MODEL, options), model: PRIMARY_LOCAL_ASSISTANT_MODEL }
       } catch {
-        const generator = await pipeline('text2text-generation', FALLBACK_LOCAL_ASSISTANT_MODEL, { dtype: 'q8' })
-        return { generator: generator as unknown as Generator, model: FALLBACK_LOCAL_ASSISTANT_MODEL }
+        return { generator: await pipeline('text2text-generation', FALLBACK_LOCAL_ASSISTANT_MODEL, { dtype: 'q8' }), model: FALLBACK_LOCAL_ASSISTANT_MODEL }
       }
     })().catch((error) => {
       localGeneratorPromise = null
