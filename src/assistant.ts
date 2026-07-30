@@ -13,11 +13,11 @@ interface AssistantMemoryItem { mode: AssistantMode; question: string; answer: s
 interface GeneratedItem { generated_text?: string }
 type Generator = (input: string, options?: Record<string, unknown>) => Promise<GeneratedItem[]>
 interface AiSignal { title: string; explanation: string; suggestedAction?: string; severity: 'info' | 'warning' | 'critical' }
-interface AiResponse { summary: string; confidence: number; signals: AiSignal[]; source?: string; warning?: string }
+interface AiResponse { summary: string; confidence: number; signals: AiSignal[]; source?: string; warnings?: string[] }
 
 const SECURE_MEMORY_KEY = 'assistant-memory-v1'
 const LEGACY_MEMORY_KEY = 'finance-planner-assistant-memory-v1'
-const TRANSFORMERS_MODULE_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1'
+const TRANSFORMERS_MODULE_URL = '/vendor/transformers-3.8.1.min.js'
 let localGeneratorPromise: Promise<{ generator: Generator; model: string }> | null = null
 
 function validMemory(value: unknown): value is AssistantMemoryItem[] {
@@ -157,14 +157,15 @@ async function getLocalGenerator(): Promise<{ generator: Generator; model: strin
   return localGeneratorPromise
 }
 
-async function runHostedAssistant(mode: AssistantMode, state: AppState, question: string): Promise<string> {
+async function runHostedAssistant(mode: AssistantMode, state: AppState, question: string, consentExternalAi: boolean): Promise<string> {
+  if (!consentExternalAi) throw new Error('Bitte stimme der Übermittlung aggregierter Finanzkennzahlen an die gehosteten KI-Modelle zu.')
   const controller = new AbortController()
   const timeout = globalThis.setTimeout(() => controller.abort(), 55_000)
   try {
     const response = await fetch('/api/ai/financial-intelligence', {
       method: 'POST', credentials: 'include', signal: controller.signal,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ consentExternalAi: true, intent: { mode, question: question.slice(0, 500) }, snapshot: snapshot(state) }),
+      body: JSON.stringify({ consentExternalAi, intent: { mode, question: question.slice(0, 500) }, snapshot: snapshot(state) }),
     })
     const payload = await response.json().catch(() => ({})) as AiResponse & { error?: string | { message?: string } }
     if (!response.ok) {
@@ -187,19 +188,20 @@ async function runLocalAssistant(mode: AssistantMode, state: AppState, question:
   return output[0]?.generated_text?.trim() || fallbackAnswer(mode, state, question)
 }
 
-export async function runAssistant(mode: AssistantMode, state: AppState, question: string, engine: AssistantEngine = 'hosted'): Promise<string> {
+export function runDeterministicAssistant(mode: AssistantMode, state: AppState, question: string): string {
+  const answer = fallbackAnswer(mode, state, question)
+  saveMemory({ mode, question, answer, createdAt: new Date().toISOString() })
+  return answer
+}
+
+export async function runAssistant(mode: AssistantMode, state: AppState, question: string, engine: AssistantEngine = 'hosted', consentExternalAi = false): Promise<string> {
   if (mode === 'question') {
     const exact = exactAnswer(state, question)
     if (exact) { saveMemory({ mode, question, answer: exact, createdAt: new Date().toISOString() }); return exact }
   }
-  try {
-    const answer = engine === 'local' ? await runLocalAssistant(mode, state, question) : await runHostedAssistant(mode, state, question)
-    saveMemory({ mode, question, answer, createdAt: new Date().toISOString() })
-    return answer
-  } catch {
-    const answer = fallbackAnswer(mode, state, question)
-    saveMemory({ mode, question, answer, createdAt: new Date().toISOString() })
-    const source = engine === 'local' ? 'Das lokale KI-Modell' : 'Die gehostete KI'
-    return `${answer}\n\nHinweis: ${source} war nicht erreichbar; deshalb wurde die deterministische Ersatzanalyse verwendet.`
-  }
+  const answer = engine === 'local'
+    ? await runLocalAssistant(mode, state, question)
+    : await runHostedAssistant(mode, state, question, consentExternalAi)
+  saveMemory({ mode, question, answer, createdAt: new Date().toISOString() })
+  return answer
 }
