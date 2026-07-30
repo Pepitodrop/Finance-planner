@@ -14,7 +14,6 @@
     "verify:release": "node scripts/verify-production-readiness.mjs --strict"
   },
   "dependencies": {
-    "@huggingface/transformers": "3.8.1",
     "@simplewebauthn/browser": "^13.1.2",
     "@vitejs/plugin-react": "^4.3.4",
     "date-fns": "^4.1.0",
