@@ -4,6 +4,7 @@
   "version": "0.1.1.0",
   "type": "module",
   "scripts": {
+    "predev": "npm run vendor:transformers",
     "dev": "vite",
     "vendor:transformers": "node scripts/vendor-transformers-runtime.mjs",
     "prebuild": "npm run vendor:transformers",
