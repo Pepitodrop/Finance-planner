@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "vendor:transformers": "node scripts/vendor-transformers-runtime.mjs",
+    "prebuild": "npm run vendor:transformers",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
