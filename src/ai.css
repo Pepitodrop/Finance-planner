@@ -37,7 +37,7 @@
 .ai-result { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(165px, .85fr) auto minmax(210px, 1.35fr) auto; align-items: center; gap: 14px; padding: 15px; border: 1px solid #263149; border-radius: 14px; background: rgba(12, 18, 32, .7); }
 .ai-result.review-required { border-color: rgba(244, 172, 71, .35); }
 .ai-result.unanalyzed { grid-template-columns: minmax(0, 1fr) auto; min-height: 64px; padding: 13px 15px; }
-.ai-result.unanalyzed .ai-waiting { margin: 0; padding: 6px 10px; border: 1px solid #2a354f; border-radius: 999px; color: #93a0b8; background: #11192b; white-space: nowrap; }
+.ai-result.unanalyzed .ai-waiting { justify-self: end; margin: 0; padding: 6px 10px; border: 1px solid #2a354f; border-radius: 999px; color: #93a0b8; background: #11192b; white-space: nowrap; }
 .ai-result-main strong, .ai-result-main span, .ai-prediction b, .ai-prediction span { display: block; }
 .ai-result-main span, .ai-prediction span, .ai-waiting { margin-top: 4px; color: #7f8da8; font-size: 11px; }
 .ai-prediction b { color: #aebcff; }
