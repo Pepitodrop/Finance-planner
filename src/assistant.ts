@@ -15,6 +15,16 @@ type Generator = (input: string, options?: Record<string, unknown>) => Promise<G
 interface AiSignal { title: string; explanation: string; suggestedAction?: string; severity: 'info' | 'warning' | 'critical' }
 interface AiResponse { summary: string; confidence: number; signals: AiSignal[]; source?: string; warnings?: string[] }
 
+export class HostedAiFallbackError extends Error {
+  readonly fallbackAnswer: string
+
+  constructor(message: string, fallbackAnswer: string) {
+    super(message)
+    this.name = 'HostedAiFallbackError'
+    this.fallbackAnswer = fallbackAnswer
+  }
+}
+
 const SECURE_MEMORY_KEY = 'assistant-memory-v1'
 const LEGACY_MEMORY_KEY = 'finance-planner-assistant-memory-v1'
 const TRANSFORMERS_MODULE_URL = '/vendor/transformers-3.8.1.min.js'
@@ -157,6 +167,13 @@ async function getLocalGenerator(): Promise<{ generator: Generator; model: strin
   return localGeneratorPromise
 }
 
+function fallbackReason(payload: AiResponse): string {
+  const warning = payload.warnings?.find((value) => typeof value === 'string' && value.trim())?.trim()
+  return warning
+    ? `Die gehosteten KI-Modelle lieferten keine verifizierbare Antwort. Grund: ${warning.slice(0, 240)}`
+    : 'Die gehosteten KI-Modelle lieferten keine verifizierbare Antwort. Eine regelbasierte Ersatzanalyse wurde angezeigt.'
+}
+
 async function runHostedAssistant(mode: AssistantMode, state: AppState, question: string, consentExternalAi: boolean): Promise<string> {
   if (!consentExternalAi) throw new Error('Bitte stimme der Übermittlung aggregierter Finanzkennzahlen an die gehosteten KI-Modelle zu.')
   const controller = new AbortController()
@@ -172,7 +189,11 @@ async function runHostedAssistant(mode: AssistantMode, state: AppState, question
       const message = typeof payload.error === 'string' ? payload.error : payload.error?.message
       throw new Error(message || 'Die KI-Analyse ist momentan nicht erreichbar.')
     }
-    return formatAiResponse(payload, mode, question)
+    const formattedAnswer = formatAiResponse(payload, mode, question)
+    if (payload.source === 'deterministic-fallback') {
+      throw new HostedAiFallbackError(fallbackReason(payload), formattedAnswer)
+    }
+    return formattedAnswer
   } finally { globalThis.clearTimeout(timeout) }
 }
 
