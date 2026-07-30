@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { HostedAiFallbackError, runAssistant } from './assistant'
+import { runAssistant } from './assistant'
 import { initialState } from './data'
 
 describe('hosted assistant fallback provenance', () => {
@@ -21,10 +21,10 @@ describe('hosted assistant fallback provenance', () => {
 
     const request = runAssistant('analysis', initialState, 'Analysiere meine Finanzen', 'hosted', true)
 
-    await expect(request).rejects.toEqual(expect.objectContaining({
+    await expect(request).rejects.toMatchObject({
       name: 'HostedAiFallbackError',
       message: expect.stringContaining('Hugging Face inference timed out'),
       fallbackAnswer: expect.stringContaining('Regelbasierte Analyse verfügbar'),
-    } satisfies Partial<HostedAiFallbackError>))
+    })
   })
 })
