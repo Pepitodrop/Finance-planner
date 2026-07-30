@@ -58,6 +58,10 @@ function exactAnswer(state: AppState, question: string): string | null {
   if (/gesamtvermögen|wie viel.*habe ich|kontostand/.test(normalized)) return `Dein aktuell erfasstes Gesamtvermögen beträgt ${formatMoney(totalBalance(state))}.`
   if (/feste.*zahlung|wiederkehr|vertrag|abos?/.test(normalized)) return `Deine bestätigten wiederkehrenden Ausgaben betragen ${formatMoney(expenses.filter((item) => item.recurring).reduce((sum, item) => sum + item.amountCents, 0))}.`
   if (/einnahmen/.test(normalized) && /ausgaben/.test(normalized)) return `Erfasste Einnahmen: ${formatMoney(incomeTotal)}. Erfasste Ausgaben: ${formatMoney(expenseTotal)}. Netto: ${formatMoney(incomeTotal - expenseTotal)}.`
+  if (/größte.*ausgabe/.test(normalized)) {
+    const biggest = [...expenses].sort((a, b) => b.amountCents - a.amountCents)[0]
+    return biggest ? `Deine größte erfasste Ausgabe ist ${biggest.description} mit ${formatMoney(biggest.amountCents)}.` : 'Es sind noch keine Ausgaben vorhanden.'
+  }
   return null
 }
 
@@ -99,15 +103,23 @@ function buildFinancialContext(state: AppState): string {
   const expenseTotal = expenses.reduce((sum, item) => sum + item.amountCents, 0)
   const incomeTotal = income.reduce((sum, item) => sum + item.amountCents, 0)
   const projection = monthlyProjection(state, 12)
+  const categoryTotals = new Map<string, number>()
+  expenses.forEach((item) => categoryTotals.set(item.category, (categoryTotals.get(item.category) ?? 0) + item.amountCents))
+  const categories = [...categoryTotals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
+  const history = loadMemory().slice(0, 4).map((item) => `Frage: ${item.question}; Antwort: ${item.answer.slice(0, 300)}`).join(' | ')
+
   return [
     `Gesamtvermögen: ${formatMoney(totalBalance(state))}.`,
-    `Einnahmen: ${formatMoney(incomeTotal)}.`,
-    `Ausgaben: ${formatMoney(expenseTotal)}.`,
+    `Erfasste Einnahmen: ${formatMoney(incomeTotal)}.`,
+    `Erfasste Ausgaben: ${formatMoney(expenseTotal)}.`,
     `Netto-Cashflow: ${formatMoney(incomeTotal - expenseTotal)}.`,
     `Feste Zahlungen: ${formatMoney(recurring.reduce((sum, item) => sum + item.amountCents, 0))}.`,
     `Prognose nach 12 Monaten: ${formatMoney(Math.round((projection.at(-1)?.balance ?? 0) * 100))}.`,
+    `Kategorien: ${categories.map(([name, amount]) => `${name} ${formatMoney(amount)}`).join(', ') || 'keine'}.`,
     `Sparziele: ${state.goals.map((goal) => `${goal.name}: ${formatMoney(goal.currentCents)} von ${formatMoney(goal.targetCents)} bis ${goal.targetDate}`).join('; ') || 'keine'}.`,
-  ].join(' ')
+    `Letzte Buchungen: ${[...state.transactions].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 20).map((item) => `${item.date} ${item.description} ${item.type === 'expense' ? '-' : '+'}${formatMoney(item.amountCents)} ${item.category}`).join('; ')}.`,
+    history ? `Frühere Assistenteninteraktionen: ${history}.` : '',
+  ].filter(Boolean).join(' ')
 }
 
 function formatAiResponse(result: AiResponse, mode: AssistantMode, question: string): string {
@@ -132,7 +144,10 @@ async function getLocalGenerator(): Promise<{ generator: Generator; model: strin
         const generator = await pipeline('text2text-generation', FALLBACK_LOCAL_ASSISTANT_MODEL, { dtype: 'q8' })
         return { generator: generator as unknown as Generator, model: FALLBACK_LOCAL_ASSISTANT_MODEL }
       }
-    })()
+    })().catch((error) => {
+      localGeneratorPromise = null
+      throw error
+    })
   }
   return localGeneratorPromise
 }
@@ -144,10 +159,13 @@ async function runHostedAssistant(mode: AssistantMode, state: AppState, question
     const response = await fetch('/api/ai/financial-intelligence', {
       method: 'POST', credentials: 'include', signal: controller.signal,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ consentExternalAi: true, snapshot: snapshot(state) }),
+      body: JSON.stringify({ consentExternalAi: true, intent: { mode, question: question.slice(0, 500) }, snapshot: snapshot(state) }),
     })
-    const payload = await response.json().catch(() => ({})) as AiResponse & { error?: string }
-    if (!response.ok) throw new Error(payload.error || 'Die KI-Analyse ist momentan nicht erreichbar.')
+    const payload = await response.json().catch(() => ({})) as AiResponse & { error?: string | { message?: string } }
+    if (!response.ok) {
+      const message = typeof payload.error === 'string' ? payload.error : payload.error?.message
+      throw new Error(message || 'Die KI-Analyse ist momentan nicht erreichbar.')
+    }
     return formatAiResponse(payload, mode, question)
   } finally { globalThis.clearTimeout(timeout) }
 }
