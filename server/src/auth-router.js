@@ -12,6 +12,7 @@ import { createSession, verifySession } from './security.js'
 
 const b64 = (value) => Buffer.from(value).toString('base64url')
 const unb64 = (value) => new Uint8Array(Buffer.from(value, 'base64url'))
+const DEFAULT_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 
 class AuthStore {
   constructor(path, key) {
@@ -84,9 +85,16 @@ function sessionUser(request, secret) {
   return token ? verifySession(token, secret) : null
 }
 
+function configuredSessionTtl(env) {
+  const configured = Number(env.SESSION_TTL_SECONDS || DEFAULT_SESSION_TTL_SECONDS)
+  if (!Number.isInteger(configured)) return DEFAULT_SESSION_TTL_SECONDS
+  return Math.max(3600, Math.min(365 * 24 * 60 * 60, configured))
+}
+
 export async function createAuthRouter({ env, origin, sessionSecret, send }) {
   const rpId = env.WEBAUTHN_RP_ID || new URL(origin).hostname
   const rpName = env.WEBAUTHN_RP_NAME || 'Finance Planner'
+  const sessionTtlSeconds = configuredSessionTtl(env)
   const store = new AuthStore(env.AUTH_STORE_PATH || './data/auth.enc.json', env.AUTH_MASTER_KEY || env.CONNECTOR_MASTER_KEY || '')
   await store.load()
 
@@ -109,9 +117,11 @@ export async function createAuthRouter({ env, origin, sessionSecret, send }) {
     if (!url.pathname.startsWith('/api/auth/')) return false
 
     if (request.method === 'GET' && url.pathname === '/api/auth/session') {
-      const userId = sessionUser(request, sessionSecret)
+      let userId = null
+      try { userId = sessionUser(request, sessionSecret) } catch { userId = null }
       const user = userId ? store.data.users[userId] : null
-      send(response, 200, { authenticated: Boolean(user), user: user ? { id: user.id, email: user.email, name: user.name, picture: user.picture, passkeyCount: user.passkeys?.length || 0 } : null })
+      const headers = user ? { 'Set-Cookie': cookie('fp_session', createSession(user.id, sessionSecret, sessionTtlSeconds), origin, sessionTtlSeconds) } : {}
+      send(response, 200, { authenticated: Boolean(user), user: user ? { id: user.id, email: user.email, name: user.name, picture: user.picture, passkeyCount: user.passkeys?.length || 0 } : null }, headers)
       return true
     }
 
@@ -141,8 +151,8 @@ export async function createAuthRouter({ env, origin, sessionSecret, send }) {
       const user = existing || { id: `google:${claims.sub}`, email: claims.email.toLowerCase(), passkeys: [] }
       Object.assign(user, { name: claims.name || claims.email, picture: claims.picture, updatedAt: new Date().toISOString() })
       await store.mutate((data) => { data.users[user.id] = user })
-      const token = createSession(user.id, sessionSecret, 86400)
-      response.writeHead(302, { Location: origin, 'Cache-Control': 'no-store', 'Set-Cookie': [cookie('fp_session', token, origin, 86400), cookie('fp_google_state', '', origin, 0), cookie('fp_google_nonce', '', origin, 0)] })
+      const token = createSession(user.id, sessionSecret, sessionTtlSeconds)
+      response.writeHead(302, { Location: origin, 'Cache-Control': 'no-store', 'Set-Cookie': [cookie('fp_session', token, origin, sessionTtlSeconds), cookie('fp_google_state', '', origin, 0), cookie('fp_google_nonce', '', origin, 0)] })
       response.end()
       return true
     }
@@ -208,8 +218,8 @@ export async function createAuthRouter({ env, origin, sessionSecret, send }) {
       })
       if (!verification.verified) throw new Error('Passkey authentication failed.')
       await store.mutate((data) => { stored.counter = verification.authenticationInfo.newCounter; delete data.challenges[`authenticate:${user.id}`] })
-      const token = createSession(user.id, sessionSecret, 86400)
-      send(response, 200, { authenticated: true }, { 'Set-Cookie': cookie('fp_session', token, origin, 86400) })
+      const token = createSession(user.id, sessionSecret, sessionTtlSeconds)
+      send(response, 200, { authenticated: true }, { 'Set-Cookie': cookie('fp_session', token, origin, sessionTtlSeconds) })
       return true
     }
 
