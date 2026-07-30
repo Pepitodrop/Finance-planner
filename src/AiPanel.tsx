@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { AlertTriangle, BrainCircuit, Check, CheckCheck, Filter, LoaderCircle, RefreshCw, ScanSearch, ShieldCheck, Sparkles, WandSparkles } from 'lucide-react'
 import { classifyTransaction, generateInsights, HUGGING_FACE_MODEL, type AiSuggestion } from './ai'
-import { buildAiReviewSummary, isTrustedSuggestion, matchesAiReviewFilter, requiresHumanReview, type AiReviewFilter } from './aiReview'
+import { buildAiReviewSummary, isTrustedSuggestion, matchesAiReviewFilter, pendingTrustedSuggestionIds, requiresHumanReview, type AiReviewFilter } from './aiReview'
 import { formatMoney } from './finance'
 import type { Transaction } from './types'
 import './ai.css'
@@ -25,8 +25,14 @@ export function AiPanel({ transactions, onApply }: AiPanelProps) {
   const [progress, setProgress] = useState('Bereit')
   const [error, setError] = useState('')
   const [filter, setFilter] = useState<AiReviewFilter>('all')
+  const [appliedIds, setAppliedIds] = useState<Set<string>>(() => new Set())
+  const [appliedMessage, setAppliedMessage] = useState('')
   const insights = useMemo(() => generateInsights(transactions), [transactions])
   const summary = useMemo(() => buildAiReviewSummary(suggestions), [suggestions])
+  const pendingTrustedIds = useMemo(
+    () => pendingTrustedSuggestionIds(transactions.map((transaction) => transaction.id), suggestions, appliedIds),
+    [appliedIds, suggestions, transactions],
+  )
   const visibleTransactions = useMemo(
     () => transactions.filter((transaction) => matchesAiReviewFilter(suggestions[transaction.id], filter)),
     [filter, suggestions, transactions],
@@ -35,6 +41,8 @@ export function AiPanel({ transactions, onApply }: AiPanelProps) {
   const analyze = async () => {
     setLoading(true)
     setError('')
+    setAppliedIds(new Set())
+    setAppliedMessage('')
     const next: Record<string, AiSuggestion> = {}
     try {
       for (let index = 0; index < transactions.length; index += 1) {
@@ -52,12 +60,34 @@ export function AiPanel({ transactions, onApply }: AiPanelProps) {
     }
   }
 
-  const applyTrusted = () => {
-    for (const transaction of transactions) {
-      const suggestion = suggestions[transaction.id]
-      if (suggestion && isTrustedSuggestion(suggestion)) onApply(transaction.id, suggestion)
-    }
+  const applyOne = (transaction: Transaction, suggestion: AiSuggestion) => {
+    if (appliedIds.has(transaction.id)) return
+    onApply(transaction.id, suggestion)
+    setAppliedIds((current) => new Set(current).add(transaction.id))
+    setAppliedMessage(`Vorschlag für „${transaction.description}“ wurde übernommen und als Bestätigung gelernt.`)
+    setProgress('Vorschlag übernommen')
   }
+
+  const applyTrusted = () => {
+    if (pendingTrustedIds.length === 0) return
+    for (const transactionId of pendingTrustedIds) {
+      const suggestion = suggestions[transactionId]
+      if (suggestion && isTrustedSuggestion(suggestion)) onApply(transactionId, suggestion)
+    }
+    setAppliedIds((current) => {
+      const next = new Set(current)
+      pendingTrustedIds.forEach((transactionId) => next.add(transactionId))
+      return next
+    })
+    setAppliedMessage(`${pendingTrustedIds.length} verlässliche Vorschläge wurden übernommen und als Bestätigungen gelernt.`)
+    setProgress(`${pendingTrustedIds.length} verlässliche Vorschläge übernommen`)
+  }
+
+  const bulkApplyLabel = pendingTrustedIds.length > 0
+    ? `${pendingTrustedIds.length} verlässliche übernehmen`
+    : summary.trusted > 0
+      ? 'Alle verlässlichen übernommen'
+      : 'Keine verlässlichen Vorschläge'
 
   return (
     <div className="ai-page">
@@ -73,8 +103,8 @@ export function AiPanel({ transactions, onApply }: AiPanelProps) {
             {loading ? <LoaderCircle className="spin" size={19} /> : <WandSparkles size={19} />}
             {loading ? 'KI arbeitet …' : summary.analyzed ? 'Erneut analysieren' : 'Alle Buchungen analysieren'}
           </button>
-          <button className="secondary" onClick={applyTrusted} disabled={summary.trusted === 0 || loading}>
-            <CheckCheck size={17} /> {summary.trusted} verlässliche übernehmen
+          <button className="secondary" onClick={applyTrusted} disabled={pendingTrustedIds.length === 0 || loading}>
+            <CheckCheck size={17} /> {bulkApplyLabel}
           </button>
         </div>
       </section>
@@ -96,8 +126,9 @@ export function AiPanel({ transactions, onApply }: AiPanelProps) {
         </article>
         <article className="panel">
           <div className="panel-header"><div><p className="eyebrow">Status</p><h2>Lokale Inferenz</h2></div><ScanSearch size={20} /></div>
-          <p className="ai-status" role="status">{progress}</p>
+          <p className="ai-status" role="status" aria-live="polite">{progress}</p>
           {error && <div className="ai-error" role="alert"><AlertTriangle size={17}/><span>{error}</span><button onClick={analyze}><RefreshCw size={14}/> Erneut versuchen</button></div>}
+          {appliedMessage && <div className="privacy-box" role="status"><CheckCheck size={17} /><span>{appliedMessage}</span></div>}
           <div className="privacy-box"><ShieldCheck size={17} /><span>Modell-Dateien werden im Browser gecacht. Transaktionen werden nicht an einen externen KI-API-Endpunkt gesendet. Unsichere Ergebnisse werden nicht automatisch angewendet.</span></div>
         </article>
       </section>
@@ -111,6 +142,7 @@ export function AiPanel({ transactions, onApply }: AiPanelProps) {
           {visibleTransactions.map((transaction) => {
             const suggestion = suggestions[transaction.id]
             const reviewRequired = suggestion ? requiresHumanReview(suggestion) : false
+            const applied = appliedIds.has(transaction.id)
             return (
               <div className={`ai-result ${reviewRequired ? 'review-required' : ''}`} key={transaction.id}>
                 <div className="ai-result-main">
@@ -121,7 +153,7 @@ export function AiPanel({ transactions, onApply }: AiPanelProps) {
                   <div className="ai-prediction"><b>{suggestion.merchant}</b><span>{suggestion.category} · {suggestion.confidence}% sicher</span><em>{suggestion.source}</em></div>
                   <div className="ai-scores"><span>Wiederkehrend {suggestion.recurringProbability}%</span><span className={suggestion.anomalyScore >= 70 ? 'warning' : ''}>Anomalie {suggestion.anomalyScore}%</span></div>
                   <div className="ai-explanation"><p>{suggestion.explanation}</p>{suggestion.alternatives.length > 1 && <div className="ai-alternatives">Alternativen: {suggestion.alternatives.slice(1, 4).map((alternative) => <span key={alternative.category}>{alternative.category} {alternative.confidence}%</span>)}</div>}</div>
-                  <div className="ai-decision"><span className={reviewRequired ? 'review-badge' : 'trusted-badge'}>{reviewRequired ? 'Bitte prüfen' : 'Verlässlich'}</span><button className="secondary" onClick={() => onApply(transaction.id, suggestion)}><Check size={15} /> Übernehmen</button></div>
+                  <div className="ai-decision"><span className={applied ? 'trusted-badge' : reviewRequired ? 'review-badge' : 'trusted-badge'}>{applied ? 'Übernommen' : reviewRequired ? 'Bitte prüfen' : 'Verlässlich'}</span><button className="secondary" onClick={() => applyOne(transaction, suggestion)} disabled={applied}><Check size={15} /> {applied ? 'Übernommen' : 'Übernehmen'}</button></div>
                 </> : <span className="ai-waiting">Noch nicht analysiert</span>}
               </div>
             )
