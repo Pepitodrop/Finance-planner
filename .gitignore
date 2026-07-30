@@ -10,3 +10,4 @@ dist
 server/data/
 server/*.env
 .gstack/
+public/vendor/transformers-3.8.1.min.js
