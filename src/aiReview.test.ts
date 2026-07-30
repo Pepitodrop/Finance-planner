@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AiSuggestion } from './ai'
-import { buildAiReviewSummary, isTrustedSuggestion, matchesAiReviewFilter, requiresHumanReview } from './aiReview'
+import { buildAiReviewSummary, isTrustedSuggestion, matchesAiReviewFilter, pendingTrustedSuggestionIds, requiresHumanReview } from './aiReview'
 
 const suggestion = (overrides: Partial<AiSuggestion> = {}): AiSuggestion => ({
   category: 'Lebensmittel',
@@ -42,5 +42,16 @@ describe('AI review queue', () => {
       anomalies: 1,
       averageConfidence: 73,
     })
+  })
+
+  it('returns only trusted suggestions that have not already been applied', () => {
+    const suggestions = {
+      a: suggestion(),
+      b: suggestion({ confidence: 60, needsReview: true }),
+      c: suggestion({ merchant: 'Lidl' }),
+      stale: suggestion(),
+    }
+
+    expect(pendingTrustedSuggestionIds(['a', 'b', 'c'], suggestions, new Set(['a']))).toEqual(['c'])
   })
 })
