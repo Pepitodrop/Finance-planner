@@ -14,7 +14,7 @@ The package name is `de.luisbenedikt.financeplanner`. The application targets An
 
 ## Build an installable APK
 
-Use Android Studio with JDK 17, or install Gradle 9.5 and Android SDK platform 36/build-tools 36.0.0:
+Use Android Studio with JDK 17, or install Gradle 9.6.1 and Android SDK platform 36/build-tools 36.0.0:
 
 ```bash
 cd android
@@ -127,7 +127,7 @@ The release build enables R8 code shrinking and resource shrinking. `apksigner v
 4. Upload `app-release.aab` to the internal testing track.
 5. Complete the Data safety form accurately. The native shell itself stores no finance database; authenticated finance data remains in the encrypted web vault and PostgreSQL service described in `docs/CLOUD_DATA.md`.
 6. Supply privacy-policy and support URLs.
-7. Test Google OAuth, passkey login, vault creation/unlock, offline reload, cloud synchronization, conflict resolution, bank callbacks and app shortcuts on physical devices.
+7. Test Google OAuth, passkey login, vault creation/unlock, offline reload, cloud synchronization, conflict resolution and bank callbacks on physical devices.
 8. Run Play pre-launch reports and resolve crashes, accessibility defects and security warnings before wider distribution.
 
 ## Security boundaries
