@@ -25,6 +25,7 @@ export interface VaultPayload {
 let sessionKey: CryptoKey | null = null
 let sessionPayload: VaultPayload | null = null
 let changeListener: (() => void) | null = null
+let persistenceQueue: Promise<void> = Promise.resolve()
 
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = ''
@@ -91,13 +92,20 @@ async function encryptPayload(payload: VaultPayload, key: CryptoKey, salt: Uint8
   }
 }
 
-async function persistSessionPayload(): Promise<void> {
-  if (!sessionKey || !sessionPayload) return
-  const raw = localStorage.getItem(VAULT_KEY)
-  if (!raw) throw new Error('Der verschlüsselte Datenspeicher fehlt.')
-  const current = parseEnvelope(raw)
-  const envelope = await encryptPayload(sessionPayload, sessionKey, base64ToBytes(current.salt), current.iterations)
-  localStorage.setItem(VAULT_KEY, JSON.stringify(envelope))
+function queueSessionPersistence(): Promise<void> {
+  const key = sessionKey
+  const payload = sessionPayload ? structuredClone(sessionPayload) : null
+  if (!key || !payload) return Promise.resolve()
+
+  const operation = persistenceQueue.then(async () => {
+    const raw = localStorage.getItem(VAULT_KEY)
+    if (!raw) throw new Error('Der verschlüsselte Datenspeicher fehlt.')
+    const current = parseEnvelope(raw)
+    const envelope = await encryptPayload(payload, key, base64ToBytes(current.salt), current.iterations)
+    localStorage.setItem(VAULT_KEY, JSON.stringify(envelope))
+  })
+  persistenceQueue = operation.catch(() => {})
+  return operation
 }
 
 function notifyChange(): void {
@@ -129,6 +137,7 @@ export async function createVault(password: string, state: AppState): Promise<vo
   localStorage.setItem(VAULT_KEY, JSON.stringify(envelope))
   sessionKey = key
   sessionPayload = payload
+  persistenceQueue = Promise.resolve()
 }
 
 export async function unlockVault(password: string): Promise<AppState> {
@@ -143,6 +152,7 @@ export async function unlockVault(password: string): Promise<AppState> {
     const payload = normalizeVaultPayload(JSON.parse(decoder.decode(decrypted)))
     sessionKey = key
     sessionPayload = payload
+    persistenceQueue = Promise.resolve()
     return structuredClone(payload.state)
   } catch {
     throw new Error('Passwort falsch oder verschlüsselte Daten beschädigt.')
@@ -152,19 +162,20 @@ export async function unlockVault(password: string): Promise<AppState> {
 export async function replaceUnlockedVaultPayload(payload: VaultPayload): Promise<void> {
   if (!sessionKey || !sessionPayload) throw new Error('Der Vault ist nicht entsperrt.')
   sessionPayload = normalizeVaultPayload(payload)
-  await persistSessionPayload()
+  await queueSessionPersistence()
 }
 
 export async function persistEncryptedState(state: AppState): Promise<void> {
   if (!sessionPayload) return
   sessionPayload = { ...sessionPayload, state: structuredClone(state) }
-  await persistSessionPayload()
+  await queueSessionPersistence()
   notifyChange()
 }
 
 export async function changeVaultPassword(currentPassword: string, newPassword: string): Promise<void> {
   if (!sessionPayload || !sessionKey) throw new Error('Der Vault ist nicht entsperrt.')
   if (newPassword.length < 12) throw new Error('Das neue Passwort muss mindestens 12 Zeichen lang sein.')
+  await persistenceQueue
   const raw = localStorage.getItem(VAULT_KEY)
   if (!raw) throw new Error('Der verschlüsselte Datenspeicher fehlt.')
   const current = parseEnvelope(raw)
@@ -184,6 +195,7 @@ export async function changeVaultPassword(currentPassword: string, newPassword: 
   const envelope = await encryptPayload(sessionPayload, newKey, salt, PBKDF2_ITERATIONS)
   localStorage.setItem(VAULT_KEY, JSON.stringify(envelope))
   sessionKey = newKey
+  persistenceQueue = Promise.resolve()
 }
 
 export function getSecureValue<T>(key: string, fallback: T): T {
@@ -198,7 +210,7 @@ export function setSecureValue<T>(key: string, value: T): void {
     ...sessionPayload,
     secureData: { ...sessionPayload.secureData, [key]: structuredClone(value) },
   }
-  void persistSessionPayload()
+  void queueSessionPersistence()
     .then(notifyChange)
     .catch((error: unknown) => console.error('Encrypted secure data persistence failed', error))
 }
@@ -208,7 +220,7 @@ export function removeSecureValue(key: string): void {
   const secureData = { ...sessionPayload.secureData }
   delete secureData[key]
   sessionPayload = { ...sessionPayload, secureData }
-  void persistSessionPayload()
+  void queueSessionPersistence()
     .then(notifyChange)
     .catch((error: unknown) => console.error('Encrypted secure data persistence failed', error))
 }
