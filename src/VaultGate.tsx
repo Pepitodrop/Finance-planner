@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { KeyRound, LockKeyhole, ShieldCheck } from 'lucide-react'
 import { shouldLockAfterBackground, setPrivacyShield } from './mobile-security'
 import { clearLegacyPlaintextState, flushCloudState, hasLegacyPlaintextState, loadLegacyState, setUnlockedState, synchronizeUnlockedState } from './storage'
+import type { AppState } from './types'
 import { createVault, hasEncryptedVault, lockVault, unlockVault } from './vault'
 
 interface VaultGateProps { children: ReactNode }
@@ -73,7 +74,7 @@ export function VaultGate({ children }: VaultGateProps) {
     setError('')
     setBusy(true)
     try {
-      let state
+      let state: AppState
       if (mode === 'setup') {
         if (password.length < 12) throw new Error('Das Passwort muss mindestens 12 Zeichen lang sein.')
         if (password !== confirmation) throw new Error('Die Passwörter stimmen nicht überein.')
