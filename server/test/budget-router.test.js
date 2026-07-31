@@ -3,7 +3,7 @@ import test from 'node:test'
 import { createBudgetRouter } from '../src/budget-router.js'
 
 const state = {
-  accounts: [{ id: 'a1', name: 'Secret account name', balanceCents: 500000, currency: 'EUR' }],
+  accounts: [{ id: 'a1', name: 'Secret account name', type: 'checking', balanceCents: 500000, currency: 'EUR' }],
   transactions: [
     { id: '1', accountId: 'a1', description: 'Very private salary sender', category: 'Income', type: 'income', amountCents: 250000, date: '2026-07-01', recurring: true },
     { id: '2', accountId: 'a1', description: 'Very private merchant', category: 'Groceries', type: 'expense', amountCents: 50000, date: '2026-07-05', recurring: false },
