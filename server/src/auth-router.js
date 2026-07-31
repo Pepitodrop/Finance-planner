@@ -1,6 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { randomBytes } from 'node:crypto'
 import { OAuth2Client } from 'google-auth-library'
 import {
   generateAuthenticationOptions,
@@ -8,58 +6,12 @@ import {
   verifyAuthenticationResponse,
   verifyRegistrationResponse,
 } from '@simplewebauthn/server'
+import { AuthStore } from './auth-store.js'
 import { createSession, verifySession } from './security.js'
 
 const b64 = (value) => Buffer.from(value).toString('base64url')
 const unb64 = (value) => new Uint8Array(Buffer.from(value, 'base64url'))
 const DEFAULT_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
-
-class AuthStore {
-  constructor(path, key) {
-    if (String(key).length < 32) throw new Error('AUTH_MASTER_KEY must contain at least 32 characters.')
-    this.path = path
-    this.key = createHash('sha256').update(key).digest()
-    this.data = { users: {}, challenges: {} }
-    this.queue = Promise.resolve()
-  }
-
-  async load() {
-    try {
-      const envelope = JSON.parse(await readFile(this.path, 'utf8'))
-      const decipher = createDecipheriv('aes-256-gcm', this.key, Buffer.from(envelope.iv, 'base64url'))
-      decipher.setAuthTag(Buffer.from(envelope.tag, 'base64url'))
-      this.data = JSON.parse(Buffer.concat([
-        decipher.update(Buffer.from(envelope.ciphertext, 'base64url')),
-        decipher.final(),
-      ]).toString('utf8'))
-    } catch (error) {
-      if (error?.code !== 'ENOENT') throw error
-    }
-  }
-
-  async mutate(operation) {
-    this.queue = this.queue.then(async () => {
-      const result = operation(this.data)
-      await mkdir(dirname(this.path), { recursive: true })
-      const iv = randomBytes(12)
-      const cipher = createCipheriv('aes-256-gcm', this.key, iv)
-      const ciphertext = Buffer.concat([cipher.update(JSON.stringify(this.data)), cipher.final()])
-      const temporary = `${this.path}.${process.pid}.${randomUUID()}.tmp`
-      await writeFile(temporary, JSON.stringify({ iv: b64(iv), tag: b64(cipher.getAuthTag()), ciphertext: b64(ciphertext) }), { mode: 0o600 })
-      await rename(temporary, this.path)
-      return result
-    })
-    return this.queue
-  }
-
-  findByEmail(email) {
-    return Object.values(this.data.users).find((user) => user.email === email.toLowerCase())
-  }
-
-  findByCredential(id) {
-    return Object.values(this.data.users).find((user) => user.passkeys?.some((credential) => credential.id === id))
-  }
-}
 
 function parseCookies(request) {
   return Object.fromEntries(String(request.headers.cookie || '').split(';').map((part) => part.trim().split('=').map(decodeURIComponent)).filter((entry) => entry.length === 2))
