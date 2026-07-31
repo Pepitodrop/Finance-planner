@@ -163,7 +163,7 @@ export function ReceiptReview() {
           <span>Der Beleg war nicht zuverlässig genug lesbar. Deshalb werden bewusst kein Score, keine Produktbewertung und keine Alternativen angezeigt. Fotografiere den gesamten Bon gerade, scharf und bei gutem Licht.</span>
           <small>Modellkonfidenz {Math.round(result.confidence * 100)} %</small>
         </div>}
-        {hasSufficientEvidence && result.score !== null && result.subScores !== null && <>
+        {result && hasSufficientEvidence && result.score !== null && result.subScores !== null && <>
           <div className="receipt-score-summary">
             <div className="receipt-score"><strong>{result.score}</strong><span>/ 100</span></div>
             <div><h3>{scoreLabel(result.score)}</h3><p>{result.merchant || 'Händler nicht sicher erkannt'} · {formatReceiptMoney(result.totalCents)}</p><small>Modellkonfidenz {Math.round(result.confidence * 100)} %</small></div>
