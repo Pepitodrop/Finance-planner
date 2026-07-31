@@ -35,6 +35,12 @@ describe('cloud state API', () => {
   it('surfaces optimistic concurrency conflicts without overwriting either device', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ currentVersion: 8, error: { code: 'cloud_state_conflict', message: 'conflict' } }), { status: 409, headers: { 'Content-Type': 'application/json' } })))
 
-    await expect(saveCloudState(payload, 7)).rejects.toEqual(expect.objectContaining<CloudStateConflictError>({ currentVersion: 8 }))
+    try {
+      await saveCloudState(payload, 7)
+      throw new Error('Expected a cloud-state conflict.')
+    } catch (error) {
+      expect(error).toBeInstanceOf(CloudStateConflictError)
+      expect((error as CloudStateConflictError).currentVersion).toBe(8)
+    }
   })
 })
