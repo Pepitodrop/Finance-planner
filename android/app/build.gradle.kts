@@ -65,7 +65,9 @@ android {
         abortOnError = true
         checkReleaseBuilds = true
         warningsAsErrors = true
-        disable += setOf("GradleDependency")
+        // API 36 is the deliberately validated production target. Installed
+        // preview SDK metadata must not force an untested target bump.
+        disable += setOf("GradleDependency", "OldTargetApi")
     }
 
     packaging {
