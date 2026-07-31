@@ -28,6 +28,7 @@ export interface CloudSyncStatus {
 type StatusListener = (status: CloudSyncStatus) => void
 
 let unlockedState: AppState | null = null
+let savedStateFingerprint = ''
 let cloudVersion = 0
 let cloudEnabled = false
 let saveTimer: number | null = null
@@ -40,6 +41,15 @@ const listeners = new Set<StatusListener>()
 
 function cloneInitialState(): AppState {
   return structuredClone(initialState)
+}
+
+function fingerprint(state: AppState): string {
+  return JSON.stringify(state)
+}
+
+function rememberState(state: AppState): void {
+  unlockedState = structuredClone(state)
+  savedStateFingerprint = fingerprint(state)
 }
 
 function emit(next: CloudSyncStatus): void {
@@ -173,11 +183,12 @@ export function clearLegacyPlaintextState(): void {
 }
 
 export function setUnlockedState(state: AppState): void {
-  unlockedState = structuredClone(state)
+  rememberState(state)
 }
 
 export function clearUnlockedState(): void {
   unlockedState = null
+  savedStateFingerprint = ''
 }
 
 export function loadState(): AppState {
@@ -185,7 +196,7 @@ export function loadState(): AppState {
 }
 
 export async function synchronizeUnlockedState(localState: AppState): Promise<AppState> {
-  unlockedState = structuredClone(localState)
+  rememberState(localState)
   if (conflictExists()) {
     emit({ phase: 'conflict', message: 'Ein ungelöster Cloud-Konflikt schützt deine lokalen Änderungen vor Überschreiben.' })
     return structuredClone(localState)
@@ -198,7 +209,7 @@ export async function synchronizeUnlockedState(localState: AppState): Promise<Ap
     cloudEnabled = true
     if (remote.payload) {
       await replaceUnlockedVaultPayload(remote.payload)
-      unlockedState = structuredClone(remote.payload.state)
+      rememberState(remote.payload.state)
       emit({ phase: 'synced', message: 'Cloud-Datenstand wurde auf diesem Gerät geöffnet.', ...(remote.updatedAt ? { lastSyncedAt: remote.updatedAt } : {}) })
       return structuredClone(remote.payload.state)
     }
@@ -206,6 +217,7 @@ export async function synchronizeUnlockedState(localState: AppState): Promise<Ap
     const localPayload = getUnlockedVaultPayload() ?? { state: structuredClone(localState), secureData: {} }
     const created = await saveCloudState(localPayload, 0)
     cloudVersion = created.version
+    rememberState(localState)
     emit({ phase: 'synced', message: 'Der lokale Datenstand wurde als verschlüsselte Cloud-Kopie angelegt.', lastSyncedAt: created.updatedAt })
     return structuredClone(localState)
   } catch (error) {
@@ -217,7 +229,10 @@ export async function synchronizeUnlockedState(localState: AppState): Promise<Ap
 
 export function saveState(state: AppState): void {
   if (!isAppState(state)) throw new Error('Ungültiger Anwendungszustand wurde nicht gespeichert.')
+  const nextFingerprint = fingerprint(state)
   unlockedState = structuredClone(state)
+  if (nextFingerprint === savedStateFingerprint) return
+  savedStateFingerprint = nextFingerprint
   void persistEncryptedState(state).catch((error: unknown) => {
     emit({ phase: 'error', message: error instanceof Error ? error.message : 'Die lokale Verschlüsselung ist fehlgeschlagen.' })
     console.error('Encrypted persistence failed', error)
@@ -239,13 +254,14 @@ export async function resolveCloudConflict(strategy: 'server' | 'local'): Promis
   if (strategy === 'server') {
     if (!remote.payload) throw new Error('Auf dem Server ist kein Datenstand vorhanden.')
     await replaceUnlockedVaultPayload(remote.payload)
-    unlockedState = structuredClone(remote.payload.state)
+    rememberState(remote.payload.state)
     cloudVersion = remote.version
   } else {
     const localPayload = getUnlockedVaultPayload()
     if (!localPayload) throw new Error('Der lokale Vault ist nicht entsperrt.')
     const saved = await saveCloudState(localPayload, remote.version)
     cloudVersion = saved.version
+    rememberState(localPayload.state)
   }
   cloudEnabled = true
   retryDelayMs = 2_000
@@ -258,7 +274,7 @@ export async function resolveCloudConflict(strategy: 'server' | 'local'): Promis
 export function resetStoredState(): void {
   clearLegacyPlaintextState()
   const resetPayload: VaultPayload = { state: cloneInitialState(), secureData: {} }
-  unlockedState = structuredClone(resetPayload.state)
+  rememberState(resetPayload.state)
   if (getUnlockedVaultPayload()) {
     void replaceUnlockedVaultPayload(resetPayload)
       .then(() => scheduleCloudSave(0))
