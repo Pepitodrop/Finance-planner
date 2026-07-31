@@ -3,6 +3,7 @@ import test from 'node:test'
 import { decryptCloudPayload, encryptCloudPayload, validateCloudPayload } from './user-state-store.js'
 
 const secret = 'state-store-test-secret-that-is-long-enough-123456'
+const userId = 'google:test-user'
 const payload = {
   state: {
     accounts: [{ id: 'account-1', name: 'Girokonto', type: 'checking', balanceCents: 123400, currency: 'EUR' }],
@@ -17,10 +18,11 @@ const payload = {
 
 test('cloud payload is validated and encrypted without plaintext financial records', () => {
   const normalized = validateCloudPayload(payload)
-  const encrypted = encryptCloudPayload(normalized, secret)
+  const encrypted = encryptCloudPayload(normalized, secret, userId)
   assert.equal(encrypted.format, 'finance-planner-user-state')
   assert.equal(JSON.stringify(encrypted).includes('REWE'), false)
-  assert.deepEqual(decryptCloudPayload(encrypted, secret), normalized)
+  assert.deepEqual(decryptCloudPayload(encrypted, secret, userId), normalized)
+  assert.throws(() => decryptCloudPayload(encrypted, secret, 'google:other-user'))
 })
 
 test('cloud payload rejects unknown fields and broken account references', () => {
