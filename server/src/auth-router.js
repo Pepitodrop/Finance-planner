@@ -47,7 +47,13 @@ export async function createAuthRouter({ env, origin, sessionSecret, send }) {
   const rpId = env.WEBAUTHN_RP_ID || new URL(origin).hostname
   const rpName = env.WEBAUTHN_RP_NAME || 'Finance Planner'
   const sessionTtlSeconds = configuredSessionTtl(env)
-  const store = new AuthStore(env.AUTH_STORE_PATH || './data/auth.enc.json', env.AUTH_MASTER_KEY || env.CONNECTOR_MASTER_KEY || '')
+  const primaryAuthSecret = env.AUTH_MASTER_KEY || env.CONNECTOR_MASTER_KEY || ''
+  const store = new AuthStore(
+    env.AUTH_STORE_PATH || './data/auth.enc.json',
+    primaryAuthSecret,
+    undefined,
+    env.AUTH_MASTER_KEY ? env.CONNECTOR_MASTER_KEY || '' : '',
+  )
   await store.load()
 
   if (env.AUTH_MODE === 'local' && !store.data.users['local-user']) {
