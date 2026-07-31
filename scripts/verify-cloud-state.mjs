@@ -8,6 +8,7 @@ const files = Object.fromEntries(await Promise.all([
   'src/infrastructure/persistence/cloudState.ts',
   'src/infrastructure/persistence/storage.ts',
   'src/vault.ts',
+  'deploy/nginx.conf',
   'compose.yaml',
   'README.md',
 ].map(async (path) => [path, await readFile(path, 'utf8')])))
@@ -19,12 +20,16 @@ function requirePattern(path, pattern, message) {
 requirePattern('server/migrations/006_cloud_user_data.sql', /CREATE TABLE IF NOT EXISTS user_finance_state/, 'Cloud finance state table is missing')
 requirePattern('server/migrations/006_cloud_user_data.sql', /CREATE TABLE IF NOT EXISTS auth_store/, 'Database auth store table is missing')
 requirePattern('server/src/user-state-store.js', /AES-256-GCM/, 'Cloud finance state must be application-encrypted')
+requirePattern('server/src/user-state-store.js', /setAAD\(bindingData\(userId\)\)/, 'Encrypted finance state must be bound to its authenticated user')
 requirePattern('server/src/user-state-store.js', /StateVersionConflictError/, 'Cloud state must use optimistic concurrency')
 requirePattern('server/src/finance-router.js', /\/api\/finance\/state/, 'Authenticated state API route is missing')
+requirePattern('server/src/finance-router.js', /MAX_CLOUD_STATE_REQUEST_BYTES = 10_000_000/, 'Backend cloud-state upload limit is missing')
 requirePattern('server/src/auth-store.js', /INSERT INTO auth_store/, 'Auth profiles and passkeys are not persisted to PostgreSQL')
 requirePattern('src/infrastructure/persistence/storage.ts', /synchronizeUnlockedState/, 'Vault bootstrap does not load the cloud state')
 requirePattern('src/infrastructure/persistence/storage.ts', /resolveCloudConflict/, 'Cross-device conflicts must require an explicit resolution')
 requirePattern('src/vault.ts', /secureData: Record<string, unknown>/, 'Behavior and assistant memory are not included in the synced vault payload')
+requirePattern('src/vault.ts', /persistenceQueue/, 'Encrypted local vault writes must be serialized')
+requirePattern('deploy/nginx.conf', /location = \/api\/finance\/state\s*\{[\s\S]*?client_max_body_size 10m;/, 'Nginx must allow the bounded full-vault upload size on the exact state endpoint')
 requirePattern('compose.yaml', /HF_TIMEOUT_MS: \$\{HF_TIMEOUT_MS:-30000\}/, 'Hosted AI timeout is not passed into the connector')
 requirePattern('README.md', /PostgreSQL.*canonical/i, 'README must describe PostgreSQL as the canonical user-data store')
 
