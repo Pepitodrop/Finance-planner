@@ -1,0 +1,132 @@
+name: Android
+
+on:
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'public/.well-known/assetlinks.json'
+      - 'scripts/generate-android-assetlinks.mjs'
+      - 'scripts/verify-android-app.mjs'
+      - 'docs/ANDROID.md'
+      - '.github/workflows/android.yml'
+      - 'package.json'
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'public/.well-known/assetlinks.json'
+      - 'scripts/generate-android-assetlinks.mjs'
+      - 'scripts/verify-android-app.mjs'
+      - 'docs/ANDROID.md'
+      - '.github/workflows/android.yml'
+      - 'package.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android 16 SDK
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+
+      - name: Verify repository Android invariants
+        run: node scripts/verify-android-app.mjs
+
+      - name: Build and lint installable debug APK
+        working-directory: android
+        run: gradle --no-daemon --stacktrace :app:lintDebug :app:testDebugUnitTest :app:assembleDebug
+
+      - name: Verify debug APK signature
+        run: '${ANDROID_HOME}/build-tools/36.0.0/apksigner verify --verbose android/app/build/outputs/apk/debug/app-debug.apk'
+
+      - name: Upload installable debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Prepare release signing
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          if [[ -n "$KEYSTORE_BASE64" && -n "$KEY_ALIAS" && -n "$STORE_PASSWORD" && -n "$KEY_PASSWORD" ]]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/finance-planner-release.jks"
+            chmod 600 "$RUNNER_TEMP/finance-planner-release.jks"
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'available=false' >> "$GITHUB_OUTPUT"
+            echo 'Release signing secrets are not configured; the debug APK remains available.'
+          fi
+
+      - name: Build signed release APK and Play App Bundle
+        if: steps.signing.outputs.available == 'true'
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/finance-planner-release.jks
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: gradle --no-daemon --stacktrace :app:lintRelease :app:assembleRelease :app:bundleRelease
+
+      - name: Verify release identity and generate asset links
+        if: steps.signing.outputs.available == 'true'
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/finance-planner-release.jks
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_SHA256_CERT_FINGERPRINT: ${{ secrets.ANDROID_SHA256_CERT_FINGERPRINT }}
+        shell: bash
+        run: |
+          '${ANDROID_HOME}/build-tools/36.0.0/apksigner' verify --verbose --print-certs android/app/build/outputs/apk/release/app-release.apk | tee android/app/build/outputs/apk/release/signing-certificate.txt
+          actual="$(keytool -list -v -keystore "$ANDROID_KEYSTORE_PATH" -alias "$ANDROID_KEY_ALIAS" -storepass "$ANDROID_STORE_PASSWORD" | awk '/SHA256:/{print $2; exit}')"
+          if [[ -z "$actual" ]]; then
+            echo 'Unable to read release certificate fingerprint.' >&2
+            exit 1
+          fi
+          if [[ -n "$ANDROID_SHA256_CERT_FINGERPRINT" && "${actual^^}" != "${ANDROID_SHA256_CERT_FINGERPRINT^^}" ]]; then
+            echo "Configured fingerprint does not match release keystore: $actual" >&2
+            exit 1
+          fi
+          ANDROID_SHA256_CERT_FINGERPRINT="$actual" node scripts/generate-android-assetlinks.mjs
+          cp public/.well-known/assetlinks.json android/app/build/outputs/assetlinks.json
+
+      - name: Upload signed Android release
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-signed-release
+          path: |
+            android/app/build/outputs/apk/release/app-release.apk
+            android/app/build/outputs/bundle/release/app-release.aab
+            android/app/build/outputs/apk/release/signing-certificate.txt
+            android/app/build/outputs/assetlinks.json
+          if-no-files-found: error
+          retention-days: 30
