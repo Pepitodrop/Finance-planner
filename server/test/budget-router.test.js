@@ -94,6 +94,10 @@ test('budget feedback updates the persistent profile and reset deletes it', asyn
   const planner = createBudgetRouter({ ...common, body: async () => planInput })
   await planner({ method: 'POST' }, {}, new URL('http://localhost/api/ai/budget-plan'))
   const planId = outputs.at(-1).planId
+  const unknown = createBudgetRouter({ ...common, body: async () => ({ consentBehaviorLearning: true, planId, recommendationId: 'made-up-advice', decision: 'approved' }) })
+  await assert.rejects(() => unknown({ method: 'POST' }, {}, new URL('http://localhost/api/ai/budget-feedback')), (error) => error.code === 'invalid_budget_feedback')
+  const stale = createBudgetRouter({ ...common, body: async () => ({ consentBehaviorLearning: true, planId: 'budget-2026-07-30-2-1', recommendationId: 'goal-allocation', decision: 'approved' }) })
+  await assert.rejects(() => stale({ method: 'POST' }, {}, new URL('http://localhost/api/ai/budget-feedback')), (error) => error.code === 'stale_budget_feedback')
   const feedback = createBudgetRouter({ ...common, body: async () => ({ consentBehaviorLearning: true, planId, recommendationId: 'goal-allocation', decision: 'approved' }) })
   await feedback({ method: 'POST' }, {}, new URL('http://localhost/api/ai/budget-feedback'))
   assert.equal(outputs.at(-1).profile.feedbackSummary['goal-allocation'].approved, 1)
