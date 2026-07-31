@@ -4,14 +4,17 @@ import { resolve } from 'node:path'
 
 const root = resolve(new URL('..', import.meta.url).pathname)
 const read = (path) => readFile(resolve(root, path), 'utf8')
-const [main, experience, css] = await Promise.all([
+const [main, bootstrap, experience, css] = await Promise.all([
   read('src/main.tsx'),
+  read('src/app/bootstrap.tsx'),
   read('src/FrontendExperience.tsx'),
   read('src/frontend-experience.css'),
 ])
+const entry = `${main}\n${bootstrap}`
 
-assert.match(main, /<FrontendExperience\s*\/>/, 'Frontend experience layer must be mounted')
-assert.match(main, /frontend-experience\.css/, 'Frontend experience styles must be loaded')
+assert.match(main, /app\/bootstrap/, 'The root entrypoint must delegate to the app bootstrap')
+assert.match(entry, /<FrontendExperience\s*\/>/, 'Frontend experience layer must be mounted')
+assert.match(entry, /frontend-experience\.css/, 'Frontend experience styles must be loaded')
 assert.match(experience, /aria-modal/, 'Transaction dialog must expose modal semantics')
 assert.match(experience, /event\.key === 'Escape'/, 'Transaction dialog must support Escape dismissal')
 assert.match(experience, /event\.key !== 'Tab'/, 'Transaction dialog must trap keyboard focus')
