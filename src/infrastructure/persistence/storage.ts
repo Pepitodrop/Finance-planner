@@ -70,6 +70,10 @@ function syncMetadataStorageKey(): string {
   return accountStorageKey(SYNC_METADATA_PREFIX)
 }
 
+function hasSyncMetadataRecord(): boolean {
+  return localStorage.getItem(syncMetadataStorageKey()) !== null
+}
+
 function readSyncMetadata(): SyncMetadata {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(syncMetadataStorageKey()) || '{}')
@@ -143,7 +147,7 @@ function setConflict(): void {
   clearRetryTimer()
   emit({
     phase: 'conflict',
-    message: 'Ein anderes Gerät hat den Cloud-Datenstand geändert. Lokale Änderungen bleiben verschlüsselt erhalten, bis du auswählst, welcher Stand gelten soll.',
+    message: 'Ein anderer oder noch nicht zugeordneter Datenstand wurde gefunden. Lokale Änderungen bleiben verschlüsselt erhalten, bis du auswählst, welcher Stand gelten soll.',
   })
 }
 
@@ -257,6 +261,11 @@ export function configureAuthenticatedStorage(userId: string): void {
   emit({ phase: 'local', message: syncMetadata.dirty ? 'Nicht synchronisierte lokale Änderungen dieses Kontos wurden erkannt.' : 'Verschlüsselter lokaler Speicher für das angemeldete Konto aktiv.', ...(syncMetadata.lastSyncedAt ? { lastSyncedAt: syncMetadata.lastSyncedAt } : {}) })
 }
 
+export function prepareNewDeviceCloudBootstrap(): void {
+  requireActiveUser()
+  if (!hasSyncMetadataRecord()) writeSyncMetadata({ version: 0, dirty: false })
+}
+
 export function subscribeCloudSyncStatus(listener: StatusListener): () => void {
   listeners.add(listener)
   listener(status)
@@ -328,6 +337,14 @@ export async function synchronizeUnlockedState(localState: AppState): Promise<Ap
         markDirty()
         setConflict()
         return loadState()
+      }
+      if (!hasSyncMetadataRecord()) {
+        const localPayload = getUnlockedVaultPayload()
+        if (localPayload && fingerprint(localPayload) !== fingerprint(remote.payload)) {
+          markDirty()
+          setConflict()
+          return loadState()
+        }
       }
       if (syncMetadata.dirty) {
         if (syncMetadata.version !== remote.version) {
