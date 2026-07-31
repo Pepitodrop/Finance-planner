@@ -16,9 +16,9 @@ PostgreSQL is the canonical cross-device store. Browser storage is an encrypted 
 ## Synchronization lifecycle
 
 1. The user authenticates with Google or a registered passkey.
-2. The user unlocks or creates the local encrypted vault.
+2. The user unlocks or creates the local encrypted vault. Each device may use its own local vault password.
 3. The client requests `GET /api/finance/state` with the authenticated session cookie.
-4. If a server document exists, it replaces the local cache before the main application mounts.
+4. If a server document exists, it replaces the local cache before the main application mounts and is re-encrypted with that device's vault password.
 5. If no server document exists, the current local vault is uploaded as version 1.
 6. Later state and secure-data changes are debounced and sent to `POST /api/finance/state`.
 7. Every write includes `expectedVersion`. PostgreSQL updates only when it matches the current version.
@@ -108,7 +108,7 @@ The encrypted payload columns must not contain readable merchant descriptions or
 5. Confirm the transaction appears before making edits.
 6. Edit the transaction on device B and wait for synchronization.
 7. Reload device A and confirm the edit appears.
-8. Make authentication data. The edits on both devices and confirm the conflict UI appears instead of silent data loss.
+8. To test conflict handling, take both devices offline, change the same record differently on each, reconnect both, and confirm that the conflict UI appears instead of silently losing either device's work.
 
 ## Backups
 
