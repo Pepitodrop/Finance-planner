@@ -10,7 +10,7 @@ import {
 } from '../src/budget-learning.js'
 
 const state = {
-  accounts: [{ id: 'a1', name: 'Private account', balanceCents: 400000, currency: 'EUR' }],
+  accounts: [{ id: 'a1', name: 'Private account', type: 'checking', balanceCents: 400000, currency: 'EUR' }, { id: 'a2', name: 'Investment', type: 'investment', balanceCents: 900000, currency: 'EUR' }],
   transactions: [
     { id: '1', accountId: 'a1', description: 'Salary ACME', category: 'Income', type: 'income', amountCents: 240000, date: '2026-06-01', recurring: true },
     { id: '2', accountId: 'a1', description: 'Private landlord', category: 'Housing', type: 'expense', amountCents: 80000, date: '2026-06-02', recurring: true },
@@ -38,6 +38,8 @@ test('builds a bounded monthly snapshot and deterministic budget plan', () => {
   assert.equal(snapshot.monthlyIncomeCents, 240000)
   assert.equal(snapshot.monthlyExpenseCents, 113000)
   assert.equal(snapshot.monthlyFreeCashCents, 127000)
+  assert.equal(snapshot.accountBalanceCents, 1300000)
+  assert.equal(snapshot.liquidBalanceCents, 400000)
 
   const profile = updateLearningProfile(null, snapshot, {
     preferences: { savingsStyle: 'balanced', emergencyFundMonths: 3, sustainabilityPriority: 70 },
@@ -57,9 +59,13 @@ test('persists only a coarse profile and learns from explicit feedback', () => {
     preferences: { savingsStyle: 'ambitious', emergencyFundMonths: 4, sustainabilityPriority: 90 },
     location: { country: 'DE', region: 'Baden-Württemberg', city: 'Karlsruhe', costLevel: 'high' },
   }, now)
-  const updated = applyBudgetFeedback(profile, 'goal-allocation', 'approved', now)
-  const publicProfile = publicLearningProfile(updated)
-  assert.equal(publicProfile.feedbackSummary['goal-allocation'].approved, 1)
+  const planId = 'budget-2026-07-31-6-2'
+  const updated = applyBudgetFeedback(profile, planId, 'goal-allocation', 'approved', now)
+  const duplicate = applyBudgetFeedback(updated, planId, 'goal-allocation', 'approved', now)
+  const switched = applyBudgetFeedback(duplicate, planId, 'goal-allocation', 'rejected', now)
+  const publicProfile = publicLearningProfile(switched)
+  assert.equal(publicProfile.feedbackSummary['goal-allocation'].approved, 0)
+  assert.equal(publicProfile.feedbackSummary['goal-allocation'].rejected, 1)
   assert.equal(publicProfile.privacy.rawDescriptionsPersisted, false)
   assert.equal(publicProfile.privacy.preciseCoordinatesPersisted, false)
   assert.equal(JSON.stringify(publicProfile).includes('Private landlord'), false)
