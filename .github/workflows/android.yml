@@ -58,7 +58,7 @@ jobs:
         run: gradle --no-daemon --stacktrace :app:lintDebug :app:testDebugUnitTest :app:assembleDebug
 
       - name: Verify debug APK signature
-        run: '${ANDROID_HOME}/build-tools/36.0.0/apksigner verify --verbose android/app/build/outputs/apk/debug/app-debug.apk'
+        run: "${ANDROID_HOME}/build-tools/36.0.0/apksigner verify --verbose android/app/build/outputs/apk/debug/app-debug.apk"
 
       - name: Upload installable debug APK
         uses: actions/upload-artifact@v4
@@ -105,7 +105,7 @@ jobs:
           ANDROID_SHA256_CERT_FINGERPRINT: ${{ secrets.ANDROID_SHA256_CERT_FINGERPRINT }}
         shell: bash
         run: |
-          '${ANDROID_HOME}/build-tools/36.0.0/apksigner' verify --verbose --print-certs android/app/build/outputs/apk/release/app-release.apk | tee android/app/build/outputs/apk/release/signing-certificate.txt
+          "${ANDROID_HOME}/build-tools/36.0.0/apksigner" verify --verbose --print-certs android/app/build/outputs/apk/release/app-release.apk | tee android/app/build/outputs/apk/release/signing-certificate.txt
           actual="$(keytool -list -v -keystore "$ANDROID_KEYSTORE_PATH" -alias "$ANDROID_KEY_ALIAS" -storepass "$ANDROID_STORE_PASSWORD" | awk '/SHA256:/{print $2; exit}')"
           if [[ -z "$actual" ]]; then
             echo 'Unable to read release certificate fingerprint.' >&2
