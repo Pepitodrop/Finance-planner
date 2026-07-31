@@ -29,22 +29,25 @@ export interface ReceiptReviewItem {
   confidence: number
 }
 
+export interface ReceiptSubScores {
+  affordability: number
+  bioFairTrade: number
+  eco: number
+}
+
 export interface ReceiptReviewResult {
   merchant: string | null
   totalCents: number | null
   currency: 'EUR'
-  score: number
-  subScores: {
-    affordability: number
-    bioFairTrade: number
-    eco: number
-  }
+  evidenceStatus: 'sufficient' | 'insufficient'
+  score: number | null
+  subScores: ReceiptSubScores | null
   items: ReceiptReviewItem[]
   recommendations: string[]
   limitations: string[]
   confidence: number
   source: string
-  model: { id: string; revision: string; license: string }
+  model: { id: string; license: string; routing: string }
   imageStored: false
   generatedAt: string
 }
@@ -105,46 +108,76 @@ function integerScore(value: unknown, field: string): number {
   return Number(value)
 }
 
+function confidence(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) throw new Error('Ungültige Modellkonfidenz.')
+  return value
+}
+
 function nullableText(value: unknown): string | null {
   return value === null ? null : typeof value === 'string' ? value : null
+}
+
+export function receiptConsentMatches(imageId: number, consentedImageId: number | null): boolean {
+  return Number.isInteger(imageId) && imageId > 0 && consentedImageId === imageId
+}
+
+export function shouldApplyReceiptResult(requestImageId: number, currentImageId: number, aborted: boolean): boolean {
+  return !aborted && requestImageId === currentImageId
 }
 
 export function validateReceiptReviewResponse(value: unknown): ReceiptReviewResult {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Die Beleganalyse hat ein ungültiges Ergebnis geliefert.')
   const result = value as Partial<ReceiptReviewResult>
   if (result.currency !== 'EUR' || result.imageStored !== false || !result.model || typeof result.model !== 'object') throw new Error('Die Beleganalyse ist unvollständig.')
+  if (result.evidenceStatus !== 'sufficient' && result.evidenceStatus !== 'insufficient') throw new Error('Der Evidenzstatus der Beleganalyse ist ungültig.')
   if (!Array.isArray(result.items) || !Array.isArray(result.recommendations) || !Array.isArray(result.limitations)) throw new Error('Die Beleganalyse enthält ungültige Listen.')
+
   const items = result.items.map((item, index) => {
     if (!item || typeof item !== 'object' || typeof item.name !== 'string' || typeof item.assessment !== 'string' || !Array.isArray(item.alternativeStores)) throw new Error(`Artikel ${index + 1} ist ungültig.`)
     if (!item.labels || typeof item.labels !== 'object') throw new Error(`Siegelangaben für Artikel ${index + 1} sind ungültig.`)
     return item
   })
+
+  let score: number | null
+  let subScores: ReceiptSubScores | null
+  if (result.evidenceStatus === 'sufficient') {
+    score = integerScore(result.score, 'Gesamtscore')
+    subScores = {
+      affordability: integerScore(result.subScores?.affordability, 'Preis'),
+      bioFairTrade: integerScore(result.subScores?.bioFairTrade, 'Bio und Fairtrade'),
+      eco: integerScore(result.subScores?.eco, 'Umwelt'),
+    }
+  } else {
+    if (result.score !== null || result.subScores !== null || items.length > 0 || result.recommendations.length > 0) {
+      throw new Error('Eine unsichere Beleganalyse darf keinen Score oder Empfehlungen enthalten.')
+    }
+    score = null
+    subScores = null
+  }
+
   return {
     merchant: nullableText(result.merchant),
     totalCents: result.totalCents === null ? null : Number.isInteger(result.totalCents) ? Number(result.totalCents) : null,
     currency: 'EUR',
-    score: integerScore(result.score, 'Gesamtscore'),
-    subScores: {
-      affordability: integerScore(result.subScores?.affordability, 'Preis'),
-      bioFairTrade: integerScore(result.subScores?.bioFairTrade, 'Bio und Fairtrade'),
-      eco: integerScore(result.subScores?.eco, 'Umwelt'),
-    },
+    evidenceStatus: result.evidenceStatus,
+    score,
+    subScores,
     items,
     recommendations: result.recommendations.filter((entry): entry is string => typeof entry === 'string'),
     limitations: result.limitations.filter((entry): entry is string => typeof entry === 'string'),
-    confidence: typeof result.confidence === 'number' ? result.confidence : 0,
+    confidence: confidence(result.confidence),
     source: typeof result.source === 'string' ? result.source : 'unknown',
     model: {
       id: typeof result.model.id === 'string' ? result.model.id : 'unknown',
-      revision: typeof result.model.revision === 'string' ? result.model.revision : 'unknown',
       license: typeof result.model.license === 'string' ? result.model.license : 'unknown',
+      routing: typeof result.model.routing === 'string' ? result.model.routing : 'unknown',
     },
     imageStored: false,
     generatedAt: typeof result.generatedAt === 'string' ? result.generatedAt : new Date().toISOString(),
   }
 }
 
-export async function requestReceiptReview(image: PreparedReceiptImage): Promise<ReceiptReviewResult> {
+export async function requestReceiptReview(image: PreparedReceiptImage, signal?: AbortSignal): Promise<ReceiptReviewResult> {
   const response = await fetch('/api/ai/receipt-review', {
     method: 'POST',
     credentials: 'include',
@@ -154,6 +187,7 @@ export async function requestReceiptReview(image: PreparedReceiptImage): Promise
       image: { mimeType: image.mimeType, dataBase64: image.dataBase64 },
       preferences: { country: 'DE', priorities: ['bio', 'fairTrade', 'eco', 'price'] },
     }),
+    signal,
   })
   const payload = await response.json().catch(() => null)
   if (!response.ok) {
