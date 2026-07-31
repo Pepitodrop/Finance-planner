@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="background_color">#080C18</color>
+    <color name="theme_color">#0B1020</color>
+    <color name="navigation_color">#080C18</color>
+    <color name="navigation_divider_color">#202A40</color>
+    <color name="brand_primary">#5D7CFF</color>
+    <color name="brand_secondary">#875CFF</color>
+    <color name="white">#FFFFFF</color>
+</resources>
