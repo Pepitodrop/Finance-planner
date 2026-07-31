@@ -14,6 +14,7 @@ const BUDGET_MODEL = Object.freeze({
   license: 'Apache-2.0',
   routing: 'hugging-face-provider-managed',
 })
+const ALLOWED_FEEDBACK_IDS = new Set(['emergency-fund', 'goal-allocation', 'review-recurring-costs', 'smooth-spending', 'reduce-flexible-spending', 'sustainable-budget', 'location-context'])
 const UNSAFE_TEXT = /(?:ignore\s+(?:all\s+)?previous|system[\s_-]*prompt|developer[\s_-]*message|\b(?:iban|swift|bic|password|secret|access[_ -]?token|refresh[_ -]?token)\b|(?:transfer|send|wire|withdraw|invest|buy|sell|trade|borrow)\b.{0,40}(?:€|\b(?:eur|money|funds?|shares?|stocks?|crypto|now|immediately)\b))/i
 
 function boundedText(value, field, maxLength) {
@@ -185,7 +186,11 @@ export function createBudgetRouter({ env = process.env, send, body, userId, stat
 
     if (request.method === 'POST' && url.pathname === '/api/ai/budget-feedback') {
       const input = validateFeedbackRequest(await body(request))
-      const updated = await profileStore.update(user, (profile) => applyBudgetFeedback(profile, input.planId, input.recommendationId, input.decision))
+      if (!ALLOWED_FEEDBACK_IDS.has(input.recommendationId)) throw new HttpError(400, 'invalid_budget_feedback', 'recommendationId is invalid.')
+      const updated = await profileStore.update(user, (profile) => {
+        if (profile?.lastPlanId !== input.planId) throw new HttpError(409, 'stale_budget_feedback', 'Feedback must refer to the most recently generated budget plan.')
+        return applyBudgetFeedback(profile, input.planId, input.recommendationId, input.decision)
+      })
       send(response, 200, { learned: true, planId: input.planId, recommendationId: input.recommendationId, decision: input.decision, profile: publicLearningProfile(updated.profile), version: updated.version })
       return true
     }
@@ -197,10 +202,11 @@ export function createBudgetRouter({ env = process.env, send, body, userId, stat
       const snapshot = buildBudgetSnapshot(cloud.payload.state)
       const stored = await profileStore.update(user, (existing) => updateLearningProfile(existing, snapshot, input))
       const plan = createDeterministicBudgetPlan(snapshot, stored.profile)
+      const issued = await profileStore.update(user, (profile) => ({ ...profile, lastPlanId: plan.planId }))
       let ai
       if (input.consentExternalAi) {
         try {
-          ai = await enrichWithHuggingFace({ env, fetchImpl, plan, profile: stored.profile, shareLocation: input.consentLocationContext })
+          ai = await enrichWithHuggingFace({ env, fetchImpl, plan, profile: issued.profile, shareLocation: input.consentLocationContext })
         } catch (error) {
           ai = { summary: deterministicSummary(plan), confidence: plan.confidence, source: 'deterministic-budget-engine', model: null, warnings: [String(error instanceof Error ? error.message : error).slice(0, 240)] }
         }
@@ -214,8 +220,8 @@ export function createBudgetRouter({ env = process.env, send, body, userId, stat
         recommendations,
         summary: ai.summary,
         ai: { source: ai.source, model: ai.model, confidence: Math.min(ai.confidence, plan.confidence), warnings: ai.warnings },
-        learningProfile: publicLearningProfile(stored.profile),
-        profileVersion: stored.version,
+        learningProfile: publicLearningProfile(issued.profile),
+        profileVersion: issued.version,
         privacy: {
           descriptionsSentToModel: false,
           accountNamesSentToModel: false,
