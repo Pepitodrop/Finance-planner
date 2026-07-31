@@ -15,6 +15,7 @@ const STORAGE_KEY = 'finance-planner-state-v2'
 const LEGACY_STORAGE_KEY = 'finance-planner-state-v1'
 const RECOVERY_KEY = 'finance-planner-recovery-state'
 const CONFLICT_KEY_PREFIX = 'finance-planner-cloud-conflict-v2:'
+const SYNC_METADATA_PREFIX = 'finance-planner-cloud-metadata-v1:'
 const SAVE_DEBOUNCE_MS = 650
 
 export type CloudSyncPhase = 'local' | 'syncing' | 'synced' | 'offline' | 'conflict' | 'error'
@@ -25,9 +26,16 @@ export interface CloudSyncStatus {
   lastSyncedAt?: string
 }
 
+interface SyncMetadata {
+  version: number
+  dirty: boolean
+  lastSyncedAt?: string
+}
+
 type StatusListener = (status: CloudSyncStatus) => void
 
 let activeUserId = ''
+let syncMetadata: SyncMetadata = { version: 0, dirty: false }
 let unlockedState: AppState | null = null
 let savedStateFingerprint = ''
 let pendingBootstrapFingerprint: string | null = null
@@ -50,8 +58,46 @@ function requireActiveUser(): string {
   return activeUserId
 }
 
+function accountStorageKey(prefix: string): string {
+  return `${prefix}${encodeURIComponent(requireActiveUser())}`
+}
+
 function conflictStorageKey(): string {
-  return `${CONFLICT_KEY_PREFIX}${encodeURIComponent(requireActiveUser())}`
+  return accountStorageKey(CONFLICT_KEY_PREFIX)
+}
+
+function syncMetadataStorageKey(): string {
+  return accountStorageKey(SYNC_METADATA_PREFIX)
+}
+
+function readSyncMetadata(): SyncMetadata {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(syncMetadataStorageKey()) || '{}')
+    if (typeof parsed !== 'object' || parsed === null) return { version: 0, dirty: false }
+    const candidate = parsed as Partial<SyncMetadata>
+    const version = Number(candidate.version)
+    return {
+      version: Number.isSafeInteger(version) && version >= 0 ? version : 0,
+      dirty: candidate.dirty === true,
+      ...(typeof candidate.lastSyncedAt === 'string' ? { lastSyncedAt: candidate.lastSyncedAt } : {}),
+    }
+  } catch {
+    return { version: 0, dirty: false }
+  }
+}
+
+function writeSyncMetadata(next: SyncMetadata): void {
+  syncMetadata = next
+  localStorage.setItem(syncMetadataStorageKey(), JSON.stringify(next))
+}
+
+function markDirty(): void {
+  if (!activeUserId || syncMetadata.dirty) return
+  writeSyncMetadata({ ...syncMetadata, dirty: true })
+}
+
+function markSynced(version: number, updatedAt: string): void {
+  writeSyncMetadata({ version, dirty: false, lastSyncedAt: updatedAt })
 }
 
 function fingerprint(value: unknown): string {
@@ -134,6 +180,7 @@ async function persistLatestPayload({ keepalive = false }: { keepalive?: boolean
   try {
     const result = await saveCloudState(payload, cloudVersion, { keepalive })
     cloudVersion = result.version
+    markSynced(result.version, result.updatedAt)
     retryDelayMs = 2_000
     clearRetryTimer()
     clearConflict()
@@ -176,7 +223,10 @@ function scheduleCloudSave(delay = SAVE_DEBOUNCE_MS): void {
 }
 
 setVaultChangeListener(() => {
-  if (typeof window !== 'undefined' && activeUserId) scheduleCloudSave()
+  if (typeof window !== 'undefined' && activeUserId) {
+    markDirty()
+    scheduleCloudSave()
+  }
 })
 
 if (typeof window !== 'undefined') {
@@ -195,15 +245,16 @@ export function configureAuthenticatedStorage(userId: string): void {
   clearSaveTimer()
   clearRetryTimer()
   activeUserId = normalized
+  syncMetadata = readSyncMetadata()
   unlockedState = null
   savedStateFingerprint = ''
   pendingBootstrapFingerprint = null
-  cloudVersion = 0
+  cloudVersion = syncMetadata.version
   cloudEnabled = false
   saveInFlight = null
   saveRequested = false
   retryDelayMs = 2_000
-  emit({ phase: 'local', message: 'Verschlüsselter lokaler Speicher für das angemeldete Konto aktiv.' })
+  emit({ phase: 'local', message: syncMetadata.dirty ? 'Nicht synchronisierte lokale Änderungen dieses Kontos wurden erkannt.' : 'Verschlüsselter lokaler Speicher für das angemeldete Konto aktiv.', ...(syncMetadata.lastSyncedAt ? { lastSyncedAt: syncMetadata.lastSyncedAt } : {}) })
 }
 
 export function subscribeCloudSyncStatus(listener: StatusListener): () => void {
@@ -274,13 +325,29 @@ export async function synchronizeUnlockedState(localState: AppState): Promise<Ap
     cloudVersion = remote.version
     if (remote.payload) {
       if (pendingBootstrapFingerprint !== currentVaultFingerprint()) {
+        markDirty()
         setConflict()
         return loadState()
       }
+      if (syncMetadata.dirty) {
+        if (syncMetadata.version !== remote.version) {
+          setConflict()
+          return loadState()
+        }
+        pendingBootstrapFingerprint = null
+        cloudEnabled = true
+        retryDelayMs = 2_000
+        clearRetryTimer()
+        emit({ phase: 'syncing', message: 'Lokal gespeicherte Offline-Änderungen werden vor dem Laden des Serverstands hochgeladen …', ...(syncMetadata.lastSyncedAt ? { lastSyncedAt: syncMetadata.lastSyncedAt } : {}) })
+        scheduleCloudSave(0)
+        return loadState()
+      }
+
       await replaceUnlockedVaultPayload(remote.payload)
       rememberState(remote.payload.state)
       pendingBootstrapFingerprint = null
       cloudEnabled = true
+      markSynced(remote.version, remote.updatedAt ?? new Date().toISOString())
       retryDelayMs = 2_000
       clearRetryTimer()
       emit({ phase: 'synced', message: 'Cloud-Datenstand wurde auf diesem Gerät geöffnet.', ...(remote.updatedAt ? { lastSyncedAt: remote.updatedAt } : {}) })
@@ -293,6 +360,7 @@ export async function synchronizeUnlockedState(localState: AppState): Promise<Ap
     rememberState(localPayload.state)
     pendingBootstrapFingerprint = null
     cloudEnabled = true
+    markSynced(created.version, created.updatedAt)
     retryDelayMs = 2_000
     clearRetryTimer()
     emit({ phase: 'synced', message: 'Der lokale Datenstand wurde als verschlüsselte Cloud-Kopie angelegt.', lastSyncedAt: created.updatedAt })
@@ -304,7 +372,7 @@ export async function synchronizeUnlockedState(localState: AppState): Promise<Ap
       return loadState()
     }
     cloudEnabled = false
-    emit({ phase: 'offline', message: error instanceof Error ? `Lokaler Modus: ${error.message}` : 'Lokaler Modus: Cloud-Speicher nicht erreichbar.' })
+    emit({ phase: 'offline', message: error instanceof Error ? `Lokaler Modus: ${error.message}` : 'Lokaler Modus: Cloud-Speicher nicht erreichbar.', ...(syncMetadata.lastSyncedAt ? { lastSyncedAt: syncMetadata.lastSyncedAt } : {}) })
     scheduleBootstrapRetry()
     return loadState()
   }
@@ -317,6 +385,7 @@ export function saveState(state: AppState): void {
   unlockedState = structuredClone(state)
   if (nextFingerprint === savedStateFingerprint) return
   savedStateFingerprint = nextFingerprint
+  markDirty()
   void persistEncryptedState(state).catch((error: unknown) => {
     emit({ phase: 'error', message: error instanceof Error ? error.message : 'Die lokale Verschlüsselung ist fehlgeschlagen.' })
     console.error('Encrypted persistence failed', error)
@@ -326,7 +395,7 @@ export function saveState(state: AppState): void {
 export async function flushCloudState({ keepalive = false }: { keepalive?: boolean } = {}): Promise<void> {
   clearSaveTimer()
   clearRetryTimer()
-  if (!cloudEnabled) return
+  if (!cloudEnabled || !syncMetadata.dirty) return
   saveRequested = true
   await drainSaveQueue({ keepalive })
 }
@@ -339,19 +408,21 @@ export async function resolveCloudConflict(strategy: 'server' | 'local'): Promis
     await replaceUnlockedVaultPayload(remote.payload)
     rememberState(remote.payload.state)
     cloudVersion = remote.version
+    markSynced(remote.version, remote.updatedAt ?? new Date().toISOString())
   } else {
     const localPayload = getUnlockedVaultPayload()
     if (!localPayload) throw new Error('Der lokale Vault ist nicht entsperrt.')
     const saved = await saveCloudState(localPayload, remote.version)
     cloudVersion = saved.version
     rememberState(localPayload.state)
+    markSynced(saved.version, saved.updatedAt)
   }
   cloudEnabled = true
   pendingBootstrapFingerprint = null
   retryDelayMs = 2_000
   clearRetryTimer()
   clearConflict()
-  emit({ phase: 'synced', message: strategy === 'server' ? 'Der Serverstand wurde übernommen.' : 'Der lokale Stand wurde bewusst als neuer Cloud-Stand gespeichert.', lastSyncedAt: new Date().toISOString() })
+  emit({ phase: 'synced', message: strategy === 'server' ? 'Der Serverstand wurde übernommen.' : 'Der lokale Stand wurde bewusst als neuer Cloud-Stand gespeichert.', lastSyncedAt: syncMetadata.lastSyncedAt })
   return loadState()
 }
 
@@ -360,6 +431,7 @@ export function resetStoredState(): void {
   clearLegacyPlaintextState()
   const resetPayload: VaultPayload = { state: cloneInitialState(), secureData: {} }
   rememberState(resetPayload.state)
+  markDirty()
   if (getUnlockedVaultPayload()) {
     void replaceUnlockedVaultPayload(resetPayload)
       .then(() => scheduleCloudSave(0))
