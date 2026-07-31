@@ -29,6 +29,7 @@ type StatusListener = (status: CloudSyncStatus) => void
 
 let unlockedState: AppState | null = null
 let savedStateFingerprint = ''
+let pendingBootstrapFingerprint: string | null = null
 let cloudVersion = 0
 let cloudEnabled = false
 let saveTimer: number | null = null
@@ -43,8 +44,13 @@ function cloneInitialState(): AppState {
   return structuredClone(initialState)
 }
 
-function fingerprint(state: AppState): string {
-  return JSON.stringify(state)
+function fingerprint(value: unknown): string {
+  return JSON.stringify(value)
+}
+
+function currentVaultFingerprint(): string {
+  const payload = getUnlockedVaultPayload()
+  return payload ? fingerprint(payload) : ''
 }
 
 function rememberState(state: AppState): void {
@@ -71,6 +77,7 @@ function setConflict(): void {
   localStorage.setItem(CONFLICT_KEY, 'true')
   cloudEnabled = false
   saveRequested = false
+  pendingBootstrapFingerprint = null
   clearRetryTimer()
   emit({
     phase: 'conflict',
@@ -82,14 +89,26 @@ function clearConflict(): void {
   localStorage.removeItem(CONFLICT_KEY)
 }
 
-function scheduleRetry(): void {
-  if (typeof window === 'undefined' || retryTimer !== null || !cloudEnabled || conflictExists()) return
+function scheduleRetry(operation: () => void): void {
+  if (typeof window === 'undefined' || retryTimer !== null || conflictExists()) return
   const delay = retryDelayMs
   retryDelayMs = Math.min(retryDelayMs * 2, 30_000)
   retryTimer = window.setTimeout(() => {
     retryTimer = null
-    scheduleCloudSave(0)
+    operation()
   }, delay)
+}
+
+function scheduleSaveRetry(): void {
+  if (!cloudEnabled) return
+  scheduleRetry(() => scheduleCloudSave(0))
+}
+
+function scheduleBootstrapRetry(): void {
+  if (!unlockedState || cloudEnabled) return
+  scheduleRetry(() => {
+    if (unlockedState) void synchronizeUnlockedState(unlockedState)
+  })
 }
 
 async function persistLatestPayload({ keepalive = false }: { keepalive?: boolean } = {}): Promise<void> {
@@ -105,12 +124,13 @@ async function persistLatestPayload({ keepalive = false }: { keepalive?: boolean
     emit({ phase: 'synced', message: 'Alle Konten, Buchungen, Sparziele und persönlichen Lernwerte sind synchronisiert.', lastSyncedAt: result.updatedAt })
   } catch (error) {
     if (error instanceof CloudStateConflictError) {
+      cloudVersion = error.currentVersion
       setConflict()
       return
     }
     saveRequested = false
     emit({ phase: 'offline', message: error instanceof Error ? `Cloud-Synchronisierung pausiert: ${error.message}` : 'Cloud-Synchronisierung ist vorübergehend nicht erreichbar.', lastSyncedAt: status.lastSyncedAt })
-    scheduleRetry()
+    scheduleSaveRetry()
   }
 }
 
@@ -144,7 +164,11 @@ setVaultChangeListener(() => {
 })
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('online', () => scheduleCloudSave(0))
+  window.addEventListener('online', () => {
+    clearRetryTimer()
+    if (cloudEnabled) scheduleCloudSave(0)
+    else scheduleBootstrapRetry()
+  })
 }
 
 export function subscribeCloudSyncStatus(listener: StatusListener): () => void {
@@ -189,6 +213,9 @@ export function setUnlockedState(state: AppState): void {
 export function clearUnlockedState(): void {
   unlockedState = null
   savedStateFingerprint = ''
+  pendingBootstrapFingerprint = null
+  cloudEnabled = false
+  clearRetryTimer()
 }
 
 export function loadState(): AppState {
@@ -202,14 +229,22 @@ export async function synchronizeUnlockedState(localState: AppState): Promise<Ap
     return structuredClone(localState)
   }
 
+  if (pendingBootstrapFingerprint === null) pendingBootstrapFingerprint = currentVaultFingerprint()
   emit({ phase: 'syncing', message: 'Verschlüsselter Cloud-Datenstand wird geladen …' })
   try {
     const remote = await fetchCloudState()
     cloudVersion = remote.version
-    cloudEnabled = true
     if (remote.payload) {
+      if (pendingBootstrapFingerprint !== currentVaultFingerprint()) {
+        setConflict()
+        return loadState()
+      }
       await replaceUnlockedVaultPayload(remote.payload)
       rememberState(remote.payload.state)
+      pendingBootstrapFingerprint = null
+      cloudEnabled = true
+      retryDelayMs = 2_000
+      clearRetryTimer()
       emit({ phase: 'synced', message: 'Cloud-Datenstand wurde auf diesem Gerät geöffnet.', ...(remote.updatedAt ? { lastSyncedAt: remote.updatedAt } : {}) })
       return structuredClone(remote.payload.state)
     }
@@ -217,13 +252,23 @@ export async function synchronizeUnlockedState(localState: AppState): Promise<Ap
     const localPayload = getUnlockedVaultPayload() ?? { state: structuredClone(localState), secureData: {} }
     const created = await saveCloudState(localPayload, 0)
     cloudVersion = created.version
-    rememberState(localState)
+    rememberState(localPayload.state)
+    pendingBootstrapFingerprint = null
+    cloudEnabled = true
+    retryDelayMs = 2_000
+    clearRetryTimer()
     emit({ phase: 'synced', message: 'Der lokale Datenstand wurde als verschlüsselte Cloud-Kopie angelegt.', lastSyncedAt: created.updatedAt })
-    return structuredClone(localState)
+    return structuredClone(localPayload.state)
   } catch (error) {
+    if (error instanceof CloudStateConflictError) {
+      cloudVersion = error.currentVersion
+      setConflict()
+      return loadState()
+    }
     cloudEnabled = false
     emit({ phase: 'offline', message: error instanceof Error ? `Lokaler Modus: ${error.message}` : 'Lokaler Modus: Cloud-Speicher nicht erreichbar.' })
-    return structuredClone(localState)
+    scheduleBootstrapRetry()
+    return loadState()
   }
 }
 
@@ -245,6 +290,7 @@ export async function flushCloudState({ keepalive = false }: { keepalive?: boole
     saveTimer = null
   }
   clearRetryTimer()
+  if (!cloudEnabled) return
   saveRequested = true
   await drainSaveQueue({ keepalive })
 }
@@ -264,6 +310,7 @@ export async function resolveCloudConflict(strategy: 'server' | 'local'): Promis
     rememberState(localPayload.state)
   }
   cloudEnabled = true
+  pendingBootstrapFingerprint = null
   retryDelayMs = 2_000
   clearRetryTimer()
   clearConflict()
