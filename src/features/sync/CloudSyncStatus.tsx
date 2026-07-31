@@ -1,10 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AlertTriangle, CloudOff, Database, LoaderCircle, RefreshCw } from 'lucide-react'
 import { getCloudSyncStatus, resolveCloudConflict, subscribeCloudSyncStatus, type CloudSyncStatus as SyncStatus } from '../../storage'
-
-export function shouldDisplayCloudSyncStatus(phase: SyncStatus['phase']): boolean {
-  return phase !== 'synced'
-}
+import { shouldDisplayCloudSyncStatus } from './cloudSyncPresentation'
 
 export function CloudSyncStatus() {
   const [status, setStatus] = useState<SyncStatus>(() => getCloudSyncStatus())
