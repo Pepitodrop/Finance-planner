@@ -1,8 +1,71 @@
 import { projectSavingsBalance } from './cobol-engine.js'
+import { getActiveDatabasePool } from './database.js'
 import { HttpError } from './runtime-security.js'
+import { PostgresUserStateStore, StateVersionConflictError } from './user-state-store.js'
+
+const MAX_CLOUD_STATE_REQUEST_BYTES = 10_000_000
+let cachedStateStore = null
+let cachedPool = null
+
+function stateStore(env) {
+  const pool = getActiveDatabasePool()
+  if (!pool) throw new HttpError(503, 'cloud_state_unavailable', 'Cloud state requires PostgreSQL persistence.')
+  if (!cachedStateStore || cachedPool !== pool) {
+    cachedPool = pool
+    cachedStateStore = new PostgresUserStateStore(pool, env.CONNECTOR_MASTER_KEY || '')
+  }
+  return cachedStateStore
+}
+
+async function readCloudStateBody(request) {
+  const contentType = String(request.headers['content-type'] || '').split(';')[0].trim().toLowerCase()
+  if (contentType !== 'application/json') throw new HttpError(415, 'unsupported_media_type', 'Content-Type must be application/json.')
+  const declaredSize = Number(request.headers['content-length'] || 0)
+  if (Number.isFinite(declaredSize) && declaredSize > MAX_CLOUD_STATE_REQUEST_BYTES) throw new HttpError(413, 'payload_too_large', 'Cloud state request is too large.')
+  const chunks = []
+  let size = 0
+  for await (const chunk of request) {
+    size += chunk.length
+    if (size > MAX_CLOUD_STATE_REQUEST_BYTES) throw new HttpError(413, 'payload_too_large', 'Cloud state request is too large.')
+    chunks.push(chunk)
+  }
+  if (!chunks.length) throw new HttpError(400, 'invalid_json', 'Cloud state request body is required.')
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  } catch {
+    throw new HttpError(400, 'invalid_json', 'Invalid JSON request body.')
+  }
+}
 
 export function createFinanceRouter({ env = process.env, send, body, userId, projectSavings = projectSavingsBalance }) {
   return async function handleFinance(request, response, url) {
+    if (url.pathname === '/api/finance/state') {
+      const user = userId(request)
+      const store = stateStore(env)
+      if (request.method === 'GET') {
+        send(response, 200, await store.get(user))
+        return true
+      }
+      if (request.method === 'POST') {
+        const input = await readCloudStateBody(request)
+        try {
+          const result = await store.save(user, input.payload, input.expectedVersion)
+          send(response, 200, result)
+        } catch (error) {
+          if (error instanceof StateVersionConflictError) {
+            send(response, 409, {
+              error: { code: 'cloud_state_conflict', message: 'Cloud state changed on another device.' },
+              currentVersion: error.currentVersion,
+            })
+          } else {
+            throw error
+          }
+        }
+        return true
+      }
+      return false
+    }
+
     if (request.method !== 'POST' || url.pathname !== '/api/finance/project-savings') return false
 
     userId(request)

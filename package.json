@@ -1,7 +1,7 @@
 {
   "name": "finance-planner",
   "private": true,
-  "version": "0.1.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "predev": "npm run vendor:transformers",
@@ -11,7 +11,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "test": "vitest run && node scripts/verify-pwa.mjs && node scripts/verify-mobile.mjs && node scripts/verify-web-mobile-hardening.mjs && node scripts/verify-frontend-experience.mjs && node scripts/verify-mobile-bank-production.mjs && node scripts/verify-ai.mjs && node scripts/verify-ai-evaluation.mjs && node scripts/verify-ai-quality-gates.mjs && node scripts/verify-ai-model-lock.mjs && node scripts/verify-personal-launch.mjs && node scripts/verify-production-readiness.mjs",
+    "test": "vitest run && node scripts/verify-pwa.mjs && node scripts/verify-mobile.mjs && node scripts/verify-web-mobile-hardening.mjs && node scripts/verify-frontend-experience.mjs && node scripts/verify-mobile-bank-production.mjs && node scripts/verify-ai.mjs && node scripts/verify-ai-evaluation.mjs && node scripts/verify-ai-quality-gates.mjs && node scripts/verify-ai-model-lock.mjs && node scripts/verify-cloud-state.mjs && node scripts/verify-personal-launch.mjs && node scripts/verify-production-readiness.mjs",
+    "verify:cloud-state": "node scripts/verify-cloud-state.mjs",
     "verify:launch": "node scripts/verify-personal-launch.mjs",
     "verify:launch:runtime": "node scripts/verify-personal-launch.mjs --runtime",
     "verify:release": "node scripts/verify-production-readiness.mjs --strict"

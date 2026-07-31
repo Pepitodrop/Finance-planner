@@ -4,8 +4,9 @@ import { resolve } from 'node:path'
 
 const root = resolve(new URL('..', import.meta.url).pathname)
 const read = (path) => readFile(resolve(root, path), 'utf8')
-const [main, runtime, connectors, panel, server, webhookSecurity, database] = await Promise.all([
+const [main, bootstrap, runtime, connectors, panel, server, webhookSecurity, database] = await Promise.all([
   read('src/main.tsx'),
+  read('src/app/bootstrap.tsx'),
   read('src/MobileProductionRuntime.tsx'),
   read('src/connectors.ts'),
   read('src/ConnectionsPanel.tsx'),
@@ -13,8 +14,10 @@ const [main, runtime, connectors, panel, server, webhookSecurity, database] = aw
   read('server/src/webhook-security.js'),
   read('server/src/database.js'),
 ])
+const entry = `${main}\n${bootstrap}`
 
-assert.match(main, /<MobileProductionRuntime\s*\/>/, 'Mobile production runtime must be mounted')
+assert.match(main, /app\/bootstrap/, 'The root entrypoint must delegate to the app bootstrap')
+assert.match(entry, /<MobileProductionRuntime\s*\/>/, 'Mobile production runtime must be mounted')
 assert.match(runtime, /visualViewport/, 'Visual viewport changes must be handled for mobile keyboards')
 assert.match(runtime, /registration\.update/, 'Installed apps must periodically check for safe updates')
 assert.match(runtime, /update-available/, 'Installed apps must announce safely installed updates')

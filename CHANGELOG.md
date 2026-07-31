@@ -2,6 +2,42 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.0] - 2026-07-31
+
+### Added
+- Authenticated, versioned cloud-state endpoints for the complete finance vault.
+- Application-encrypted PostgreSQL persistence for accounts, transactions,
+  savings goals, behavior-learning data, assistant memory and secure client
+  preferences.
+- PostgreSQL persistence for Google profiles, passkeys and WebAuthn challenges,
+  including migration from the previous encrypted file and safe encryption-key
+  rotation.
+- Cross-device synchronization status, offline retry handling and explicit
+  conflict resolution without silent last-write-wins data loss.
+- PostgreSQL integration coverage proving encrypted state round-trips,
+  per-user ciphertext binding and optimistic concurrency.
+- Layered frontend directories for app composition, finance domain code,
+  product features and infrastructure adapters.
+
+### Changed
+- PostgreSQL is now the canonical production user-data store; the encrypted
+  browser vault remains the offline device cache.
+- The frontend entrypoint now delegates to `src/app/bootstrap.tsx`, while
+  compatibility exports allow remaining root modules to migrate incrementally.
+- Hosted Hugging Face inference receives a configurable 30-second server timeout
+  so normal model cold starts do not fail at the old 12-second default.
+- README and architecture, cloud-data and database operations documentation were
+  rewritten for the cross-device design.
+
+### Fixed
+- Serialized local encrypted-vault writes prevent slower older writes from
+  overwriting newer finance or assistant data.
+- Cloud initialization and save retries use bounded backoff rather than an
+  immediate retry loop.
+- Local edits made while the initial cloud read is unavailable are protected by
+  an explicit conflict instead of being overwritten after reconnection.
+- No-op application mounts no longer create unnecessary cloud-state versions.
+
 ## [0.1.1.0] - 2026-07-29
 
 ### Fixed

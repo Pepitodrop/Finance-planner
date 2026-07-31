@@ -144,11 +144,14 @@ jobs:
         run: |
           node --check server/src/server.js
           node --check server/src/auth-router.js
+          node --check server/src/auth-store.js
           node --check server/src/providers.js
           node --check server/src/cobol-engine.js
           node --check server/src/crypto-store.js
           node --check server/src/database.js
           node --check server/src/postgres-store.js
+          node --check server/src/user-state-store.js
+          node --check server/src/finance-router.js
           node --check server/src/migrate.js
           node --check server/src/security.js
           node --check server/src/runtime-security.js

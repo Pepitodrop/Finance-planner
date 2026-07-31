@@ -1,0 +1,83 @@
+.cloud-sync-status {
+  position: fixed;
+  left: calc(250px + 1rem);
+  bottom: 1rem;
+  z-index: 1400;
+  display: flex;
+  align-items: flex-start;
+  gap: .65rem;
+  max-width: min(30rem, calc(100vw - 270px));
+  padding: .8rem .95rem;
+  border: 1px solid rgba(148, 163, 184, .22);
+  border-radius: .9rem;
+  background: rgba(15, 23, 42, .96);
+  box-shadow: 0 18px 45px rgba(2, 6, 23, .35);
+  color: #e2e8f0;
+  backdrop-filter: blur(14px);
+}
+
+.cloud-sync-status.synced {
+  border-color: rgba(52, 211, 153, .3);
+}
+
+.cloud-sync-status.conflict,
+.cloud-sync-status.error {
+  border-color: rgba(251, 113, 133, .45);
+}
+
+.cloud-sync-status > div:first-of-type {
+  display: grid;
+  gap: .18rem;
+  min-width: 0;
+}
+
+.cloud-sync-status strong {
+  font-size: .78rem;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.cloud-sync-status span {
+  font-size: .78rem;
+  line-height: 1.35;
+  color: #94a3b8;
+}
+
+.cloud-sync-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+  margin-left: .4rem;
+}
+
+.cloud-sync-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  border: 1px solid rgba(148, 163, 184, .3);
+  border-radius: .55rem;
+  padding: .38rem .55rem;
+  background: rgba(30, 41, 59, .85);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cloud-sync-actions button:disabled {
+  cursor: wait;
+  opacity: .6;
+}
+
+@media (max-width: 760px) {
+  .cloud-sync-status {
+    right: .65rem;
+    bottom: calc(8.5rem + env(safe-area-inset-bottom));
+    left: .65rem;
+    max-width: none;
+  }
+
+  .cloud-sync-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+}

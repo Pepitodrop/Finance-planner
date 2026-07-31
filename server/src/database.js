@@ -8,6 +8,11 @@ import { PostgresStore } from './postgres-store.js'
 const { Pool } = pg
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations')
 const advisoryLockId = 741_926_001
+let activeDatabasePool = null
+
+export function getActiveDatabasePool() {
+  return activeDatabasePool
+}
 
 export function createDatabase(url, options = {}) {
   if (!url) throw new Error('DATABASE_URL is required when CONNECTOR_STORE_DRIVER=postgres.')
@@ -67,6 +72,7 @@ function addWebhookEventState(store, pool) {
 export async function createConnectorStore(env = process.env) {
   const driver = String(env.CONNECTOR_STORE_DRIVER || 'file').toLowerCase()
   if (driver === 'file') {
+    activeDatabasePool = null
     const store = new EncryptedStore(env.CONNECTOR_STORE_PATH || './data/connectors.enc.json', env.CONNECTOR_MASTER_KEY || '')
     await store.load()
     return { store: addWebhookEventState(store, null), pool: null, close: async () => {}, driver }
@@ -78,8 +84,18 @@ export async function createConnectorStore(env = process.env) {
     await migrateDatabase(pool)
     const store = new PostgresStore(pool, env.CONNECTOR_MASTER_KEY || '')
     await store.load()
-    return { store: addWebhookEventState(store, pool), pool, close: () => pool.end(), driver }
+    activeDatabasePool = pool
+    return {
+      store: addWebhookEventState(store, pool),
+      pool,
+      close: async () => {
+        if (activeDatabasePool === pool) activeDatabasePool = null
+        await pool.end()
+      },
+      driver,
+    }
   } catch (error) {
+    if (activeDatabasePool === pool) activeDatabasePool = null
     await pool.end().catch(() => {})
     throw error
   }

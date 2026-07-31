@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Fingerprint, LogIn, RefreshCw, ShieldCheck, X } from 'lucide-react'
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
 
-interface AuthUser { id: string; email: string; name: string; picture?: string; passkeyCount: number }
-interface AuthGateProps { children: ReactNode }
+export interface AuthUser { id: string; email: string; name: string; picture?: string; passkeyCount: number }
+interface AuthGateProps { children: ReactNode | ((user: AuthUser) => ReactNode) }
 const PASSKEY_PROMPT_KEY = 'finance-planner-passkey-prompt-dismissed-v1'
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -72,5 +72,6 @@ export function AuthGate({ children }: AuthGateProps) {
   if (sessionError && !user) return <main className="auth-screen"><section className="panel auth-card"><div className="goal-hero-icon"><ShieldCheck size={28}/></div><p className="eyebrow">Sitzung bleibt erhalten</p><h1>Sitzung konnte noch nicht geprüft werden</h1><p className="muted">Du wurdest nicht automatisch abgemeldet. Die Verbindung zum Anmeldedienst ist beim Neuladen fehlgeschlagen.</p><p className="status-message error-message" role="alert">{sessionError}</p><button className="primary" type="button" onClick={() => void loadSession()}><RefreshCw size={18}/> Sitzung erneut prüfen</button></section></main>
   if (!user) return <main className="auth-screen"><section className="panel auth-card"><div className="goal-hero-icon"><ShieldCheck size={28}/></div><p className="eyebrow">Sichere mobile Anmeldung</p><h1>Bei Finance Planner anmelden</h1><p className="muted">Nutze Google oder einen Geräte-Passkey. Biometrische Daten bleiben auf deinem Gerät.</p><button className="auth-google" type="button" onClick={() => { window.location.href = '/api/auth/google/start' }}><LogIn size={18}/> Mit Google fortfahren</button>{passkeysSupported && <><div className="auth-divider"><span>oder</span></div><label>E-Mail<input autoComplete="email webauthn" inputMode="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="du@beispiel.de"/></label><button className="primary" type="button" disabled={busy || !email} onClick={passkeyLogin}><Fingerprint size={19}/>{busy ? 'Wird geprüft …' : 'Face ID oder Fingerabdruck verwenden'}</button></>}{error && <p className="status-message error-message" role="alert">{error}</p>}</section></main>
 
-  return <>{user.passkeyCount === 0 && passkeysSupported && !promptDismissed && <div className="passkey-enrolment" role="status"><span>Schnellere Anmeldung mit Face ID oder Fingerabdruck aktivieren.</span><button type="button" disabled={busy} onClick={registerPasskey}><Fingerprint size={17}/> Biometrische Anmeldung aktivieren</button><button type="button" aria-label="Hinweis ausblenden" title="Nicht mehr anzeigen" onClick={dismissPrompt}><X size={18}/></button></div>}{children}</>
+  const content = typeof children === 'function' ? children(user) : children
+  return <>{user.passkeyCount === 0 && passkeysSupported && !promptDismissed && <div className="passkey-enrolment" role="status"><span>Schnellere Anmeldung mit Face ID oder Fingerabdruck aktivieren.</span><button type="button" disabled={busy} onClick={registerPasskey}><Fingerprint size={17}/> Biometrische Anmeldung aktivieren</button><button type="button" aria-label="Hinweis ausblenden" title="Nicht mehr anzeigen" onClick={dismissPrompt}><X size={18}/></button></div>}{content}</>
 }
