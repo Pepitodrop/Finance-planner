@@ -3,10 +3,4 @@
     <string name="app_name">Finance Planner</string>
     <string name="launch_url">https://finance.luisbenedikt.de/?source=android-app</string>
     <string name="asset_statements">[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"web","site":"https://finance.luisbenedikt.de"}}]</string>
-    <string name="shortcut_dashboard_short">Übersicht</string>
-    <string name="shortcut_dashboard_long">Finanzübersicht öffnen</string>
-    <string name="shortcut_transactions_short">Buchungen</string>
-    <string name="shortcut_transactions_long">Transaktionen öffnen</string>
-    <string name="shortcut_add_short">Neue Buchung</string>
-    <string name="shortcut_add_long">Manuelle Buchung hinzufügen</string>
 </resources>
