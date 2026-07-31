@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  RECEIPT_EVIDENCE_POLICY,
   RECEIPT_MODEL,
   createReceiptReviewer,
   scoreReceiptSubScores,
@@ -56,19 +57,46 @@ test('computes the weighted sustainability score deterministically', () => {
   })
 })
 
-test('adds the mandatory live-price limitation to model output', () => {
+test('adds the mandatory live-price limitation to a sufficiently grounded result', () => {
   const result = validateReceiptModelResult(modelResult)
+  assert.equal(result.evidenceStatus, 'sufficient')
   assert.equal(result.score, 69)
   assert.equal(result.items[0].labels.bio, true)
   assert.ok(result.limitations.some((entry) => /Live-Preis/i.test(entry)))
 })
 
-test('sends the receipt to the pinned Hugging Face vision model without returning the image', async () => {
+test('abstains when no reliable priced items were extracted, even if the model supplied high scores', () => {
+  const result = validateReceiptModelResult({
+    ...modelResult,
+    items: [],
+    confidence: 0.99,
+  })
+  assert.equal(result.evidenceStatus, 'insufficient')
+  assert.equal(result.score, null)
+  assert.equal(result.subScores, null)
+  assert.deepEqual(result.items, [])
+  assert.deepEqual(result.recommendations, [])
+  assert.equal(result.merchant, null)
+  assert.ok(result.limitations.some((entry) => /nicht zuverlässig/i.test(entry)))
+})
+
+test('abstains when overall confidence is below the reviewed threshold', () => {
+  const result = validateReceiptModelResult({
+    ...modelResult,
+    confidence: RECEIPT_EVIDENCE_POLICY.minOverallConfidence - 0.01,
+  })
+  assert.equal(result.evidenceStatus, 'insufficient')
+  assert.equal(result.score, null)
+})
+
+test('uses provider-managed Hugging Face routing without claiming an immutable served revision', async () => {
   let requestBody
+  let requestHeaders
   const reviewer = createReceiptReviewer({
     env: { HF_TOKEN: 'hf-test-token' },
     fetchImpl: async (_url, options) => {
       requestBody = JSON.parse(options.body)
+      requestHeaders = options.headers
       return {
         ok: true,
         async json() { return { choices: [{ message: { content: JSON.stringify(modelResult) } }] } },
@@ -78,9 +106,12 @@ test('sends the receipt to the pinned Hugging Face vision model without returnin
 
   const result = await reviewer(validInput)
   assert.equal(requestBody.model, RECEIPT_MODEL.model)
-  assert.equal(requestBody.revision, RECEIPT_MODEL.revision)
+  assert.equal('revision' in requestBody, false)
+  assert.equal('x-hf-model-revision' in requestHeaders, false)
   assert.match(requestBody.messages[0].content[1].image_url.url, /^data:image\/jpeg;base64,/)
   assert.equal(result.score, 69)
   assert.equal(result.imageStored, false)
   assert.equal(result.model.license, 'Apache-2.0')
+  assert.equal(result.model.routing, 'hugging-face-provider-managed')
+  assert.equal('revision' in result.model, false)
 })
