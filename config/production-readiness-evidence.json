@@ -9,7 +9,7 @@
     "aiEvaluationAndDrift": { "status": "partial", "evidence": ["ai/evaluation/transaction-categories.json", "scripts/verify-ai-evaluation.mjs"] },
     "bankProviderCertification": { "status": "pending", "evidence": [] },
     "playwrightAndAccessibility": { "status": "pending", "evidence": [] },
-    "physicalAndroidValidation": { "status": "pending", "evidence": [] },
+    "physicalAndroidValidation": { "status": "partial", "evidence": ["android/app/src/main/AndroidManifest.xml", ".github/workflows/android.yml", "scripts/verify-android-app.mjs", "docs/ANDROID.md"] },
     "physicalIosValidation": { "status": "pending", "evidence": [] },
     "signedLinuxRelease": { "status": "pending", "evidence": [] },
     "signedWindowsRelease": { "status": "pending", "evidence": [] },
