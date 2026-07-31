@@ -4,25 +4,28 @@
 
 | Data | Canonical persistence | Encryption |
 |---|---|---|
-| Accounts, balances, transactions and savings goals | PostgreSQL `user_finance_state` | AES-256-GCM application envelope using `CONNECTOR_MASTER_KEY` |
+| Accounts, balances, transactions and savings goals | PostgreSQL `user_finance_state` | AES-256-GCM application envelope using `CONNECTOR_MASTER_KEY`, authenticated with the user ID as additional data |
 | Behavior graph, assistant memory and secure client preferences | Included in the same per-user vault document | AES-256-GCM application envelope |
 | Google user profile, passkeys and temporary WebAuthn challenges | PostgreSQL `auth_store` | AES-256-GCM application envelope using `AUTH_MASTER_KEY` or the connector-key fallback |
 | Bank and PayPal provider credentials | PostgreSQL `connector_connections` | Existing encrypted provider payload |
 | Webhook idempotency and distributed rate limits | PostgreSQL operational tables | Database access controls; no financial descriptions stored |
-| Browser copy | Local encrypted vault | PBKDF2-SHA-256 + AES-256-GCM with the device vault password |
+| Browser copy | Account-specific local encrypted vault | PBKDF2-SHA-256 + AES-256-GCM with the device vault password and authenticated account binding |
 
-PostgreSQL is the canonical cross-device store. Browser storage is an encrypted offline cache, not the only copy.
+PostgreSQL is the canonical cross-device store. Browser storage is an encrypted offline cache, not the only copy. Device-only UI state such as install-prompt dismissal and connectivity hints remains local by design and is not financial account data.
 
 ## Synchronization lifecycle
 
 1. The user authenticates with Google or a registered passkey.
-2. The user unlocks or creates the local encrypted vault. Each device may use its own local vault password.
+2. The user unlocks or creates the local encrypted vault. Each account receives a separate vault on each device, and each device may use its own local vault password.
 3. The client requests `GET /api/finance/state` with the authenticated session cookie.
-4. If a server document exists, it replaces the local cache before the main application mounts and is re-encrypted with that device's vault password.
+4. If a server document exists, it replaces a clean local cache before the main application mounts and is re-encrypted with that device's vault password.
 5. If no server document exists, the current local vault is uploaded as version 1.
 6. Later state and secure-data changes are debounced and sent to `POST /api/finance/state`.
 7. Every write includes `expectedVersion`. PostgreSQL updates only when it matches the current version.
-8. A version conflict is shown to the user and never silently overwrites either copy.
+8. The browser persists a per-account `dirty` flag and last synchronized version. Offline edits therefore survive a browser restart and are uploaded when the server version has not changed.
+9. When both the local copy and server copy changed, an explicit conflict is shown. Neither copy is silently overwritten.
+
+The legacy unbound browser vault from releases before 0.2.0 is migrated once after a successful password unlock and then stored in the account-bound version-2 format. Keep a backup until this one-time migration and the first cloud upload have been verified.
 
 ## API contract
 
@@ -64,7 +67,7 @@ Content-Type: application/json
 }
 ```
 
-The endpoint rejects unknown fields, malformed IDs, invalid dates, non-integer money, duplicate IDs, transactions referencing missing accounts, excessive payloads and non-JSON secure values.
+The endpoint rejects unknown fields, malformed IDs, invalid dates, non-integer money, duplicate IDs, transactions referencing missing accounts, excessive payloads and non-JSON secure values. Nginx and the connector independently apply a bounded 10 MB limit to this exact endpoint; ordinary API routes retain the smaller general limit.
 
 ## Production configuration
 
@@ -104,11 +107,14 @@ The encrypted payload columns must not contain readable merchant descriptions or
 1. On device A, create a clearly named temporary transaction.
 2. Wait for the **Cloud gespeichert** indicator.
 3. Sign in with the same account on device B.
-4. Create or unlock its local vault.
+4. Create or unlock its account-specific local vault.
 5. Confirm the transaction appears before making edits.
 6. Edit the transaction on device B and wait for synchronization.
 7. Reload device A and confirm the edit appears.
-8. To test conflict handling, take both devices offline, change the same record differently on each, reconnect both, and confirm that the conflict UI appears instead of silently losing either device's work.
+8. Take device A offline, make another edit, close and reopen the browser while still offline, and confirm the edit remains in the encrypted local vault.
+9. Reconnect device A and confirm the pending edit synchronizes.
+10. To test conflict handling, take both devices offline, change the same record differently on each, reconnect both, and confirm that the conflict UI appears instead of silently losing either device's work.
+11. Sign in with a different account on the same browser and confirm it receives a separate vault rather than seeing the first account's local data.
 
 ## Backups
 
