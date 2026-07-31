@@ -1,12 +1,12 @@
 .cloud-sync-status {
   position: fixed;
-  right: 1rem;
+  left: calc(250px + 1rem);
   bottom: 1rem;
   z-index: 1400;
   display: flex;
   align-items: flex-start;
   gap: .65rem;
-  max-width: min(30rem, calc(100vw - 2rem));
+  max-width: min(30rem, calc(100vw - 270px));
   padding: .8rem .95rem;
   border: 1px solid rgba(148, 163, 184, .22);
   border-radius: .9rem;
@@ -68,10 +68,10 @@
   opacity: .6;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 760px) {
   .cloud-sync-status {
     right: .65rem;
-    bottom: calc(.65rem + env(safe-area-inset-bottom));
+    bottom: calc(8.5rem + env(safe-area-inset-bottom));
     left: .65rem;
     max-width: none;
   }
