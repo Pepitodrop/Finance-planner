@@ -14,7 +14,7 @@ import { CloudStateConflictError, fetchCloudState, saveCloudState } from './clou
 const STORAGE_KEY = 'finance-planner-state-v2'
 const LEGACY_STORAGE_KEY = 'finance-planner-state-v1'
 const RECOVERY_KEY = 'finance-planner-recovery-state'
-const CONFLICT_KEY = 'finance-planner-cloud-conflict-v1'
+const CONFLICT_KEY_PREFIX = 'finance-planner-cloud-conflict-v2:'
 const SAVE_DEBOUNCE_MS = 650
 
 export type CloudSyncPhase = 'local' | 'syncing' | 'synced' | 'offline' | 'conflict' | 'error'
@@ -27,6 +27,7 @@ export interface CloudSyncStatus {
 
 type StatusListener = (status: CloudSyncStatus) => void
 
+let activeUserId = ''
 let unlockedState: AppState | null = null
 let savedStateFingerprint = ''
 let pendingBootstrapFingerprint: string | null = null
@@ -42,6 +43,15 @@ const listeners = new Set<StatusListener>()
 
 function cloneInitialState(): AppState {
   return structuredClone(initialState)
+}
+
+function requireActiveUser(): string {
+  if (!activeUserId) throw new Error('Cloud-Speicher wurde keinem angemeldeten Konto zugeordnet.')
+  return activeUserId
+}
+
+function conflictStorageKey(): string {
+  return `${CONFLICT_KEY_PREFIX}${encodeURIComponent(requireActiveUser())}`
 }
 
 function fingerprint(value: unknown): string {
@@ -64,7 +74,7 @@ function emit(next: CloudSyncStatus): void {
 }
 
 function conflictExists(): boolean {
-  return typeof localStorage !== 'undefined' && localStorage.getItem(CONFLICT_KEY) === 'true'
+  return typeof localStorage !== 'undefined' && localStorage.getItem(conflictStorageKey()) === 'true'
 }
 
 function clearRetryTimer(): void {
@@ -73,8 +83,14 @@ function clearRetryTimer(): void {
   retryTimer = null
 }
 
+function clearSaveTimer(): void {
+  if (saveTimer === null || typeof window === 'undefined') return
+  window.clearTimeout(saveTimer)
+  saveTimer = null
+}
+
 function setConflict(): void {
-  localStorage.setItem(CONFLICT_KEY, 'true')
+  localStorage.setItem(conflictStorageKey(), 'true')
   cloudEnabled = false
   saveRequested = false
   pendingBootstrapFingerprint = null
@@ -86,7 +102,7 @@ function setConflict(): void {
 }
 
 function clearConflict(): void {
-  localStorage.removeItem(CONFLICT_KEY)
+  localStorage.removeItem(conflictStorageKey())
 }
 
 function scheduleRetry(operation: () => void): void {
@@ -152,7 +168,7 @@ function scheduleCloudSave(delay = SAVE_DEBOUNCE_MS): void {
   if (!cloudEnabled || conflictExists() || !getUnlockedVaultPayload()) return
   saveRequested = true
   clearRetryTimer()
-  if (saveTimer !== null) window.clearTimeout(saveTimer)
+  clearSaveTimer()
   saveTimer = window.setTimeout(() => {
     saveTimer = null
     void drainSaveQueue()
@@ -160,15 +176,34 @@ function scheduleCloudSave(delay = SAVE_DEBOUNCE_MS): void {
 }
 
 setVaultChangeListener(() => {
-  if (typeof window !== 'undefined') scheduleCloudSave()
+  if (typeof window !== 'undefined' && activeUserId) scheduleCloudSave()
 })
 
 if (typeof window !== 'undefined') {
   window.addEventListener('online', () => {
+    if (!activeUserId) return
     clearRetryTimer()
     if (cloudEnabled) scheduleCloudSave(0)
     else scheduleBootstrapRetry()
   })
+}
+
+export function configureAuthenticatedStorage(userId: string): void {
+  const normalized = String(userId || '').trim()
+  if (!normalized || normalized.length > 256) throw new Error('Die angemeldete Benutzerkennung ist ungültig.')
+  if (activeUserId === normalized) return
+  clearSaveTimer()
+  clearRetryTimer()
+  activeUserId = normalized
+  unlockedState = null
+  savedStateFingerprint = ''
+  pendingBootstrapFingerprint = null
+  cloudVersion = 0
+  cloudEnabled = false
+  saveInFlight = null
+  saveRequested = false
+  retryDelayMs = 2_000
+  emit({ phase: 'local', message: 'Verschlüsselter lokaler Speicher für das angemeldete Konto aktiv.' })
 }
 
 export function subscribeCloudSyncStatus(listener: StatusListener): () => void {
@@ -182,6 +217,7 @@ export function getCloudSyncStatus(): CloudSyncStatus {
 }
 
 export function loadLegacyState(): AppState {
+  requireActiveUser()
   const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY)
   if (!raw) return cloneInitialState()
   try {
@@ -207,6 +243,7 @@ export function clearLegacyPlaintextState(): void {
 }
 
 export function setUnlockedState(state: AppState): void {
+  requireActiveUser()
   rememberState(state)
 }
 
@@ -223,6 +260,7 @@ export function loadState(): AppState {
 }
 
 export async function synchronizeUnlockedState(localState: AppState): Promise<AppState> {
+  requireActiveUser()
   rememberState(localState)
   if (conflictExists()) {
     emit({ phase: 'conflict', message: 'Ein ungelöster Cloud-Konflikt schützt deine lokalen Änderungen vor Überschreiben.' })
@@ -273,6 +311,7 @@ export async function synchronizeUnlockedState(localState: AppState): Promise<Ap
 }
 
 export function saveState(state: AppState): void {
+  requireActiveUser()
   if (!isAppState(state)) throw new Error('Ungültiger Anwendungszustand wurde nicht gespeichert.')
   const nextFingerprint = fingerprint(state)
   unlockedState = structuredClone(state)
@@ -285,10 +324,7 @@ export function saveState(state: AppState): void {
 }
 
 export async function flushCloudState({ keepalive = false }: { keepalive?: boolean } = {}): Promise<void> {
-  if (saveTimer !== null) {
-    window.clearTimeout(saveTimer)
-    saveTimer = null
-  }
+  clearSaveTimer()
   clearRetryTimer()
   if (!cloudEnabled) return
   saveRequested = true
@@ -296,6 +332,7 @@ export async function flushCloudState({ keepalive = false }: { keepalive?: boole
 }
 
 export async function resolveCloudConflict(strategy: 'server' | 'local'): Promise<AppState> {
+  requireActiveUser()
   const remote = await fetchCloudState()
   if (strategy === 'server') {
     if (!remote.payload) throw new Error('Auf dem Server ist kein Datenstand vorhanden.')
@@ -319,6 +356,7 @@ export async function resolveCloudConflict(strategy: 'server' | 'local'): Promis
 }
 
 export function resetStoredState(): void {
+  const userId = requireActiveUser()
   clearLegacyPlaintextState()
   const resetPayload: VaultPayload = { state: cloneInitialState(), secureData: {} }
   rememberState(resetPayload.state)
@@ -327,6 +365,6 @@ export function resetStoredState(): void {
       .then(() => scheduleCloudSave(0))
       .catch((error: unknown) => emit({ phase: 'error', message: error instanceof Error ? error.message : 'Zurücksetzen fehlgeschlagen.' }))
   } else {
-    removeEncryptedVault()
+    removeEncryptedVault(userId)
   }
 }
