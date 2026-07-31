@@ -1,4 +1,5 @@
 import { createHuggingFaceChatTransport } from './huggingFaceClient.js'
+import { createReceiptReviewer } from './receipt-intelligence.js'
 import { HttpError } from './runtime-security.js'
 import { publicModelCatalog } from './ai-model-catalog.js'
 import { learnBehaviorPatterns } from './behavior-learning.js'
@@ -210,6 +211,7 @@ function analystPrompt(snapshot, intent) {
 
 export function createAiRouter({ env, send, body, userId, transportFactory = createHuggingFaceChatTransport, loadBehaviorEvents = null }) {
   const transport = env.HF_TOKEN ? transportFactory({ token: env.HF_TOKEN, timeoutMs: Number(env.HF_TIMEOUT_MS || 12_000) }) : null
+  const receiptReviewer = createReceiptReviewer({ env })
   return async function handleAi(request, response, url) {
     if (request.method === 'GET' && url.pathname === '/api/ai/models') { userId(request); send(response, 200, { models: publicModelCatalog(), note: 'Open-weight models are free to self-host; hosted inference availability and quotas depend on the configured Hugging Face provider.' }); return true }
     if (request.method === 'POST' && url.pathname === '/api/ai/behavior-prediction') {
@@ -219,6 +221,18 @@ export function createAiRouter({ env, send, body, userId, transportFactory = cre
       if (Object.keys(input).some((key) => !['consentBehaviorLearning'].includes(key))) throw new HttpError(400, 'invalid_behavior_request', 'Behavior history must be loaded by the server and must not be supplied by the client.')
       if (typeof loadBehaviorEvents !== 'function') throw new HttpError(503, 'behavior_history_unavailable', 'Trusted server-side financial history is not configured.')
       send(response, 200, learnBehaviorPatterns(await loadBehaviorEvents(user)))
+      return true
+    }
+    if (request.method === 'POST' && url.pathname === '/api/ai/receipt-review') {
+      userId(request)
+      const input = await body(request)
+      if (!receiptReviewer) throw new HttpError(503, 'receipt_ai_unavailable', 'Hugging Face receipt analysis is not configured.')
+      try {
+        send(response, 200, await receiptReviewer(input))
+      } catch (error) {
+        if (error instanceof HttpError) throw error
+        throw new HttpError(502, 'receipt_analysis_failed', 'The receipt could not be analyzed safely. Try a clearer image or retry later.')
+      }
       return true
     }
     if (request.method === 'POST' && url.pathname === '/api/ai/scenario-intelligence') {
