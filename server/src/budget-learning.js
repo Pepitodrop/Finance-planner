@@ -75,7 +75,7 @@ export function behaviorEventsFromFinanceState(state, now = new Date()) {
     if (category) expenseTotals.set(category, (expenseTotals.get(category) ?? 0) + Number(transaction.amountCents || 0))
   }
   const categoryRanks = new Map([...expenseTotals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 100).map(([category], index) => [category, index + 1]))
-  return transactions.slice(-5000).map((transaction, index) => {
+  return transactions.map((transaction, index) => {
     const type = transaction?.type
     if (!['income', 'expense'].includes(type)) throw new HttpError(400, 'invalid_budget_data', `transactions[${index}].type is invalid.`)
     return {
@@ -85,7 +85,7 @@ export function behaviorEventsFromFinanceState(state, now = new Date()) {
       categoryRank: type === 'expense' ? (categoryRanks.get(String(transaction.category || '').trim()) ?? 0) : 0,
       recurring: transaction.recurring === true,
     }
-  })
+  }).sort((a, b) => a.date.localeCompare(b.date)).slice(-5000)
 }
 
 export function buildBudgetSnapshot(state, now = new Date()) {
@@ -105,7 +105,7 @@ export function buildBudgetSnapshot(state, now = new Date()) {
   })).filter((transaction) => transaction.date.getTime() >= cutoff && ['income', 'expense'].includes(transaction.type))
 
   const months = new Set(normalized.map((transaction) => monthKey(transaction.date)))
-  const monthsCovered = Math.max(1, Math.min(12, months.size || 1))
+  const monthsCovered = Math.max(1, months.size || 1)
   const totalIncomeCents = normalized.filter((item) => item.type === 'income').reduce((sum, item) => sum + item.amountCents, 0)
   const totalExpenseCents = normalized.filter((item) => item.type === 'expense').reduce((sum, item) => sum + item.amountCents, 0)
   const recurringExpenseCents = normalized.filter((item) => item.type === 'expense' && item.recurring).reduce((sum, item) => sum + item.amountCents, 0)
@@ -114,6 +114,10 @@ export function buildBudgetSnapshot(state, now = new Date()) {
   const monthlyRecurringCents = Math.round(recurringExpenseCents / monthsCovered)
   const monthlyFreeCashCents = monthlyIncomeCents - monthlyExpenseCents
   const accountBalanceCents = accounts.reduce((sum, account, index) => sum + safeInteger(account.balanceCents, `accounts[${index}].balanceCents`), 0)
+  const liquidBalanceCents = accounts.reduce((sum, account, index) => {
+    const balance = safeInteger(account.balanceCents, `accounts[${index}].balanceCents`)
+    return ['checking', 'savings', 'cash'].includes(account.type) ? sum + balance : sum
+  }, 0)
 
   const categoryTotals = new Map()
   for (const item of normalized) if (item.type === 'expense') categoryTotals.set(item.category, (categoryTotals.get(item.category) ?? 0) + item.amountCents)
@@ -153,6 +157,7 @@ export function buildBudgetSnapshot(state, now = new Date()) {
     monthlyRecurringCents,
     monthlyFreeCashCents,
     accountBalanceCents,
+    liquidBalanceCents,
     categories,
     goals: normalizedGoals,
     averageWeeklyExpenseCents,
@@ -208,18 +213,20 @@ export function updateLearningProfile(existing, snapshot, input, now = new Date(
   }
 }
 
-export function applyBudgetFeedback(profile, recommendationId, decision, now = new Date()) {
+export function applyBudgetFeedback(profile, planId, recommendationId, decision, now = new Date()) {
   if (!profile || typeof profile !== 'object') throw new HttpError(409, 'budget_profile_missing', 'Create a budget plan before submitting feedback.')
+  if (!/^budget-\d{4}-\d{2}-\d{2}-\d+-\d+$/.test(String(planId || ''))) throw new HttpError(400, 'invalid_budget_feedback', 'planId is invalid.')
   if (!/^[a-z0-9-]{3,64}$/.test(String(recommendationId || ''))) throw new HttpError(400, 'invalid_budget_feedback', 'recommendationId is invalid.')
   if (!['approved', 'rejected'].includes(decision)) throw new HttpError(400, 'invalid_budget_feedback', 'decision is invalid.')
   const feedback = { ...(profile.feedback || {}) }
-  const current = feedback[recommendationId] || { approved: 0, rejected: 0, lastDecision: null, updatedAt: null }
-  feedback[recommendationId] = {
-    approved: Number(current.approved || 0) + (decision === 'approved' ? 1 : 0),
-    rejected: Number(current.rejected || 0) + (decision === 'rejected' ? 1 : 0),
-    lastDecision: decision,
-    updatedAt: now.toISOString(),
-  }
+  const current = feedback[recommendationId] || { approved: 0, rejected: 0, lastDecision: null, lastPlanId: null, updatedAt: null }
+  const samePlan = current.lastPlanId === planId
+  if (samePlan && current.lastDecision === decision) return profile
+  const approved = Math.max(0, Number(current.approved || 0) - (samePlan && current.lastDecision === 'approved' ? 1 : 0))
+    + (decision === 'approved' ? 1 : 0)
+  const rejected = Math.max(0, Number(current.rejected || 0) - (samePlan && current.lastDecision === 'rejected' ? 1 : 0))
+    + (decision === 'rejected' ? 1 : 0)
+  feedback[recommendationId] = { approved, rejected, lastDecision: decision, lastPlanId: planId, updatedAt: now.toISOString() }
   return { ...profile, feedback, lastLearnedAt: now.toISOString() }
 }
 
@@ -229,7 +236,7 @@ export function createDeterministicBudgetPlan(snapshot, profile, now = new Date(
   const nonRecurringCents = Math.max(0, snapshot.monthlyExpenseCents - snapshot.monthlyRecurringCents)
   const essentialCents = Math.min(snapshot.monthlyExpenseCents, snapshot.monthlyRecurringCents + Math.round(nonRecurringCents * 0.55))
   const emergencyTargetCents = essentialCents * profile.preferences.emergencyFundMonths
-  const emergencyGapCents = Math.max(0, emergencyTargetCents - Math.max(0, snapshot.accountBalanceCents))
+  const emergencyGapCents = Math.max(0, emergencyTargetCents - Math.max(0, snapshot.liquidBalanceCents))
   const positiveFreeCashCents = Math.max(0, snapshot.monthlyFreeCashCents)
   const emergencyContributionCents = emergencyGapCents > 0
     ? Math.min(Math.round(positiveFreeCashCents * 0.35), Math.ceil(emergencyGapCents / 12))
@@ -316,7 +323,7 @@ export function createDeterministicBudgetPlan(snapshot, profile, now = new Date(
     emergencyFund: {
       targetMonths: profile.preferences.emergencyFundMonths,
       targetCents: emergencyTargetCents,
-      currentBalanceCents: snapshot.accountBalanceCents,
+      currentBalanceCents: snapshot.liquidBalanceCents,
       gapCents: emergencyGapCents,
     },
     goalAllocations,
