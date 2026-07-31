@@ -5,15 +5,18 @@ import { resolve } from 'node:path'
 const root = resolve(new URL('..', import.meta.url).pathname)
 const read = (path) => readFile(resolve(root, path), 'utf8')
 
-const [main, hardening, css, worker] = await Promise.all([
+const [main, bootstrap, hardening, css, worker] = await Promise.all([
   read('src/main.tsx'),
+  read('src/app/bootstrap.tsx'),
   read('src/WebMobileHardening.tsx'),
   read('src/web-mobile-hardening.css'),
   read('public/sw.js'),
 ])
+const entry = `${main}\n${bootstrap}`
 
-assert.match(main, /<WebMobileHardening\s*\/>/, 'Runtime hardening layer must be mounted')
-assert.match(main, /web-mobile-hardening\.css/, 'Hardening styles must be included')
+assert.match(main, /app\/bootstrap/, 'The root entrypoint must delegate to the app bootstrap')
+assert.match(entry, /<WebMobileHardening\s*\/>/, 'Runtime hardening layer must be mounted')
+assert.match(entry, /web-mobile-hardening\.css/, 'Hardening styles must be included')
 assert.match(hardening, /href="#main-content"/, 'Keyboard users need a skip link')
 assert.match(hardening, /aria-live="polite"/, 'Route changes need an accessible announcement')
 assert.match(hardening, /prefers-color-scheme: dark/, 'Browser chrome must follow the system colour scheme')
