@@ -2,6 +2,37 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.3.0] - 2026-07-31
+
+### Added
+- Installable Android Trusted Web Activity project with package ID
+  `de.luisbenedikt.financeplanner`.
+- Android 16 / API 36 build targeting Android 6 and newer, including launcher
+  icon, splash screen, app links and finance shortcuts.
+- GitHub Actions build that compiles, lints and signature-verifies an installable
+  debug APK on every relevant change.
+- Optional signed release APK and Play App Bundle generation from protected
+  GitHub Actions signing secrets.
+- Digital Asset Links generation and a dedicated production endpoint for
+  verified fullscreen TWA operation.
+- Android build, signing, direct-installation, Google Play and physical-device
+  acceptance documentation.
+
+### Changed
+- Android is now a first-class delivery target rather than only an installable
+  browser PWA.
+- The Android shell uses the normal browser origin so Google OAuth, passkeys,
+  encrypted browser storage and PostgreSQL cloud synchronization use the same
+  account as the web application.
+- CI and repository architecture checks now include the native Android project.
+
+### Security
+- The Android package forbids cleartext traffic, disables Android backup and
+  device-transfer backup, requests only internet access, and avoids an embedded
+  WebView.
+- Production signing material remains outside source control and the repository
+  refuses to publish a placeholder Digital Asset Links certificate.
+
 ## [0.2.0] - 2026-07-31
 
 ### Added

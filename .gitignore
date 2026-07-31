@@ -11,3 +11,12 @@ server/data/
 server/*.env
 .gstack/
 public/vendor/transformers-3.8.1.min.js
+
+# Android build output and local signing material.
+android/.gradle/
+android/local.properties
+android/**/build/
+*.jks
+*.keystore
+*.apk
+*.aab
