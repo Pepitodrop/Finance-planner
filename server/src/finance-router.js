@@ -3,6 +3,7 @@ import { getActiveDatabasePool } from './database.js'
 import { HttpError } from './runtime-security.js'
 import { PostgresUserStateStore, StateVersionConflictError } from './user-state-store.js'
 
+const MAX_CLOUD_STATE_REQUEST_BYTES = 10_000_000
 let cachedStateStore = null
 let cachedPool = null
 
@@ -16,6 +17,26 @@ function stateStore(env) {
   return cachedStateStore
 }
 
+async function readCloudStateBody(request) {
+  const contentType = String(request.headers['content-type'] || '').split(';')[0].trim().toLowerCase()
+  if (contentType !== 'application/json') throw new HttpError(415, 'unsupported_media_type', 'Content-Type must be application/json.')
+  const declaredSize = Number(request.headers['content-length'] || 0)
+  if (Number.isFinite(declaredSize) && declaredSize > MAX_CLOUD_STATE_REQUEST_BYTES) throw new HttpError(413, 'payload_too_large', 'Cloud state request is too large.')
+  const chunks = []
+  let size = 0
+  for await (const chunk of request) {
+    size += chunk.length
+    if (size > MAX_CLOUD_STATE_REQUEST_BYTES) throw new HttpError(413, 'payload_too_large', 'Cloud state request is too large.')
+    chunks.push(chunk)
+  }
+  if (!chunks.length) throw new HttpError(400, 'invalid_json', 'Cloud state request body is required.')
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  } catch {
+    throw new HttpError(400, 'invalid_json', 'Invalid JSON request body.')
+  }
+}
+
 export function createFinanceRouter({ env = process.env, send, body, userId, projectSavings = projectSavingsBalance }) {
   return async function handleFinance(request, response, url) {
     if (url.pathname === '/api/finance/state') {
@@ -26,7 +47,7 @@ export function createFinanceRouter({ env = process.env, send, body, userId, pro
         return true
       }
       if (request.method === 'POST') {
-        const input = await body(request)
+        const input = await readCloudStateBody(request)
         try {
           const result = await store.save(user, input.payload, input.expectedVersion)
           send(response, 200, result)
