@@ -185,7 +185,7 @@ export function createBudgetRouter({ env = process.env, send, body, userId, stat
 
     if (request.method === 'POST' && url.pathname === '/api/ai/budget-feedback') {
       const input = validateFeedbackRequest(await body(request))
-      const updated = await profileStore.update(user, (profile) => applyBudgetFeedback(profile, input.recommendationId, input.decision))
+      const updated = await profileStore.update(user, (profile) => applyBudgetFeedback(profile, input.planId, input.recommendationId, input.decision))
       send(response, 200, { learned: true, planId: input.planId, recommendationId: input.recommendationId, decision: input.decision, profile: publicLearningProfile(updated.profile), version: updated.version })
       return true
     }
