@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 
-const [manifestRaw, serviceWorker, index, main, mobileCss, vaultGate, mobileSecurity, mobileRuntime, mobileHealth, nginx] = await Promise.all([
+const [manifestRaw, serviceWorker, index, main, bootstrap, mobileCss, vaultGate, mobileSecurity, mobileRuntime, mobileHealth, nginx] = await Promise.all([
   readFile(new URL('../public/manifest.webmanifest', import.meta.url), 'utf8'),
   readFile(new URL('../public/sw.js', import.meta.url), 'utf8'),
   readFile(new URL('../index.html', import.meta.url), 'utf8'),
   readFile(new URL('../src/main.tsx', import.meta.url), 'utf8'),
+  readFile(new URL('../src/app/bootstrap.tsx', import.meta.url), 'utf8'),
   readFile(new URL('../src/mobile.css', import.meta.url), 'utf8'),
   readFile(new URL('../src/VaultGate.tsx', import.meta.url), 'utf8'),
   readFile(new URL('../src/mobile-security.ts', import.meta.url), 'utf8'),
@@ -13,6 +14,7 @@ const [manifestRaw, serviceWorker, index, main, mobileCss, vaultGate, mobileSecu
   readFile(new URL('../src/mobile-health.ts', import.meta.url), 'utf8'),
   readFile(new URL('../deploy/nginx.conf', import.meta.url), 'utf8'),
 ])
+const entry = `${main}\n${bootstrap}`
 
 const manifest = JSON.parse(manifestRaw)
 assert.equal(manifest.display, 'standalone')
@@ -27,8 +29,9 @@ assert.match(index, /interactive-widget=resizes-content/)
 assert.match(index, /apple-mobile-web-app-capable/)
 assert.match(index, /format-detection/)
 
-assert.match(main, /MobileRuntime/)
-assert.match(main, /updateViaCache: 'none'/)
+assert.match(main, /app\/bootstrap/)
+assert.match(entry, /MobileRuntime/)
+assert.match(entry, /updateViaCache: 'none'/)
 assert.match(mobileCss, /safe-area-inset-top/)
 assert.match(mobileCss, /min-height: 44px/)
 assert.match(mobileCss, /prefers-reduced-motion/)
