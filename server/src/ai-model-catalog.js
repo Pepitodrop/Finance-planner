@@ -24,7 +24,7 @@ export const AI_MODEL_CATALOG = Object.freeze([
     integrationStatus: 'integrated',
     enabledByDefault: true,
     license: 'Apache-2.0',
-    purpose: 'Pinned vision-language model for one-time grocery receipt extraction and estimated BIO, Fairtrade, environmental and affordability guidance.',
+    purpose: 'Provider-routed vision-language model for one-time grocery receipt extraction and estimated BIO, Fairtrade, environmental and affordability guidance.',
   },
   {
     id: 'BAAI/bge-m3',
