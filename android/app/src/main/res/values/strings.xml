@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Finance Planner</string>
-    <string name="launcher_name">Finance</string>
     <string name="launch_url">https://finance.luisbenedikt.de/?source=android-app</string>
     <string name="asset_statements">[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"web","site":"https://finance.luisbenedikt.de"}}]</string>
     <string name="shortcut_dashboard_short">Übersicht</string>
