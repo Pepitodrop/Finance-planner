@@ -17,8 +17,9 @@ export interface AiSuggestion {
 }
 
 interface RankedCategory { name: string; score: number }
-interface ZeroShotResult { labels?: string[]; scores?: number[] }
+interface ZeroShotResult { labels?: unknown; scores?: unknown }
 type Extractor = (input: string | string[], options?: Record<string, unknown>) => Promise<{ data: Float32Array | number[] }>
+export type ZeroShotClassifier = (input: string, candidateLabels: string[], options?: Record<string, unknown>) => Promise<unknown>
 
 const categoryExamples: Record<string, string[]> = {
   Lebensmittel: ['Supermarkt Lebensmittel REWE Edeka Lidl Aldi Kaufland', 'Bäckerei Essen Getränke Drogerie'],
@@ -105,13 +106,24 @@ export function resolveEnsembleDecision(semantic: { category: string; confidence
   return { category: winner.category, confidence: Math.min(winner.confidence, 57), source: winner === semantic ? 'hugging-face' : 'zero-shot', needsReview: margin < 20 || winner.confidence < 72 }
 }
 
+export function parseZeroShotResult(output: unknown): { category: string; confidence: number } | null {
+  if (!output || typeof output !== 'object') return null
+  const result = output as ZeroShotResult
+  const label = Array.isArray(result.labels) ? result.labels[0] : undefined
+  const score = Array.isArray(result.scores) ? result.scores[0] : undefined
+  if (typeof label !== 'string' || !categoryNames.includes(label) || typeof score !== 'number' || !Number.isFinite(score)) return null
+  return { category: label, confidence: Math.round(Math.max(0, Math.min(1, score)) * 100) }
+}
+
+export async function runZeroShotClassification(classifier: ZeroShotClassifier, description: string): Promise<{ category: string; confidence: number } | null> {
+  const output = await classifier(description, categoryNames, { hypothesis_template: 'Diese Buchung gehört zur Kategorie {}.' })
+  return parseZeroShotResult(output)
+}
+
 async function classifyZeroShot(description: string): Promise<{ category: string; confidence: number } | null> {
   try {
-    const classifier = await loadAiModel('zero-shot')
-    const output = await classifier(description, { candidate_labels: categoryNames, hypothesis_template: 'Diese Buchung gehört zur Kategorie {}.' }) as ZeroShotResult
-    const label = output.labels?.[0]
-    const score = output.scores?.[0]
-    return label && typeof score === 'number' ? { category: label, confidence: Math.round(score * 100) } : null
+    const classifier = await loadAiModel('zero-shot') as unknown as ZeroShotClassifier
+    return await runZeroShotClassification(classifier, description)
   } catch {
     return null
   }
