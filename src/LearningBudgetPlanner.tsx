@@ -23,9 +23,9 @@ export function LearningBudgetPlanner() {
   const [externalConsent, setExternalConsent] = useState(false)
   const [locationConsent, setLocationConsent] = useState(false)
   const [country, setCountry] = useState('DE')
-  const [region, setRegion] = useState('Baden-Württemberg')
-  const [city, setCity] = useState('Karlsruhe')
-  const [costLevel, setCostLevel] = useState<CostLevel>('medium')
+  const [region, setRegion] = useState('')
+  const [city, setCity] = useState('')
+  const [costLevel, setCostLevel] = useState<CostLevel>('unknown')
   const [savingsStyle, setSavingsStyle] = useState<SavingsStyle>('balanced')
   const [emergencyMonths, setEmergencyMonths] = useState(3)
   const [sustainabilityPriority, setSustainabilityPriority] = useState(60)
@@ -153,7 +153,7 @@ export function LearningBudgetPlanner() {
 
     {plan && <>
       <article className="panel">
-        <div className="panel-header"><div><p className="eyebrow">Monatsplan</p><h2>{plan.summary}</h2></div><span className="pill">Datenqualität: {plan.dataQuality.level}</span></div>
+        <div className="panel-header"><div><p className="eyebrow">Monatsplan</p><h2>Dein Budgetvorschlag</h2></div><span className="pill">Datenqualität: {plan.dataQuality.level === 'high' ? 'hoch' : plan.dataQuality.level === 'medium' ? 'mittel' : 'niedrig'}</span></div><p>{plan.summary}</p>
         <div className="learning-budget-allocations">
           <div><span>Einnahmen</span><strong>{formatMoney(plan.allocations.incomeCents)}</strong></div>
           <div><span>Grundbedarf</span><strong>{formatMoney(plan.allocations.essentialCents)}</strong></div>
@@ -161,8 +161,10 @@ export function LearningBudgetPlanner() {
           <div><span>Notgroschen</span><strong>{formatMoney(plan.allocations.emergencyFundCents)}</strong></div>
           <div><span>Sparziele</span><strong>{formatMoney(plan.allocations.savingsGoalsCents)}</strong></div>
         </div>
-        <p className="muted">Quelle: {plan.ai.source === 'hugging-face-budget-explanation' ? `${plan.ai.model?.id} über Hugging Face` : 'deterministische Budget-Engine'}. Modelltexte dürfen die berechneten Beträge nicht verändern.</p>
+        <p className="muted">Liquider Notgroschen: {formatMoney(plan.emergencyFund.currentBalanceCents)} von {formatMoney(plan.emergencyFund.targetCents)} Zielwert · verbleibende Lücke {formatMoney(plan.emergencyFund.gapCents)}.</p><p className="muted">Quelle: {plan.ai.source === 'hugging-face-budget-explanation' ? `${plan.ai.model?.id} über Hugging Face` : 'deterministische Budget-Engine'}. Modelltexte dürfen die berechneten Beträge nicht verändern.</p>
       </article>
+
+      {plan.categoryCaps.length > 0 && <article className="panel"><div className="panel-header"><div><p className="eyebrow">Kategorien</p><h2>Monatliche Richtwerte</h2></div><Target size={20}/></div><div className="transaction-list">{plan.categoryCaps.map((category) => <div className="transaction-row" key={category.category}><div><strong>{category.category}</strong><span>{category.rationale} · bisher {formatMoney(category.historicalMonthlyCents)}</span></div><b>{formatMoney(category.recommendedCapCents)}</b></div>)}</div></article>}
 
       {plan.goalAllocations.length > 0 && <article className="panel"><div className="panel-header"><div><p className="eyebrow">Sparpläne</p><h2>Empfohlene monatliche Verteilung</h2></div><Target size={20}/></div><div className="transaction-list">{plan.goalAllocations.map((goal) => <div className="transaction-row" key={goal.goalId}><div><strong>{goal.name}</strong><span>Benötigt {formatMoney(goal.requiredMonthlyCents)} · Ziel {new Date(goal.targetDate).toLocaleDateString('de-DE')}</span></div><b>{formatMoney(goal.recommendedMonthlyCents)}</b><span className="pill">{goal.onTrack ? 'im Plan' : 'Ziel gefährdet'}</span></div>)}</div></article>}
 
