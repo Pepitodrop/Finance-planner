@@ -36,7 +36,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <MobileConnectivityStatus />
       <MobileEnhancements />
       <MobileExperience />
-      <AuthGate><VaultGate><><App /><CloudSyncStatus /></></VaultGate></AuthGate>
+      <AuthGate>{(user) => <VaultGate key={user.id} userId={user.id}><><App /><CloudSyncStatus /></></VaultGate>}</AuthGate>
     </ErrorBoundary>
   </React.StrictMode>,
 )
