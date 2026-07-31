@@ -5,6 +5,9 @@ const files = Object.fromEntries(await Promise.all([
   'server/src/user-state-store.js',
   'server/src/finance-router.js',
   'server/src/auth-store.js',
+  'src/AuthGate.tsx',
+  'src/VaultGate.tsx',
+  'src/app/bootstrap.tsx',
   'src/infrastructure/persistence/cloudState.ts',
   'src/infrastructure/persistence/storage.ts',
   'src/vault.ts',
@@ -25,8 +28,14 @@ requirePattern('server/src/user-state-store.js', /StateVersionConflictError/, 'C
 requirePattern('server/src/finance-router.js', /\/api\/finance\/state/, 'Authenticated state API route is missing')
 requirePattern('server/src/finance-router.js', /MAX_CLOUD_STATE_REQUEST_BYTES = 10_000_000/, 'Backend cloud-state upload limit is missing')
 requirePattern('server/src/auth-store.js', /INSERT INTO auth_store/, 'Auth profiles and passkeys are not persisted to PostgreSQL')
+requirePattern('src/AuthGate.tsx', /children: ReactNode \| \(\(user: AuthUser\) => ReactNode\)/, 'Authenticated user identity must be available to the vault layer')
+requirePattern('src/app/bootstrap.tsx', /VaultGate key=\{user\.id\} userId=\{user\.id\}/, 'App bootstrap must scope the device vault to the authenticated account')
+requirePattern('src/VaultGate.tsx', /configureAuthenticatedStorage\(userId\)/, 'Sync state must be configured for the authenticated account')
+requirePattern('src/infrastructure/persistence/storage.ts', /CONFLICT_KEY_PREFIX/, 'Cloud conflicts must be isolated by account')
 requirePattern('src/infrastructure/persistence/storage.ts', /synchronizeUnlockedState/, 'Vault bootstrap does not load the cloud state')
 requirePattern('src/infrastructure/persistence/storage.ts', /resolveCloudConflict/, 'Cross-device conflicts must require an explicit resolution')
+requirePattern('src/vault.ts', /version: 2/, 'Device vault must use the account-bound format')
+requirePattern('src/vault.ts', /additionalData: ownerBinding/, 'Device-vault ciphertext must be bound to its account')
 requirePattern('src/vault.ts', /secureData: Record<string, unknown>/, 'Behavior and assistant memory are not included in the synced vault payload')
 requirePattern('src/vault.ts', /persistenceQueue/, 'Encrypted local vault writes must be serialized')
 requirePattern('deploy/nginx.conf', /location = \/api\/finance\/state\s*\{[\s\S]*?client_max_body_size 10m;/, 'Nginx must allow the bounded full-vault upload size on the exact state endpoint')
