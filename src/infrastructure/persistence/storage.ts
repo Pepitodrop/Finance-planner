@@ -31,6 +31,7 @@ let unlockedState: AppState | null = null
 let cloudVersion = 0
 let cloudEnabled = false
 let saveTimer: number | null = null
+let retryTimer: number | null = null
 let saveInFlight: Promise<void> | null = null
 let saveRequested = false
 let retryDelayMs = 2_000
@@ -50,9 +51,17 @@ function conflictExists(): boolean {
   return typeof localStorage !== 'undefined' && localStorage.getItem(CONFLICT_KEY) === 'true'
 }
 
+function clearRetryTimer(): void {
+  if (retryTimer === null || typeof window === 'undefined') return
+  window.clearTimeout(retryTimer)
+  retryTimer = null
+}
+
 function setConflict(): void {
   localStorage.setItem(CONFLICT_KEY, 'true')
   cloudEnabled = false
+  saveRequested = false
+  clearRetryTimer()
   emit({
     phase: 'conflict',
     message: 'Ein anderes Gerät hat den Cloud-Datenstand geändert. Lokale Änderungen bleiben verschlüsselt erhalten, bis du auswählst, welcher Stand gelten soll.',
@@ -63,6 +72,16 @@ function clearConflict(): void {
   localStorage.removeItem(CONFLICT_KEY)
 }
 
+function scheduleRetry(): void {
+  if (typeof window === 'undefined' || retryTimer !== null || !cloudEnabled || conflictExists()) return
+  const delay = retryDelayMs
+  retryDelayMs = Math.min(retryDelayMs * 2, 30_000)
+  retryTimer = window.setTimeout(() => {
+    retryTimer = null
+    scheduleCloudSave(0)
+  }, delay)
+}
+
 async function persistLatestPayload({ keepalive = false }: { keepalive?: boolean } = {}): Promise<void> {
   const payload = getUnlockedVaultPayload()
   if (!payload || !cloudEnabled) return
@@ -71,6 +90,7 @@ async function persistLatestPayload({ keepalive = false }: { keepalive?: boolean
     const result = await saveCloudState(payload, cloudVersion, { keepalive })
     cloudVersion = result.version
     retryDelayMs = 2_000
+    clearRetryTimer()
     clearConflict()
     emit({ phase: 'synced', message: 'Alle Konten, Buchungen, Sparziele und persönlichen Lernwerte sind synchronisiert.', lastSyncedAt: result.updatedAt })
   } catch (error) {
@@ -78,14 +98,9 @@ async function persistLatestPayload({ keepalive = false }: { keepalive?: boolean
       setConflict()
       return
     }
-    saveRequested = true
+    saveRequested = false
     emit({ phase: 'offline', message: error instanceof Error ? `Cloud-Synchronisierung pausiert: ${error.message}` : 'Cloud-Synchronisierung ist vorübergehend nicht erreichbar.', lastSyncedAt: status.lastSyncedAt })
-    if (typeof window !== 'undefined') {
-      window.setTimeout(() => {
-        retryDelayMs = Math.min(retryDelayMs * 2, 30_000)
-        scheduleCloudSave(0)
-      }, retryDelayMs)
-    }
+    scheduleRetry()
   }
 }
 
@@ -106,6 +121,7 @@ async function drainSaveQueue(options?: { keepalive?: boolean }): Promise<void> 
 function scheduleCloudSave(delay = SAVE_DEBOUNCE_MS): void {
   if (!cloudEnabled || conflictExists() || !getUnlockedVaultPayload()) return
   saveRequested = true
+  clearRetryTimer()
   if (saveTimer !== null) window.clearTimeout(saveTimer)
   saveTimer = window.setTimeout(() => {
     saveTimer = null
@@ -213,6 +229,7 @@ export async function flushCloudState({ keepalive = false }: { keepalive?: boole
     window.clearTimeout(saveTimer)
     saveTimer = null
   }
+  clearRetryTimer()
   saveRequested = true
   await drainSaveQueue({ keepalive })
 }
@@ -231,6 +248,8 @@ export async function resolveCloudConflict(strategy: 'server' | 'local'): Promis
     cloudVersion = saved.version
   }
   cloudEnabled = true
+  retryDelayMs = 2_000
+  clearRetryTimer()
   clearConflict()
   emit({ phase: 'synced', message: strategy === 'server' ? 'Der Serverstand wurde übernommen.' : 'Der lokale Stand wurde bewusst als neuer Cloud-Stand gespeichert.', lastSyncedAt: new Date().toISOString() })
   return loadState()
