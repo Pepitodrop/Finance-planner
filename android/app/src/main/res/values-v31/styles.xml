@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.FinancePlanner.Launcher" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">@color/background_color</item>
+        <item name="android:colorAccent">@color/brand_primary</item>
+        <item name="android:statusBarColor">@color/theme_color</item>
+        <item name="android:navigationBarColor">@color/navigation_color</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowSplashScreenBackground">@color/background_color</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/background_color</item>
+        <item name="android:windowSplashScreenAnimationDuration">250</item>
+    </style>
+</resources>
