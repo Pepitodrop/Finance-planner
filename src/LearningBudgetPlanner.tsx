@@ -59,12 +59,14 @@ export function LearningBudgetPlanner() {
 
   const generatePlan = async () => {
     if (!learningConsent || loading) return
+    const useExternalAi = externalConsent
+    setExternalConsent(false)
     setLoading(true)
     setError('')
     try {
       const result = await requestLearningBudgetPlan({
         consentBehaviorLearning: true,
-        consentExternalAi: externalConsent,
+        consentExternalAi: useExternalAi,
         consentLocationContext: locationConsent,
         ...(locationConsent ? { location: { country, region: region.trim() || undefined, city: city.trim() || undefined, costLevel } } : {}),
         preferences: { savingsStyle, emergencyFundMonths: emergencyMonths, sustainabilityPriority },
@@ -79,7 +81,7 @@ export function LearningBudgetPlanner() {
   }
 
   const decide = async (recommendationId: string, decision: BudgetDecision) => {
-    if (!plan || feedbackLoading) return
+    if (!plan || feedbackLoading || !learningConsent) return
     setFeedbackLoading(recommendationId)
     setError('')
     try {
@@ -166,7 +168,7 @@ export function LearningBudgetPlanner() {
 
       <article className="panel"><div className="panel-header"><div><p className="eyebrow">Feedback-Schleife</p><h2>Empfehlungen bestätigen oder ablehnen</h2></div><Leaf size={20}/></div><div className="transaction-list">{plan.recommendations.map((recommendation) => {
         const learnedDecision = feedbackLabel(profile, recommendation.id)
-        return <div className="transaction-row learning-budget-recommendation" key={recommendation.id}><div><strong>{recommendation.title}</strong><span>{recommendation.aiExplanation || recommendation.explanation}</span></div>{learnedDecision && <span className="pill">{learnedDecision}</span>}<div className="row-actions"><button aria-label={`${recommendation.title} übernehmen`} disabled={feedbackLoading === recommendation.id} onClick={() => void decide(recommendation.id, 'approved')}>{feedbackLoading === recommendation.id ? <LoaderCircle className="spin" size={16}/> : <Check size={16}/>}</button><button aria-label={`${recommendation.title} ablehnen`} disabled={feedbackLoading === recommendation.id} onClick={() => void decide(recommendation.id, 'rejected')}><X size={16}/></button></div></div>
+        return <div className="transaction-row learning-budget-recommendation" key={recommendation.id}><div><strong>{recommendation.title}</strong><span>{recommendation.aiExplanation || recommendation.explanation}</span></div>{learnedDecision && <span className="pill">{learnedDecision}</span>}<div className="row-actions"><button aria-label={`${recommendation.title} übernehmen`} disabled={!learningConsent || feedbackLoading === recommendation.id} onClick={() => void decide(recommendation.id, 'approved')}>{feedbackLoading === recommendation.id ? <LoaderCircle className="spin" size={16}/> : <Check size={16}/>}</button><button aria-label={`${recommendation.title} ablehnen`} disabled={!learningConsent || feedbackLoading === recommendation.id} onClick={() => void decide(recommendation.id, 'rejected')}><X size={16}/></button></div></div>
       })}</div></article>
 
       <article className="panel"><div className="panel-header"><div><p className="eyebrow">Transparenz</p><h2>Grenzen und Datenschutz</h2></div><ShieldCheck size={20}/></div><ul className="receipt-limitations">{plan.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul></article>
