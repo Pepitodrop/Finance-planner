@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowDownRight, ArrowUpRight, BrainCircuit, CalendarClock, DatabaseBackup, Landmark, Link2, MessageCircleQuestion, Pencil, PiggyBank, Plus, Repeat2, Target, Trash2, Undo2, WalletCards } from 'lucide-react'
+import { ArrowDownRight, ArrowUpRight, BrainCircuit, CalendarClock, DatabaseBackup, Landmark, Link2, MessageCircleQuestion, Pencil, PiggyBank, Plus, ReceiptText, Repeat2, Target, Trash2, Undo2, WalletCards } from 'lucide-react'
 import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { AiPanel } from './AiPanel'
 import type { AiSuggestion } from './ai'
@@ -8,6 +8,7 @@ import { ConnectionsPanel } from './ConnectionsPanel'
 import { DataTools } from './DataTools'
 import { initialState } from './data'
 import { FinanceAssistant } from './FinanceAssistant'
+import { ReceiptReview } from './ReceiptReview'
 import { SavingsGoals } from './SavingsGoals'
 import { categoryBreakdown, currentMonthTotals, formatMoney, monthlyProjection, recurringPayments, totalBalance } from './finance'
 import { loadState, resetStoredState, saveState } from './storage'
@@ -15,7 +16,7 @@ import { addTransactionToState, deleteTransactionFromState, updateTransactionInS
 import type { AppState, Transaction, TransactionType } from './types'
 import { validateTransactionInput } from './validation'
 
-type Tab = 'dashboard' | 'transactions' | 'goals' | 'recurring' | 'connections' | 'ai' | 'assistant' | 'data'
+type Tab = 'dashboard' | 'transactions' | 'goals' | 'recurring' | 'connections' | 'ai' | 'assistant' | 'receipt' | 'data'
 
 const CATEGORY_COLORS = ['#5878ff', '#5fe0a0', '#ff9f5b', '#ff8b96', '#7dd3fc', '#c084fc', '#f4d35e', '#4dd0c4']
 
@@ -92,7 +93,7 @@ function App() {
   const resetAll = () => { resetStoredState(); setState(structuredClone(initialState)) }
   const titles: Record<Tab, string> = {
     dashboard: 'Finanzübersicht', transactions: 'Transaktionen', goals: 'Sparziele', recurring: 'Wiederkehrende Zahlungen',
-    connections: 'Banken & PayPal', ai: 'KI-Kategorisierung', assistant: 'Finanzanalyse & Planung', data: 'Daten & Backup',
+    connections: 'Banken & PayPal', ai: 'KI-Kategorisierung', assistant: 'Finanzanalyse & Planung', receipt: 'Nachhaltiger Beleg-Check', data: 'Daten & Backup',
   }
 
   return <div className="app-shell">
@@ -106,6 +107,7 @@ function App() {
         <button className={tab === 'connections' ? 'active' : ''} onClick={() => setTab('connections')}><Link2 size={19}/> Verbindungen</button>
         <button className={tab === 'ai' ? 'active' : ''} onClick={() => setTab('ai')}><BrainCircuit size={19}/> KI-Lernen</button>
         <button className={tab === 'assistant' ? 'active' : ''} onClick={() => setTab('assistant')}><MessageCircleQuestion size={19}/> Assistent</button>
+        <button className={tab === 'receipt' ? 'active' : ''} onClick={() => setTab('receipt')}><ReceiptText size={19}/> Beleg-Check</button>
         <button className={tab === 'data' ? 'active' : ''} onClick={() => setTab('data')}><DatabaseBackup size={19}/> Daten</button>
       </nav>
       <div className="privacy-note"><strong>Verschlüsselt gespeichert</strong><span>Bank-Secrets bleiben ausschließlich im Backend.</span></div>
@@ -137,6 +139,7 @@ function App() {
       {tab === 'connections' && <ConnectionsPanel state={state} onApply={setState}/>} 
       {tab === 'ai' && <AiPanel transactions={state.transactions} onApply={applyAiSuggestion}/>} 
       {tab === 'assistant' && <FinanceAssistant state={state}/>} 
+      {tab === 'receipt' && <ReceiptReview/>}
       {tab === 'data' && <DataTools state={state} onRestore={setState} onReset={resetAll}/>} 
     </main>
 
