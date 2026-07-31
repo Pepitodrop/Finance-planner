@@ -81,9 +81,11 @@ services:
       AUTH_MODE: ${AUTH_MODE:-local}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      AUTH_MASTER_KEY: ${AUTH_MASTER_KEY:-}
 
       # Governed hosted Hugging Face reasoning
       HF_TOKEN: ${HF_TOKEN:-}
+      HF_TIMEOUT_MS: ${HF_TIMEOUT_MS:-30000}
       HF_MODEL: ${HF_MODEL:-Qwen/Qwen3-4B-Thinking-2507:fastest}
       HF_MODEL_REVISION: ${HF_MODEL_REVISION:-768f209d9ea81521153ed38c47d515654e938aea}
       HF_CRITIC_ENABLED: ${HF_CRITIC_ENABLED:-false}
