@@ -5,10 +5,16 @@ const ACCOUNT_TYPES = new Set(['checking', 'savings', 'cash', 'investment'])
 const TRANSACTION_TYPES = new Set(['income', 'expense'])
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const MAX_SECURE_DATA_BYTES = 512_000
+const MAX_TRANSACTIONS = 30_000
 
 function keyFromSecret(secret) {
   if (!secret || String(secret).length < 32) throw new Error('CONNECTOR_MASTER_KEY must contain at least 32 characters.')
   return createHash('sha256').update(String(secret), 'utf8').digest()
+}
+
+function bindingData(userId) {
+  if (typeof userId !== 'string' || !userId || userId.length > 256) throw new Error('A valid authenticated user binding is required.')
+  return Buffer.from(`finance-planner-user-state:v1:${userId}`, 'utf8')
 }
 
 function isPlainRecord(value) {
@@ -104,7 +110,7 @@ export function validateCloudPayload(value) {
   if (!isPlainRecord(value.state)) throw new HttpError(400, 'invalid_cloud_state', 'payload.state must be an object.')
   exactKeys(value.state, new Set(['accounts', 'transactions', 'goals']), 'payload.state')
   if (!Array.isArray(value.state.accounts) || value.state.accounts.length > 1_000) throw new HttpError(400, 'invalid_cloud_state', 'accounts must be an array with at most 1,000 entries.')
-  if (!Array.isArray(value.state.transactions) || value.state.transactions.length > 100_000) throw new HttpError(400, 'invalid_cloud_state', 'transactions must be an array with at most 100,000 entries.')
+  if (!Array.isArray(value.state.transactions) || value.state.transactions.length > MAX_TRANSACTIONS) throw new HttpError(400, 'invalid_cloud_state', `transactions must be an array with at most ${MAX_TRANSACTIONS.toLocaleString('en-US')} entries.`)
   if (!Array.isArray(value.state.goals) || value.state.goals.length > 1_000) throw new HttpError(400, 'invalid_cloud_state', 'goals must be an array with at most 1,000 entries.')
 
   const accounts = value.state.accounts.map(validateAccount)
@@ -124,10 +130,11 @@ export function validateCloudPayload(value) {
   return { state: { accounts, transactions, goals }, secureData }
 }
 
-export function encryptCloudPayload(payload, secret) {
+export function encryptCloudPayload(payload, secret, userId) {
   const key = keyFromSecret(secret)
   const iv = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', key, iv)
+  cipher.setAAD(bindingData(userId))
   const ciphertext = Buffer.concat([cipher.update(JSON.stringify(payload), 'utf8'), cipher.final()])
   return {
     format: 'finance-planner-user-state',
@@ -139,7 +146,7 @@ export function encryptCloudPayload(payload, secret) {
   }
 }
 
-export function decryptCloudPayload(envelope, secret) {
+export function decryptCloudPayload(envelope, secret, userId) {
   if (!isPlainRecord(envelope) || envelope.format !== 'finance-planner-user-state' || envelope.version !== 1 || envelope.algorithm !== 'AES-256-GCM') {
     throw new Error('Unsupported encrypted user-state format.')
   }
@@ -147,6 +154,7 @@ export function decryptCloudPayload(envelope, secret) {
   const tag = Buffer.from(String(envelope.tag || ''), 'base64url')
   if (iv.length !== 12 || tag.length !== 16 || typeof envelope.ciphertext !== 'string') throw new Error('Invalid encrypted user-state envelope.')
   const decipher = createDecipheriv('aes-256-gcm', keyFromSecret(secret), iv)
+  decipher.setAAD(bindingData(userId))
   decipher.setAuthTag(tag)
   const plaintext = Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, 'base64url')), decipher.final()]).toString('utf8')
   return validateCloudPayload(JSON.parse(plaintext))
@@ -171,7 +179,7 @@ export class PostgresUserStateStore {
     const result = await this.pool.query('SELECT encrypted_payload, version, updated_at FROM user_finance_state WHERE user_id=$1', [userId])
     if (!result.rowCount) return { payload: null, version: 0, updatedAt: null }
     const row = result.rows[0]
-    return { payload: decryptCloudPayload(row.encrypted_payload, this.secret), version: Number(row.version), updatedAt: new Date(row.updated_at).toISOString() }
+    return { payload: decryptCloudPayload(row.encrypted_payload, this.secret, userId), version: Number(row.version), updatedAt: new Date(row.updated_at).toISOString() }
   }
 
   async save(userId, value, expectedVersion) {
@@ -184,7 +192,7 @@ export class PostgresUserStateStore {
       const currentVersion = current.rowCount ? Number(current.rows[0].version) : 0
       if (currentVersion !== expectedVersion) throw new StateVersionConflictError(currentVersion)
       const nextVersion = currentVersion + 1
-      const encrypted = encryptCloudPayload(payload, this.secret)
+      const encrypted = encryptCloudPayload(payload, this.secret, userId)
       const result = currentVersion === 0
         ? await client.query('INSERT INTO user_finance_state (user_id, encrypted_payload, version, updated_at) VALUES ($1,$2,$3,now()) RETURNING version, updated_at', [userId, encrypted, nextVersion])
         : await client.query('UPDATE user_finance_state SET encrypted_payload=$2, version=$3, updated_at=now() WHERE user_id=$1 RETURNING version, updated_at', [userId, encrypted, nextVersion])
