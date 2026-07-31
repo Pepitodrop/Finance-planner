@@ -22,26 +22,39 @@ function normalizeData(value) {
   }
 }
 
+function decryptEnvelope(envelope, key) {
+  if (!envelope || typeof envelope !== 'object') throw new Error('Invalid encrypted auth store envelope.')
+  const iv = Buffer.from(String(envelope.iv || ''), 'base64url')
+  const tag = Buffer.from(String(envelope.tag || ''), 'base64url')
+  if (iv.length !== 12 || tag.length !== 16 || typeof envelope.ciphertext !== 'string') throw new Error('Invalid encrypted auth store envelope.')
+  const decipher = createDecipheriv('aes-256-gcm', key, iv)
+  decipher.setAuthTag(tag)
+  return normalizeData(JSON.parse(Buffer.concat([
+    decipher.update(Buffer.from(envelope.ciphertext, 'base64url')),
+    decipher.final(),
+  ]).toString('utf8')))
+}
+
 export class AuthStore {
-  constructor(path, secret, pool = getActiveDatabasePool()) {
+  constructor(path, secret, pool = getActiveDatabasePool(), legacySecret = '') {
     this.path = path
     this.key = keyFromSecret(secret)
+    this.legacyKey = legacySecret && legacySecret !== secret ? keyFromSecret(legacySecret) : null
     this.pool = pool
     this.data = defaultData()
     this.queue = Promise.resolve()
+    this.usedLegacyKey = false
   }
 
   decode(envelope) {
-    if (!envelope || typeof envelope !== 'object') throw new Error('Invalid encrypted auth store envelope.')
-    const iv = Buffer.from(String(envelope.iv || ''), 'base64url')
-    const tag = Buffer.from(String(envelope.tag || ''), 'base64url')
-    if (iv.length !== 12 || tag.length !== 16 || typeof envelope.ciphertext !== 'string') throw new Error('Invalid encrypted auth store envelope.')
-    const decipher = createDecipheriv('aes-256-gcm', this.key, iv)
-    decipher.setAuthTag(tag)
-    return normalizeData(JSON.parse(Buffer.concat([
-      decipher.update(Buffer.from(envelope.ciphertext, 'base64url')),
-      decipher.final(),
-    ]).toString('utf8')))
+    try {
+      this.usedLegacyKey = false
+      return decryptEnvelope(envelope, this.key)
+    } catch (primaryError) {
+      if (!this.legacyKey) throw primaryError
+      this.usedLegacyKey = true
+      return decryptEnvelope(envelope, this.legacyKey)
+    }
   }
 
   encode() {
@@ -63,6 +76,7 @@ export class AuthStore {
       const result = await this.pool.query('SELECT encrypted_payload FROM auth_store WHERE id=1')
       if (result.rowCount) {
         this.data = this.decode(result.rows[0].encrypted_payload)
+        if (this.usedLegacyKey) await this.persist()
         return this.data
       }
       try {
@@ -76,6 +90,7 @@ export class AuthStore {
 
     try {
       this.data = this.decode(JSON.parse(await readFile(this.path, 'utf8')))
+      if (this.usedLegacyKey) await this.persist()
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error
     }
@@ -89,6 +104,7 @@ export class AuthStore {
         'INSERT INTO auth_store (id, encrypted_payload, updated_at) VALUES (1,$1,now()) ON CONFLICT (id) DO UPDATE SET encrypted_payload=EXCLUDED.encrypted_payload, updated_at=now()',
         [envelope],
       )
+      this.usedLegacyKey = false
       return
     }
 
@@ -96,6 +112,7 @@ export class AuthStore {
     const temporary = `${this.path}.${process.pid}.${randomUUID()}.tmp`
     await writeFile(temporary, JSON.stringify(envelope), { mode: 0o600 })
     await rename(temporary, this.path)
+    this.usedLegacyKey = false
   }
 
   async mutate(operation) {
