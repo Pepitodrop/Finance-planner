@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { calibrateSemanticConfidence, robustAnomalyScore } from './ai'
+import { describe, expect, it, vi } from 'vitest'
+import { calibrateSemanticConfidence, parseZeroShotResult, robustAnomalyScore, runZeroShotClassification } from './ai'
+import type { ZeroShotClassifier } from './ai'
 import type { Transaction } from './types'
 
 function expense(id: string, amountCents: number, category = 'Lebensmittel'): Transaction {
@@ -23,6 +24,27 @@ describe('calibrateSemanticConfidence', () => {
 
   it('keeps weak semantic matches low confidence', () => {
     expect(calibrateSemanticConfidence(0.42, 0.30)).toBeLessThan(40)
+  })
+})
+
+describe('zero-shot classification', () => {
+  it('passes candidate labels separately from pipeline options', async () => {
+    const mockClassifier = vi.fn(async () => ({ labels: ['Shopping'], scores: [0.81] }))
+    const result = await runZeroShotClassification(mockClassifier as ZeroShotClassifier, 'Unbekannte Buchung')
+
+    expect(result).toEqual({ category: 'Shopping', confidence: 81 })
+    expect(mockClassifier).toHaveBeenCalledWith(
+      'Unbekannte Buchung',
+      expect.arrayContaining(['Lebensmittel', 'Shopping']),
+      { hypothesis_template: 'Diese Buchung gehört zur Kategorie {}.' },
+    )
+  })
+
+  it('rejects malformed or unsafe model output before it reaches React state', () => {
+    expect(parseZeroShotResult({ labels: [{ candidate_labels: ['Shopping'] }], scores: [0.9] })).toBeNull()
+    expect(parseZeroShotResult({ labels: ['Nicht vorhanden'], scores: [0.9] })).toBeNull()
+    expect(parseZeroShotResult({ labels: ['Shopping'], scores: [Number.NaN] })).toBeNull()
+    expect(parseZeroShotResult(null)).toBeNull()
   })
 })
 
