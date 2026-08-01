@@ -1,0 +1,90 @@
+name: External runtime canaries
+
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+    inputs:
+      require_all:
+        description: Fail when any runtime credential is not configured
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-canaries
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install frontend dependencies
+        run: npm install --no-fund --no-audit --silent
+
+      - name: Install backend dependencies
+        working-directory: server
+        run: npm install --no-fund --no-audit --silent
+
+      - name: Check GoCardless and PayPal control-plane access
+        env:
+          GOCARDLESS_SECRET_ID: ${{ secrets.GOCARDLESS_SECRET_ID }}
+          GOCARDLESS_SECRET_KEY: ${{ secrets.GOCARDLESS_SECRET_KEY }}
+          PAYPAL_CLIENT_ID: ${{ secrets.PAYPAL_CLIENT_ID }}
+          PAYPAL_CLIENT_SECRET: ${{ secrets.PAYPAL_CLIENT_SECRET }}
+          PAYPAL_ENVIRONMENT: ${{ vars.PAYPAL_ENVIRONMENT || 'sandbox' }}
+          PROVIDER_CANARY_REQUIRE_ALL: ${{ inputs.require_all || 'false' }}
+        run: node scripts/provider-runtime-canary.mjs
+
+      - name: Check governed Hugging Face inference
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          DATABASE_URL: postgresql://runtime-canary:unused@127.0.0.1:5432/runtime_canary
+          SESSION_SECRET: runtime-canary-session-secret-with-more-than-32-characters
+          EXTERNAL_AI_ENABLED: "false"
+          REQUIRE_ALL: ${{ inputs.require_all || 'false' }}
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          if [ -z "$HF_TOKEN" ]; then
+            printf '{"schemaVersion":1,"status":"skipped","reason":"HF_TOKEN not configured"}\n' > artifacts/hosted-ai-runtime-canary.json
+            if [ "$REQUIRE_ALL" = "true" ]; then
+              echo 'HF_TOKEN is required for this manually enforced canary.' >&2
+              exit 1
+            fi
+          else
+            npm run verify:launch:runtime
+            cp .launch-evidence/hosted-ai.json artifacts/hosted-ai-runtime-canary.json
+          fi
+
+      - name: Publish canary summary
+        if: always()
+        shell: bash
+        run: |
+          echo '## Runtime canary evidence' >> "$GITHUB_STEP_SUMMARY"
+          for file in artifacts/provider-runtime-canary.json artifacts/hosted-ai-runtime-canary.json; do
+            if [ -f "$file" ]; then
+              echo "- \`$file\` produced" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- \`$file\` missing" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: external-runtime-canaries
+          path: artifacts/*.json
+          if-no-files-found: warn
+          retention-days: 30
