@@ -96,7 +96,7 @@ jobs:
         env:
           ACCEPTANCE_APP_URL: http://127.0.0.1:4173
           ACCEPTANCE_ARTIFACT_PATH: artifacts/browser-production-acceptance.json
-        run: node scripts/browser-production-acceptance.mjs
+        run: node scripts/run-browser-production-acceptance.mjs
 
       - name: Verify authenticated operational metrics
         shell: bash
