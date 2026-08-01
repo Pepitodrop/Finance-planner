@@ -48,9 +48,16 @@ export class RetentionManager {
         const result = await this.pool.query(sql, values)
         deleted[name] = result.rowCount || 0
       }
-      deleted.sessionRevocations = this.sessionRevocations
-        ? await this.sessionRevocations.prune({ retentionDays: this.sessionRevocationDays, now: runAt })
-        : 0
+      if (this.sessionRevocations) {
+        deleted.sessionRevocations = await this.sessionRevocations.prune({ retentionDays: this.sessionRevocationDays, now: runAt })
+      } else {
+        const result = await this.pool.query(
+          `DELETE FROM user_session_revocations
+            WHERE revoked_before < $1 - ($2 * interval '1 day')`,
+          [runAt, this.sessionRevocationDays],
+        )
+        deleted.sessionRevocations = result.rowCount || 0
+      }
       this.lastRunAt = runAt.toISOString()
       this.lastResult = { persistence: 'postgres', deleted }
       this.lastError = null
