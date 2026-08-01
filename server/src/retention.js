@@ -32,15 +32,15 @@ export class RetentionManager {
     const runAt = this.now()
     const deleted = {}
     const queries = [
-      ['oauthNonces', 'DELETE FROM oauth_nonces WHERE expires_at < $1', [runAt]],
+      ['oauthNonces', 'DELETE FROM oauth_nonces WHERE expires_at < $1::timestamptz', [runAt]],
       ['completedWebhooks', `DELETE FROM webhook_events
         WHERE completed_at IS NOT NULL
-          AND completed_at < $1 - ($2 * interval '1 day')`, [runAt, this.webhookDays]],
+          AND completed_at < $1::timestamptz - ($2::integer * interval '1 day')`, [runAt, this.webhookDays]],
       ['abandonedWebhooks', `DELETE FROM webhook_events
         WHERE completed_at IS NULL
-          AND (lease_until IS NULL OR lease_until < $1)
-          AND updated_at < $1 - ($2 * interval '1 day')`, [runAt, this.abandonedWebhookDays]],
-      ['rateLimits', 'DELETE FROM request_rate_limits WHERE expires_at < $1', [runAt]],
+          AND (lease_until IS NULL OR lease_until < $1::timestamptz)
+          AND updated_at < $1::timestamptz - ($2::integer * interval '1 day')`, [runAt, this.abandonedWebhookDays]],
+      ['rateLimits', 'DELETE FROM request_rate_limits WHERE expires_at < $1::timestamptz', [runAt]],
     ]
 
     try {
@@ -53,7 +53,7 @@ export class RetentionManager {
       } else {
         const result = await this.pool.query(
           `DELETE FROM user_session_revocations
-            WHERE revoked_before < $1 - ($2 * interval '1 day')`,
+            WHERE revoked_before < $1::timestamptz - ($2::integer * interval '1 day')`,
           [runAt, this.sessionRevocationDays],
         )
         deleted.sessionRevocations = result.rowCount || 0
