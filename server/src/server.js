@@ -3,12 +3,16 @@ import { createServer } from 'node:http'
 import { URL } from 'node:url'
 import { createAiRouter } from './ai-router.js'
 import { createAuthRouter } from './auth-router.js'
+import { behaviorEventsFromFinanceState } from './budget-learning.js'
+import { BudgetProfileStore } from './budget-profile-store.js'
+import { createBudgetRouter } from './budget-router.js'
 import { createConnectorStore } from './database.js'
 import { createRateLimiters } from './distributed-rate-limiter.js'
 import { createFinanceRouter } from './finance-router.js'
 import { createSession, issueState, verifySession, verifyState } from './security.js'
 import { startGoCardless, startPayPal, syncGoCardless, syncPayPal } from './providers.js'
 import { HttpError, SlidingWindowRateLimiter, classifyError, clientIp, requestId, validateProductionConfig } from './runtime-security.js'
+import { PostgresUserStateStore } from './user-state-store.js'
 import { bankProductionCapabilities, processWebhook } from './webhook-security.js'
 
 const env = process.env
@@ -23,6 +27,8 @@ validateProductionConfig(env, origin)
 
 const persistence = await createConnectorStore(env)
 const store = persistence.store
+const userStateStore = persistence.pool ? new PostgresUserStateStore(persistence.pool, env.CONNECTOR_MASTER_KEY || '') : null
+const budgetProfileStore = persistence.pool ? new BudgetProfileStore(persistence.pool, env.CONNECTOR_MASTER_KEY || '') : null
 const bankCapabilities = () => bankProductionCapabilities(env, persistence)
 let ready = true
 let shuttingDown = false
@@ -215,9 +221,16 @@ async function handleWebhook(provider, request, response) {
   return send(response, result.duplicate ? 200 : 202, result, { 'Idempotency-Replayed': String(result.duplicate) })
 }
 
+async function loadBehaviorEvents(user) {
+  if (!userStateStore) throw new HttpError(503, 'behavior_history_unavailable', 'Trusted server-side financial history requires PostgreSQL cloud state.')
+  const cloud = await userStateStore.get(user)
+  return cloud.payload ? behaviorEventsFromFinanceState(cloud.payload.state) : []
+}
+
 const handleAuth = await createAuthRouter({ env, origin, sessionSecret, send })
 const handleFinance = createFinanceRouter({ env, send, body, userId })
-const handleAi = createAiRouter({ env, send, body, userId })
+const handleBudget = createBudgetRouter({ env, send, body, userId, stateStore: userStateStore, profileStore: budgetProfileStore })
+const handleAi = createAiRouter({ env, send, body, userId, loadBehaviorEvents })
 
 const server = createServer(async (request, response) => {
   const startedAt = Date.now()
@@ -246,6 +259,7 @@ const server = createServer(async (request, response) => {
     if (request.method === 'POST' && webhook) return await handleWebhook(webhook[1], request, response)
     if (await handleAuth(request, response, url)) return
     if (await handleFinance(request, response, url)) return
+    if (await handleBudget(request, response, url)) return
     if (await handleAi(request, response, url)) return
     if (request.method === 'POST' && url.pathname === '/api/session/local') {
       if (env.AUTH_MODE !== 'local') return send(response, 404, { error: { code: 'not_found', message: 'Not found.' }, requestId: id })
