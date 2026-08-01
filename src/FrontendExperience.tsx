@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
@@ -99,10 +99,23 @@ function enhanceModal(modal: HTMLElement) {
 }
 
 export function FrontendExperience() {
+  const [announcement, setAnnouncement] = useState('')
+
   useEffect(() => {
     enhanceChartAccessibility()
     let cleanupModal: (() => void) | undefined
     let activeModal: HTMLElement | null = null
+    let announcementTimer: number | undefined
+
+    const announceTransactionSubmit = (event: SubmitEvent) => {
+      const form = event.target
+      if (!(form instanceof HTMLFormElement) || !form.matches('.modal[role="dialog"]')) return
+      const description = new FormData(form).get('description')
+      if (typeof description !== 'string' || !description.trim()) return
+      setAnnouncement(`„${description.trim()}“ wurde gespeichert.`)
+      if (announcementTimer) window.clearTimeout(announcementTimer)
+      announcementTimer = window.setTimeout(() => setAnnouncement(''), 5_000)
+    }
 
     const sync = () => {
       enhanceChartAccessibility()
@@ -115,13 +128,18 @@ export function FrontendExperience() {
 
     const observer = new MutationObserver(sync)
     observer.observe(document.body, { childList: true, subtree: true })
+    document.addEventListener('submit', announceTransactionSubmit, true)
     sync()
 
     return () => {
       observer.disconnect()
+      document.removeEventListener('submit', announceTransactionSubmit, true)
+      if (announcementTimer) window.clearTimeout(announcementTimer)
       cleanupModal?.()
     }
   }, [])
 
-  return null
+  return announcement
+    ? <div className="save-announcement" role="status" aria-live="polite">{announcement}</div>
+    : null
 }
