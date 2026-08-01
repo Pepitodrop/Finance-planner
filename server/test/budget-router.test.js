@@ -29,6 +29,20 @@ const planInput = {
   preferences: { savingsStyle: 'balanced', emergencyFundMonths: 3, sustainabilityPriority: 70 },
 }
 
+function hostedFetch(capture) {
+  return async (_url, options) => {
+    capture.body = String(options.body)
+    const parsed = JSON.parse(capture.body)
+    const ids = parsed.response_format.json_schema.schema.properties.explanations.items.properties.recommendationId.enum
+    return {
+      ok: true,
+      async json() {
+        return { choices: [{ message: { content: JSON.stringify({ summary: 'Ein vorsichtiger, lernender Monatsplan.', confidence: 0.7, explanations: [{ recommendationId: ids[0], explanation: 'Dieser Schritt passt zu deinem bestätigten Sicherheitsziel.' }] }) } }] }
+      },
+    }
+  }
+}
+
 test('budget planning authenticates before reading request data', async () => {
   let read = false
   const router = createBudgetRouter({
@@ -52,39 +66,62 @@ test('budget planning requires persistent-learning and location consent', async 
 })
 
 test('hosted budget explanation receives aggregates but no descriptions or account names', async () => {
-  let sentBody = ''
+  const capture = {}
   let payload
-  const fetchImpl = async (_url, options) => {
-    sentBody = String(options.body)
-    const parsed = JSON.parse(sentBody)
-    const ids = parsed.response_format.json_schema.schema.properties.explanations.items.properties.recommendationId.enum
-    return {
-      ok: true,
-      async json() {
-        return { choices: [{ message: { content: JSON.stringify({ summary: 'Ein vorsichtiger, lernender Monatsplan.', confidence: 0.7, explanations: [{ recommendationId: ids[0], explanation: 'Dieser Schritt passt zu deinem bestätigten Sicherheitsziel.' }] }) } }] }
-      },
-    }
-  }
   const router = createBudgetRouter({
     env: { HF_TOKEN: 'token' },
     send: (_response, _status, value) => { payload = value },
     body: async () => ({ ...planInput, consentExternalAi: true }),
     userId: () => 'user-1',
     stateStore: { get: async () => ({ payload: { state } }) },
-    profileStore: memoryProfileStore(), fetchImpl,
+    profileStore: memoryProfileStore(),
+    fetchImpl: hostedFetch(capture),
   })
   await router({ method: 'POST' }, {}, new URL('http://localhost/api/ai/budget-plan'))
-  assert.equal(sentBody.includes('Very private merchant'), false)
-  assert.equal(sentBody.includes('Secret account name'), false)
-  assert.equal(sentBody.includes('Groceries'), false)
-  assert.equal(sentBody.includes('Trip'), false)
+  assert.equal(capture.body.includes('Very private merchant'), false)
+  assert.equal(capture.body.includes('Secret account name'), false)
+  assert.equal(capture.body.includes('Groceries'), false)
+  assert.equal(capture.body.includes('Trip'), false)
   assert.equal(payload.privacy.descriptionsSentToModel, false)
   assert.equal(payload.privacy.coarseLocationSentToModel, true)
   assert.equal(payload.ai.source, 'hugging-face-budget-explanation')
   assert.ok(payload.recommendations.some((item) => item.aiExplanation))
 })
 
-test('budget feedback updates the persistent profile and reset deletes it', async () => {
+test('location is preserved in storage but omitted from planning and hosted payload without consent', async () => {
+  const profileStore = memoryProfileStore()
+  const outputs = []
+  const common = {
+    env: { HF_TOKEN: 'token' },
+    send: (_response, _status, value) => outputs.push(value),
+    userId: () => 'user-1',
+    stateStore: { get: async () => ({ payload: { state } }) },
+    profileStore,
+  }
+  const first = createBudgetRouter({ ...common, body: async () => planInput })
+  await first({ method: 'POST' }, {}, new URL('http://localhost/api/ai/budget-plan'))
+
+  const capture = {}
+  const second = createBudgetRouter({
+    ...common,
+    body: async () => ({
+      ...planInput,
+      consentExternalAi: true,
+      consentLocationContext: false,
+      location: undefined,
+    }),
+    fetchImpl: hostedFetch(capture),
+  })
+  await second({ method: 'POST' }, {}, new URL('http://localhost/api/ai/budget-plan'))
+  const payload = outputs.at(-1)
+  assert.equal(payload.learningProfile.location.city, 'Karlsruhe')
+  assert.equal(payload.privacy.coarseLocationSentToModel, false)
+  assert.equal(capture.body.includes('Karlsruhe'), false)
+  assert.equal(capture.body.includes('Baden-Württemberg'), false)
+  assert.equal(payload.recommendations.some((item) => item.id === 'location-context'), false)
+})
+
+test('budget feedback is limited to recommendations from the latest issued plan', async () => {
   const profileStore = memoryProfileStore()
   const outputs = []
   const common = {
@@ -94,13 +131,42 @@ test('budget feedback updates the persistent profile and reset deletes it', asyn
   const planner = createBudgetRouter({ ...common, body: async () => planInput })
   await planner({ method: 'POST' }, {}, new URL('http://localhost/api/ai/budget-plan'))
   const planId = outputs.at(-1).planId
-  const unknown = createBudgetRouter({ ...common, body: async () => ({ consentBehaviorLearning: true, planId, recommendationId: 'made-up-advice', decision: 'approved' }) })
-  await assert.rejects(() => unknown({ method: 'POST' }, {}, new URL('http://localhost/api/ai/budget-feedback')), (error) => error.code === 'invalid_budget_feedback')
-  const stale = createBudgetRouter({ ...common, body: async () => ({ consentBehaviorLearning: true, planId: 'budget-2026-07-30-2-1', recommendationId: 'goal-allocation', decision: 'approved' }) })
-  await assert.rejects(() => stale({ method: 'POST' }, {}, new URL('http://localhost/api/ai/budget-feedback')), (error) => error.code === 'stale_budget_feedback')
-  const feedback = createBudgetRouter({ ...common, body: async () => ({ consentBehaviorLearning: true, planId, recommendationId: 'goal-allocation', decision: 'approved' }) })
+
+  const absentButGloballyKnown = createBudgetRouter({
+    ...common,
+    body: async () => ({ consentBehaviorLearning: true, planId, recommendationId: 'review-recurring-costs', decision: 'approved' }),
+  })
+  await assert.rejects(
+    () => absentButGloballyKnown({ method: 'POST' }, {}, new URL('http://localhost/api/ai/budget-feedback')),
+    (error) => error.code === 'unknown_plan_recommendation',
+  )
+
+  const stale = createBudgetRouter({
+    ...common,
+    body: async () => ({ consentBehaviorLearning: true, planId: 'budget-2026-07-30-123e4567-e89b-42d3-a456-426614174000', recommendationId: 'goal-allocation', decision: 'approved' }),
+  })
+  await assert.rejects(
+    () => stale({ method: 'POST' }, {}, new URL('http://localhost/api/ai/budget-feedback')),
+    (error) => error.code === 'stale_budget_feedback',
+  )
+
+  const feedback = createBudgetRouter({
+    ...common,
+    body: async () => ({ consentBehaviorLearning: true, planId, recommendationId: 'goal-allocation', decision: 'approved' }),
+  })
   await feedback({ method: 'POST' }, {}, new URL('http://localhost/api/ai/budget-feedback'))
   assert.equal(outputs.at(-1).profile.feedbackSummary['goal-allocation'].approved, 1)
+})
+
+test('budget profile reset deletes the learned state', async () => {
+  const profileStore = memoryProfileStore()
+  const outputs = []
+  const common = {
+    env: {}, send: (_response, _status, value) => outputs.push(value), userId: () => 'user-1',
+    stateStore: { get: async () => ({ payload: { state } }) }, profileStore,
+  }
+  const planner = createBudgetRouter({ ...common, body: async () => planInput })
+  await planner({ method: 'POST' }, {}, new URL('http://localhost/api/ai/budget-plan'))
   const reset = createBudgetRouter({ ...common, body: async () => ({}) })
   await reset({ method: 'DELETE' }, {}, new URL('http://localhost/api/ai/budget-profile'))
   assert.equal(outputs.at(-1).reset, true)
