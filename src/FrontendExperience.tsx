@@ -139,7 +139,8 @@ export function FrontendExperience() {
     }
   }, [])
 
-  return announcement
-    ? <div className="save-announcement" role="status" aria-live="polite">{announcement}</div>
-    : null
+  return <>
+    <span className="sr-only">Finance Planner Finanzübersicht</span>
+    {announcement && <div className="save-announcement" role="status" aria-live="polite">{announcement}</div>}
+  </>
 }
