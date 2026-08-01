@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { HttpError } from './runtime-security.js'
 
 const DAY_MS = 86_400_000
@@ -38,6 +39,10 @@ function standardDeviation(values, average) {
   return Math.sqrt(values.reduce((sum, value) => sum + ((value - average) ** 2), 0) / values.length)
 }
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value))
+}
+
 export function validateBudgetPreferences(value = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'invalid_budget_preferences', 'preferences must be an object.')
   if (Object.keys(value).some((key) => !['savingsStyle', 'emergencyFundMonths', 'sustainabilityPriority'].includes(key))) {
@@ -52,11 +57,11 @@ export function validateBudgetPreferences(value = {}) {
   return { savingsStyle, emergencyFundMonths, sustainabilityPriority }
 }
 
-export function validateLocationContext(value = null) {
-  if (value === null || value === undefined) return { country: 'DE', region: null, city: null, costLevel: 'unknown' }
+export function validateLocationContext(value) {
+  if (value === null || value === undefined) return null
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'invalid_budget_location', 'location must be an object.')
   if (Object.keys(value).some((key) => !['country', 'region', 'city', 'costLevel'].includes(key))) throw new HttpError(400, 'invalid_budget_location', 'Unexpected location field.')
-  const country = String(value.country || 'DE').toUpperCase()
+  const country = String(value.country || '').toUpperCase()
   if (!/^[A-Z]{2}$/.test(country)) throw new HttpError(400, 'invalid_budget_location', 'country must be a two-letter code.')
   const region = boundedText(value.region, 'location.region', 100, { nullable: true })
   const city = boundedText(value.city, 'location.city', 100, { nullable: true })
@@ -171,9 +176,15 @@ function feedbackScore(feedback, recommendationId) {
   return Number(item.approved || 0) - Number(item.rejected || 0)
 }
 
+function approvedPriority(base, score) {
+  return Math.max(1, base - Math.min(2, Math.max(0, score)))
+}
+
 export function updateLearningProfile(existing, snapshot, input, now = new Date()) {
   const preferences = validateBudgetPreferences(input.preferences)
-  const location = validateLocationContext(input.location)
+  const location = input.consentLocationContext === true
+    ? validateLocationContext(input.location)
+    : (existing?.location ?? null)
   const feedback = existing?.feedback && typeof existing.feedback === 'object' && !Array.isArray(existing.feedback) ? existing.feedback : {}
   const categoryPreferences = snapshot.categories.slice(0, 8).map((category, index) => ({
     category: category.name,
@@ -191,6 +202,8 @@ export function updateLearningProfile(existing, snapshot, input, now = new Date(
     preferences,
     location,
     feedback,
+    lastPlanId: existing?.lastPlanId ?? null,
+    lastPlanRecommendationIds: Array.isArray(existing?.lastPlanRecommendationIds) ? existing.lastPlanRecommendationIds : [],
     patterns: {
       categoryPreferences,
       monthlyIncomeCents: snapshot.monthlyIncomeCents,
@@ -198,7 +211,7 @@ export function updateLearningProfile(existing, snapshot, input, now = new Date(
       monthlyRecurringCents: snapshot.monthlyRecurringCents,
       savingsCapacityCents: Math.max(0, snapshot.monthlyFreeCashCents),
       volatilityCents: snapshot.weeklyVolatilityCents,
-      goalCount: snapshot.goals.length,
+      goalCount: snapshot.goals.filter((goal) => goal.remainingCents > 0).length,
     },
     confidence,
     learnedFromTransactions: snapshot.transactionCount,
@@ -215,7 +228,7 @@ export function updateLearningProfile(existing, snapshot, input, now = new Date(
 
 export function applyBudgetFeedback(profile, planId, recommendationId, decision, now = new Date()) {
   if (!profile || typeof profile !== 'object') throw new HttpError(409, 'budget_profile_missing', 'Create a budget plan before submitting feedback.')
-  if (!/^budget-\d{4}-\d{2}-\d{2}-\d+-\d+$/.test(String(planId || ''))) throw new HttpError(400, 'invalid_budget_feedback', 'planId is invalid.')
+  if (!/^budget-\d{4}-\d{2}-\d{2}-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(planId || ''))) throw new HttpError(400, 'invalid_budget_feedback', 'planId is invalid.')
   if (!/^[a-z0-9-]{3,64}$/.test(String(recommendationId || ''))) throw new HttpError(400, 'invalid_budget_feedback', 'recommendationId is invalid.')
   if (!['approved', 'rejected'].includes(decision)) throw new HttpError(400, 'invalid_budget_feedback', 'decision is invalid.')
   const feedback = { ...(profile.feedback || {}) }
@@ -230,95 +243,162 @@ export function applyBudgetFeedback(profile, planId, recommendationId, decision,
   return { ...profile, feedback, lastLearnedAt: now.toISOString() }
 }
 
-export function createDeterministicBudgetPlan(snapshot, profile, now = new Date()) {
-  const styleFactor = profile.preferences.savingsStyle === 'ambitious' ? 0.88 : profile.preferences.savingsStyle === 'conservative' ? 0.58 : 0.72
-  const costAdjustment = profile.location.costLevel === 'high' ? 0.9 : profile.location.costLevel === 'low' ? 1.05 : 1
-  const nonRecurringCents = Math.max(0, snapshot.monthlyExpenseCents - snapshot.monthlyRecurringCents)
-  const essentialCents = Math.min(snapshot.monthlyExpenseCents, snapshot.monthlyRecurringCents + Math.round(nonRecurringCents * 0.55))
-  const emergencyTargetCents = essentialCents * profile.preferences.emergencyFundMonths
-  const emergencyGapCents = Math.max(0, emergencyTargetCents - Math.max(0, snapshot.liquidBalanceCents))
-  const positiveFreeCashCents = Math.max(0, snapshot.monthlyFreeCashCents)
-  const emergencyContributionCents = emergencyGapCents > 0
-    ? Math.min(Math.round(positiveFreeCashCents * 0.35), Math.ceil(emergencyGapCents / 12))
-    : Math.round(positiveFreeCashCents * 0.1)
-  const goalPoolCents = Math.max(0, Math.round((positiveFreeCashCents - emergencyContributionCents) * styleFactor * costAdjustment))
-  const flexibleCents = Math.max(0, snapshot.monthlyIncomeCents - essentialCents - emergencyContributionCents - goalPoolCents)
+export function createDeterministicBudgetPlan(snapshot, profile, now = new Date(), { useLocation = true } = {}) {
+  const availableIncomeCents = Math.max(0, snapshot.monthlyIncomeCents)
+  const monthlyDeficitCents = Math.max(0, snapshot.monthlyExpenseCents - availableIncomeCents)
+  const cashflowStatus = monthlyDeficitCents > 0 ? 'deficit' : 'balanced'
+  const location = useLocation ? profile.location : null
+  const locationFeedback = feedbackScore(profile.feedback, 'location-context')
+  const baseCostAdjustment = location?.costLevel === 'high' ? 0.9 : location?.costLevel === 'low' ? 1.05 : 1
+  const costAdjustment = locationFeedback < 0 ? 1 : baseCostAdjustment
 
-  const goalWeights = snapshot.goals.map((goal) => ({
+  const nonRecurringCents = Math.max(0, snapshot.monthlyExpenseCents - snapshot.monthlyRecurringCents)
+  const historicalEssentialCents = Math.min(snapshot.monthlyExpenseCents, snapshot.monthlyRecurringCents + Math.round(nonRecurringCents * 0.55))
+  const essentialCents = Math.min(availableIncomeCents, historicalEssentialCents)
+  const emergencyTargetCents = historicalEssentialCents * profile.preferences.emergencyFundMonths
+  const emergencyGapCents = Math.max(0, emergencyTargetCents - Math.max(0, snapshot.liquidBalanceCents))
+  const positiveFreeCashCents = Math.max(0, availableIncomeCents - Math.min(availableIncomeCents, snapshot.monthlyExpenseCents))
+
+  const emergencyFeedback = feedbackScore(profile.feedback, 'emergency-fund')
+  const emergencyShare = clamp(0.35 + (emergencyFeedback * 0.05), 0.1, 0.6)
+  const maintenanceShare = clamp(0.1 + (emergencyFeedback * 0.02), 0, 0.25)
+  const emergencyContributionCents = cashflowStatus === 'deficit'
+    ? 0
+    : emergencyGapCents > 0
+      ? Math.min(Math.round(positiveFreeCashCents * emergencyShare), Math.ceil(emergencyGapCents / 12))
+      : Math.round(positiveFreeCashCents * maintenanceShare)
+
+  const activeGoals = snapshot.goals.filter((goal) => goal.remainingCents > 0)
+  const baseStyleFactor = profile.preferences.savingsStyle === 'ambitious' ? 0.88 : profile.preferences.savingsStyle === 'conservative' ? 0.58 : 0.72
+  const goalFeedback = feedbackScore(profile.feedback, 'goal-allocation')
+  const styleFactor = clamp(baseStyleFactor + (goalFeedback * 0.05), 0.25, 0.95)
+  const goalPoolCents = cashflowStatus === 'deficit' || activeGoals.length === 0
+    ? 0
+    : Math.max(0, Math.round((positiveFreeCashCents - emergencyContributionCents) * styleFactor * costAdjustment))
+  const flexibleCents = Math.max(0, availableIncomeCents - essentialCents - emergencyContributionCents - goalPoolCents)
+  const unallocatedCents = Math.max(0, availableIncomeCents - essentialCents - flexibleCents - emergencyContributionCents - goalPoolCents)
+
+  const goalWeights = activeGoals.map((goal) => ({
     ...goal,
-    weight: goal.remainingCents === 0 ? 0 : Math.max(0.1, (1 / goal.monthsRemaining) * Math.log10(goal.remainingCents + 10)),
+    weight: Math.max(0.1, (1 / goal.monthsRemaining) * Math.log10(goal.remainingCents + 10)),
   }))
   const totalWeight = goalWeights.reduce((sum, goal) => sum + goal.weight, 0)
-  const goalAllocations = goalWeights.map((goal) => ({
-    goalId: goal.id,
-    name: goal.name,
-    targetDate: goal.targetDate,
-    remainingCents: goal.remainingCents,
-    recommendedMonthlyCents: goal.weight === 0 || totalWeight === 0 ? 0 : Math.min(goal.remainingCents, Math.round(goalPoolCents * (goal.weight / totalWeight))),
-    requiredMonthlyCents: goal.monthlyRequiredCents,
-    onTrack: goal.monthlyRequiredCents === 0 || (goal.weight > 0 && Math.round(goalPoolCents * (goal.weight / totalWeight)) >= goal.monthlyRequiredCents),
-  }))
+  const goalAllocations = goalWeights.map((goal) => {
+    const proposed = totalWeight === 0 ? 0 : Math.min(goal.remainingCents, Math.round(goalPoolCents * (goal.weight / totalWeight)))
+    return {
+      goalId: goal.id,
+      name: goal.name,
+      targetDate: goal.targetDate,
+      remainingCents: goal.remainingCents,
+      recommendedMonthlyCents: proposed,
+      requiredMonthlyCents: goal.monthlyRequiredCents,
+      onTrack: goal.monthlyRequiredCents === 0 || proposed >= goal.monthlyRequiredCents,
+    }
+  })
 
+  const flexibleFeedback = feedbackScore(profile.feedback, 'reduce-flexible-spending')
+  const smoothingFeedback = feedbackScore(profile.feedback, 'smooth-spending')
   const categoryCaps = snapshot.categories.slice(0, 8).map((category, index) => {
     const protectedCategory = index < 2 || category.monthlyAverageCents <= snapshot.monthlyRecurringCents * 0.25
-    const feedbackBias = feedbackScore(profile.feedback, 'reduce-flexible-spending')
-    const reduction = protectedCategory ? 0 : Math.min(0.15, 0.05 + Math.max(0, feedbackBias) * 0.01)
+    const learnedReduction = 0.05 + (flexibleFeedback * 0.02) + (smoothingFeedback > 0 ? 0.02 : 0) + (cashflowStatus === 'deficit' ? 0.05 : 0)
+    const reduction = protectedCategory ? 0 : clamp(learnedReduction, 0, 0.2)
     return {
       category: category.name,
       historicalMonthlyCents: category.monthlyAverageCents,
       recommendedCapCents: Math.max(0, Math.round(category.monthlyAverageCents * (1 - reduction))),
-      rationale: protectedCategory ? 'Historischer Richtwert; keine pauschale Kürzung ohne Bestätigung.' : 'Vorsichtiger Richtwert für flexible Ausgaben, basierend auf deinem Verlauf.',
+      rationale: protectedCategory
+        ? 'Historischer Richtwert; keine pauschale Kürzung ohne Bestätigung.'
+        : reduction === 0
+          ? 'Deine bisherigen Ablehnungen werden berücksichtigt; es wird keine pauschale Kürzung vorgeschlagen.'
+          : 'Lernender Richtwert für flexible Ausgaben, basierend auf Verlauf und bestätigtem Feedback.',
     }
   })
 
   const recommendations = []
-  recommendations.push({
-    id: 'emergency-fund',
-    priority: emergencyGapCents > 0 ? 1 : 4,
-    title: emergencyGapCents > 0 ? 'Notgroschen systematisch aufbauen' : 'Notgroschen erhalten',
-    explanation: emergencyGapCents > 0
-      ? `Der Plan reserviert monatlich ${emergencyContributionCents} Cent, bis der Zielpuffer erreicht ist.`
-      : 'Der vorhandene Puffer deckt das gewählte Ziel bereits ab; eine kleine Erhaltungsrate bleibt eingeplant.',
+  if (cashflowStatus === 'deficit') recommendations.push({
+    id: 'resolve-deficit',
+    priority: 1,
+    title: 'Monatliches Defizit zuerst schließen',
+    explanation: `Die historischen Ausgaben übersteigen die Einnahmen um ${monthlyDeficitCents} Cent. Notgroschen- und Sparzielbeiträge bleiben deshalb vorerst bei null.`,
     requiresApproval: true,
   })
-  if (snapshot.goals.length) recommendations.push({
-    id: 'goal-allocation', priority: 2, title: 'Sparrate nach Zielterminen verteilen',
-    explanation: 'Die monatliche Sparsumme wird nach Dringlichkeit und verbleibendem Zielbetrag verteilt.', requiresApproval: true,
-  })
-  if (snapshot.monthlyRecurringCents > snapshot.monthlyIncomeCents * 0.45) recommendations.push({
-    id: 'review-recurring-costs', priority: 2, title: 'Feste Kosten einzeln prüfen',
-    explanation: 'Der Anteil wiederkehrender Ausgaben ist hoch. Verträge sollten einzeln bestätigt, nicht automatisch gekündigt werden.', requiresApproval: true,
-  })
-  if (snapshot.weeklyVolatilityCents > snapshot.averageWeeklyExpenseCents * 0.5) recommendations.push({
-    id: 'smooth-spending', priority: 3, title: 'Schwankende Wochen glätten',
-    explanation: 'Ein wöchentliches flexibles Limit kann starke Ausgabenspitzen reduzieren.', requiresApproval: true,
-  })
+
   recommendations.push({
-    id: 'reduce-flexible-spending', priority: 4, title: 'Flexible Kategorien mit Limits versehen',
-    explanation: 'Die vorgeschlagenen Limits sind Ausgangswerte und werden durch deine Bestätigungen oder Ablehnungen angepasst.', requiresApproval: true,
+    id: 'emergency-fund',
+    priority: approvedPriority(emergencyGapCents > 0 ? 1 : 4, emergencyFeedback),
+    title: emergencyGapCents > 0 ? 'Notgroschen systematisch aufbauen' : 'Notgroschen erhalten',
+    explanation: emergencyGapCents > 0
+      ? `Der Plan reserviert monatlich ${emergencyContributionCents} Cent. Frühere Zustimmung oder Ablehnung verändert die Rate innerhalb sicherer Grenzen.`
+      : 'Der vorhandene Puffer deckt das gewählte Ziel; die Erhaltungsrate berücksichtigt deine bisherigen Entscheidungen.',
+    requiresApproval: true,
   })
-  if (profile.preferences.sustainabilityPriority >= 60) recommendations.push({
-    id: 'sustainable-budget', priority: 4, title: 'Nachhaltigkeit im flexiblen Budget priorisieren',
-    explanation: 'Bei vergleichbaren Optionen soll der Plan BIO, Fairtrade, regionale, saisonale und verpackungsarme Alternativen bevorzugen, ohne aktuelle Preise oder Verfügbarkeit zu behaupten.', requiresApproval: true,
+
+  if (activeGoals.length) recommendations.push({
+    id: 'goal-allocation',
+    priority: approvedPriority(2, goalFeedback),
+    title: 'Sparrate nach Zielterminen verteilen',
+    explanation: 'Die monatliche Sparsumme wird nach Dringlichkeit, Zielbetrag und deinem bisherigen Feedback verteilt.',
+    requiresApproval: true,
   })
-  if (profile.location.city || profile.location.region) recommendations.push({
-    id: 'location-context', priority: 5, title: 'Standort als Kontext berücksichtigen',
-    explanation: 'Der Standort wird nur grob verwendet. Es gibt keine Live-Abfrage lokaler Preise, Mieten oder Angebote.', requiresApproval: true,
+
+  const recurringFeedback = feedbackScore(profile.feedback, 'review-recurring-costs')
+  if (snapshot.monthlyRecurringCents > availableIncomeCents * 0.45 && recurringFeedback >= 0) recommendations.push({
+    id: 'review-recurring-costs',
+    priority: approvedPriority(2, recurringFeedback),
+    title: 'Feste Kosten einzeln prüfen',
+    explanation: 'Der Anteil wiederkehrender Ausgaben ist hoch. Zustimmung priorisiert die Prüfung; Ablehnung verhindert eine wiederholte Empfehlung.',
+    requiresApproval: true,
+  })
+
+  if (snapshot.weeklyVolatilityCents > snapshot.averageWeeklyExpenseCents * 0.5 && smoothingFeedback >= 0) recommendations.push({
+    id: 'smooth-spending',
+    priority: approvedPriority(3, smoothingFeedback),
+    title: 'Schwankende Wochen glätten',
+    explanation: 'Ein wöchentliches flexibles Limit kann Ausgabenspitzen reduzieren; dein Feedback beeinflusst künftige Kategoriegrenzen.',
+    requiresApproval: true,
+  })
+
+  if (flexibleFeedback >= 0) recommendations.push({
+    id: 'reduce-flexible-spending',
+    priority: approvedPriority(cashflowStatus === 'deficit' ? 2 : 4, flexibleFeedback),
+    title: 'Flexible Kategorien mit Limits versehen',
+    explanation: 'Bestätigungen verschärfen die Richtwerte schrittweise; Ablehnungen lockern sie und unterdrücken die Empfehlung.',
+    requiresApproval: true,
+  })
+
+  const sustainabilityFeedback = feedbackScore(profile.feedback, 'sustainable-budget')
+  const effectiveSustainability = clamp(profile.preferences.sustainabilityPriority + (sustainabilityFeedback * 10), 0, 100)
+  if (effectiveSustainability >= 60) recommendations.push({
+    id: 'sustainable-budget',
+    priority: approvedPriority(4, sustainabilityFeedback),
+    title: 'Nachhaltigkeit im flexiblen Budget priorisieren',
+    explanation: 'BIO, Fairtrade, regionale, saisonale und verpackungsarme Optionen werden als Präferenz berücksichtigt, ohne Live-Preise oder Verfügbarkeit zu behaupten.',
+    requiresApproval: true,
+  })
+
+  if (location && locationFeedback >= 0) recommendations.push({
+    id: 'location-context',
+    priority: approvedPriority(5, locationFeedback),
+    title: 'Standort als Kontext berücksichtigen',
+    explanation: 'Standortdaten werden nur für diesen Lauf verwendet, wenn du zugestimmt hast. Es gibt keine Live-Abfrage lokaler Preise, Mieten oder Angebote.',
+    requiresApproval: true,
   })
 
   recommendations.sort((a, b) => a.priority - b.priority)
-  const planId = `budget-${now.toISOString().slice(0, 10)}-${snapshot.transactionCount}-${snapshot.monthsCovered}`
+  const planId = `budget-${now.toISOString().slice(0, 10)}-${randomUUID()}`
   return {
     planId,
     period: 'monthly',
     generatedAt: now.toISOString(),
+    cashflowStatus,
+    monthlyDeficitCents,
     allocations: {
-      incomeCents: snapshot.monthlyIncomeCents,
+      incomeCents: availableIncomeCents,
       essentialCents,
       flexibleCents,
       emergencyFundCents: emergencyContributionCents,
       savingsGoalsCents: goalPoolCents,
-      unallocatedCents: Math.max(0, snapshot.monthlyIncomeCents - essentialCents - flexibleCents - emergencyContributionCents - goalPoolCents),
+      unallocatedCents,
     },
     emergencyFund: {
       targetMonths: profile.preferences.emergencyFundMonths,
@@ -337,7 +417,7 @@ export function createDeterministicBudgetPlan(snapshot, profile, now = new Date(
     },
     limitations: [
       'Der Plan verwendet historische Transaktionen und bestätigte Präferenzen; er ist keine Garantie für zukünftige Ausgaben.',
-      'Standortangaben sind grob und werden nicht mit Live-Preis-, Miet- oder Angebotsdaten abgeglichen.',
+      'Standortangaben werden nur nach Zustimmung verwendet und nicht mit Live-Preis-, Miet- oder Angebotsdaten abgeglichen.',
       'Keine Zahlung, Budgetänderung oder Vertragskündigung wird automatisch ausgeführt.',
     ],
   }
@@ -348,7 +428,7 @@ export function publicLearningProfile(profile) {
   return {
     enabled: profile.enabled === true,
     preferences: profile.preferences,
-    location: profile.location,
+    location: profile.location ?? null,
     patterns: profile.patterns,
     confidence: profile.confidence,
     learnedFromTransactions: profile.learnedFromTransactions,
