@@ -14,8 +14,9 @@ const BUDGET_MODEL = Object.freeze({
   license: 'Apache-2.0',
   routing: 'hugging-face-provider-managed',
 })
-const ALLOWED_FEEDBACK_IDS = new Set(['emergency-fund', 'goal-allocation', 'review-recurring-costs', 'smooth-spending', 'reduce-flexible-spending', 'sustainable-budget', 'location-context'])
+const ALLOWED_FEEDBACK_IDS = new Set(['resolve-deficit', 'emergency-fund', 'goal-allocation', 'review-recurring-costs', 'smooth-spending', 'reduce-flexible-spending', 'sustainable-budget', 'location-context'])
 const UNSAFE_TEXT = /(?:ignore\s+(?:all\s+)?previous|system[\s_-]*prompt|developer[\s_-]*message|\b(?:iban|swift|bic|password|secret|access[_ -]?token|refresh[_ -]?token)\b|(?:transfer|send|wire|withdraw|invest|buy|sell|trade|borrow)\b.{0,40}(?:€|\b(?:eur|money|funds?|shares?|stocks?|crypto|now|immediately)\b))/i
+const PLAN_ID = /^budget-\d{4}-\d{2}-\d{2}-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function boundedText(value, field, maxLength) {
   if (typeof value !== 'string') throw new Error(`${field} must be a string`)
@@ -63,7 +64,7 @@ function validatePlanRequest(input) {
   return {
     consentExternalAi: input.consentExternalAi === true,
     consentLocationContext: input.consentLocationContext === true,
-    location: input.consentLocationContext === true ? validateLocationContext(input.location) : validateLocationContext(null),
+    location: input.consentLocationContext === true ? validateLocationContext(input.location) : null,
     preferences: validateBudgetPreferences(input.preferences),
   }
 }
@@ -73,13 +74,16 @@ function validateFeedbackRequest(input) {
   if (Object.keys(input).some((key) => !['consentBehaviorLearning', 'planId', 'recommendationId', 'decision'].includes(key))) throw new HttpError(400, 'invalid_budget_feedback', 'Unexpected feedback field.')
   if (input.consentBehaviorLearning !== true) throw new HttpError(400, 'behavior_consent_required', 'Explicit consent is required for persistent behavior learning.')
   const planId = String(input.planId || '')
-  if (!/^budget-\d{4}-\d{2}-\d{2}-\d+-\d+$/.test(planId)) throw new HttpError(400, 'invalid_budget_feedback', 'planId is invalid.')
+  if (!PLAN_ID.test(planId)) throw new HttpError(400, 'invalid_budget_feedback', 'planId is invalid.')
   return { planId, recommendationId: String(input.recommendationId || ''), decision: String(input.decision || '') }
 }
 
 function deterministicSummary(plan) {
   const allocation = plan.allocations
-  return `Der monatliche Budgetvorschlag reserviert ${allocation.essentialCents} Cent für Grundbedarf, ${allocation.flexibleCents} Cent für flexible Ausgaben, ${allocation.emergencyFundCents} Cent für den Notgroschen und ${allocation.savingsGoalsCents} Cent für Sparziele.`
+  if (plan.cashflowStatus === 'deficit') {
+    return `Die historischen Monatsausgaben liegen ${plan.monthlyDeficitCents} Cent über den Einnahmen. Deshalb werden aktuell keine Beiträge für Notgroschen oder Sparziele eingeplant; die verfügbaren Einnahmen werden vollständig und ohne Überallokation verteilt.`
+  }
+  return `Der monatliche Budgetvorschlag reserviert ${allocation.essentialCents} Cent für Grundbedarf, ${allocation.flexibleCents} Cent für flexible Ausgaben, ${allocation.emergencyFundCents} Cent für den Notgroschen und ${allocation.savingsGoalsCents} Cent für aktive Sparziele.`
 }
 
 async function enrichWithHuggingFace({ env, fetchImpl, plan, profile, shareLocation }) {
@@ -89,9 +93,10 @@ async function enrichWithHuggingFace({ env, fetchImpl, plan, profile, shareLocat
   const timeoutMs = Number(env.HF_BUDGET_TIMEOUT_MS || 30_000)
   if (!Number.isInteger(timeoutMs) || timeoutMs < 5_000 || timeoutMs > 90_000) throw new Error('HF_BUDGET_TIMEOUT_MS must be between 5000 and 90000.')
   const ids = new Set(plan.recommendations.map((item) => item.id))
-  const location = shareLocation ? profile.location : { country: profile.location.country, region: null, city: null, costLevel: profile.location.costLevel }
   const context = {
     plan: {
+      cashflowStatus: plan.cashflowStatus,
+      monthlyDeficitCents: plan.monthlyDeficitCents,
       allocations: plan.allocations,
       emergencyFund: plan.emergencyFund,
       goalAllocations: plan.goalAllocations.map((goal, index) => ({ rank: index + 1, targetDate: goal.targetDate, remainingCents: goal.remainingCents, recommendedMonthlyCents: goal.recommendedMonthlyCents, requiredMonthlyCents: goal.requiredMonthlyCents, onTrack: goal.onTrack })),
@@ -101,7 +106,7 @@ async function enrichWithHuggingFace({ env, fetchImpl, plan, profile, shareLocat
     },
     learnedProfile: {
       preferences: profile.preferences,
-      location,
+      location: shareLocation ? profile.location : null,
       patterns: { ...profile.patterns, categoryPreferences: profile.patterns.categoryPreferences.map((category, index) => ({ rank: index + 1, monthlyAverageCents: category.monthlyAverageCents, weight: category.weight })) },
       confidence: profile.confidence,
       feedbackSummary: publicLearningProfile(profile).feedbackSummary,
@@ -189,6 +194,9 @@ export function createBudgetRouter({ env = process.env, send, body, userId, stat
       if (!ALLOWED_FEEDBACK_IDS.has(input.recommendationId)) throw new HttpError(400, 'invalid_budget_feedback', 'recommendationId is invalid.')
       const updated = await profileStore.update(user, (profile) => {
         if (profile?.lastPlanId !== input.planId) throw new HttpError(409, 'stale_budget_feedback', 'Feedback must refer to the most recently generated budget plan.')
+        if (!Array.isArray(profile.lastPlanRecommendationIds) || !profile.lastPlanRecommendationIds.includes(input.recommendationId)) {
+          throw new HttpError(409, 'unknown_plan_recommendation', 'Feedback must refer to a recommendation that was issued in the latest plan.')
+        }
         return applyBudgetFeedback(profile, input.planId, input.recommendationId, input.decision)
       })
       send(response, 200, { learned: true, planId: input.planId, recommendationId: input.recommendationId, decision: input.decision, profile: publicLearningProfile(updated.profile), version: updated.version })
@@ -201,8 +209,12 @@ export function createBudgetRouter({ env = process.env, send, body, userId, stat
       if (!cloud.payload) throw new HttpError(409, 'budget_history_missing', 'No synchronized finance history is available for budget learning.')
       const snapshot = buildBudgetSnapshot(cloud.payload.state)
       const stored = await profileStore.update(user, (existing) => updateLearningProfile(existing, snapshot, input))
-      const plan = createDeterministicBudgetPlan(snapshot, stored.profile)
-      const issued = await profileStore.update(user, (profile) => ({ ...profile, lastPlanId: plan.planId }))
+      const plan = createDeterministicBudgetPlan(snapshot, stored.profile, new Date(), { useLocation: input.consentLocationContext })
+      const issued = await profileStore.update(user, (profile) => ({
+        ...profile,
+        lastPlanId: plan.planId,
+        lastPlanRecommendationIds: plan.recommendations.map((item) => item.id),
+      }))
       let ai
       if (input.consentExternalAi) {
         try {
