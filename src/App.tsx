@@ -17,10 +17,11 @@ import type { AppState, Transaction, TransactionType } from './types'
 import { validateTransactionInput } from './validation'
 
 type Tab = 'dashboard' | 'transactions' | 'goals' | 'recurring' | 'connections' | 'ai' | 'assistant' | 'receipt' | 'data'
+interface AppProps { userId: string }
 
 const CATEGORY_COLORS = ['#5878ff', '#5fe0a0', '#ff9f5b', '#ff8b96', '#7dd3fc', '#c084fc', '#f4d35e', '#4dd0c4']
 
-function App() {
+function App({ userId }: AppProps) {
   const [state, setState] = useState<AppState>(() => loadState())
   const [tab, setTab] = useState<Tab>('dashboard')
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -30,6 +31,14 @@ function App() {
   const [deletedTransaction, setDeletedTransaction] = useState<Transaction | null>(null)
 
   useEffect(() => saveState(state), [state])
+  useEffect(() => {
+    if (!dialogOpen) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setDialogOpen(false)
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [dialogOpen])
 
   const totals = useMemo(() => currentMonthTotals(state.transactions), [state.transactions])
   const projection = useMemo(() => monthlyProjection(state), [state])
@@ -95,26 +104,33 @@ function App() {
     dashboard: 'Finanzübersicht', transactions: 'Transaktionen', goals: 'Sparziele', recurring: 'Wiederkehrende Zahlungen',
     connections: 'Banken & PayPal', ai: 'KI-Kategorisierung', assistant: 'Finanzanalyse & Planung', receipt: 'Nachhaltiger Beleg-Check', data: 'Daten & Backup',
   }
+  const navButton = (target: Tab, icon: React.ReactNode, label: string) => <button
+    type="button"
+    className={tab === target ? 'active' : ''}
+    aria-current={tab === target ? 'page' : undefined}
+    onClick={() => setTab(target)}
+  >{icon}{label}</button>
 
   return <div className="app-shell">
+    <a className="skip-link" href="#main-content">Zum Hauptinhalt springen</a>
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark"><Landmark size={22}/></div><div><strong>Finance Planner</strong><span>Offline-first + AI</span></div></div>
-      <nav>
-        <button className={tab === 'dashboard' ? 'active' : ''} onClick={() => setTab('dashboard')}><WalletCards size={19}/> Übersicht</button>
-        <button className={tab === 'transactions' ? 'active' : ''} onClick={() => setTab('transactions')}><ArrowDownRight size={19}/> Transaktionen</button>
-        <button className={tab === 'goals' ? 'active' : ''} onClick={() => setTab('goals')}><Target size={19}/> Sparziele</button>
-        <button className={tab === 'recurring' ? 'active' : ''} onClick={() => setTab('recurring')}><Repeat2 size={19}/> Verträge</button>
-        <button className={tab === 'connections' ? 'active' : ''} onClick={() => setTab('connections')}><Link2 size={19}/> Verbindungen</button>
-        <button className={tab === 'ai' ? 'active' : ''} onClick={() => setTab('ai')}><BrainCircuit size={19}/> KI-Lernen</button>
-        <button className={tab === 'assistant' ? 'active' : ''} onClick={() => setTab('assistant')}><MessageCircleQuestion size={19}/> Assistent</button>
-        <button className={tab === 'receipt' ? 'active' : ''} onClick={() => setTab('receipt')}><ReceiptText size={19}/> Beleg-Check</button>
-        <button className={tab === 'data' ? 'active' : ''} onClick={() => setTab('data')}><DatabaseBackup size={19}/> Daten</button>
+      <nav aria-label="Hauptnavigation">
+        {navButton('dashboard', <WalletCards size={19}/>, 'Übersicht')}
+        {navButton('transactions', <ArrowDownRight size={19}/>, 'Transaktionen')}
+        {navButton('goals', <Target size={19}/>, 'Sparziele')}
+        {navButton('recurring', <Repeat2 size={19}/>, 'Verträge')}
+        {navButton('connections', <Link2 size={19}/>, 'Verbindungen')}
+        {navButton('ai', <BrainCircuit size={19}/>, 'KI-Lernen')}
+        {navButton('assistant', <MessageCircleQuestion size={19}/>, 'Assistent')}
+        {navButton('receipt', <ReceiptText size={19}/>, 'Beleg-Check')}
+        {navButton('data', <DatabaseBackup size={19}/>, 'Daten')}
       </nav>
       <div className="privacy-note"><strong>Verschlüsselt gespeichert</strong><span>Bank-Secrets bleiben ausschließlich im Backend.</span></div>
     </aside>
 
-    <main>
-      <header className="topbar"><div><p className="eyebrow">Persönliche Finanzen</p><h1>{titles[tab]}</h1></div><button className="primary" onClick={openNewTransaction}><Plus size={18}/> Manuelle Buchung</button></header>
+    <main id="main-content" tabIndex={-1}>
+      <header className="topbar"><div><p className="eyebrow">Persönliche Finanzen</p><h1>{titles[tab]}</h1></div><button type="button" className="primary" onClick={openNewTransaction}><Plus size={18}/> Manuelle Buchung</button></header>
 
       {tab === 'dashboard' && <>
         <section className="stats-grid">
@@ -133,18 +149,18 @@ function App() {
         </section>
       </>}
 
-      {tab === 'transactions' && <section className="panel table-panel"><div className="panel-header"><div><p className="eyebrow">Verlauf</p><h2>Alle Buchungen</h2></div></div><div className="transaction-list">{[...state.transactions].sort((a, b) => b.date.localeCompare(a.date)).map((transaction) => <div className="transaction-row" key={transaction.id}><div className={transaction.type === 'income' ? 'transaction-icon income' : 'transaction-icon expense'}>{transaction.type === 'income' ? <ArrowUpRight size={18}/> : <ArrowDownRight size={18}/>}</div><div><strong>{transaction.description}</strong><span>{transaction.category} · {new Date(transaction.date).toLocaleDateString('de-DE')}</span></div>{transaction.recurring && <span className="pill"><Repeat2 size={13}/> regelmäßig</span>}<b className={transaction.type === 'income' ? 'positive-text' : 'negative-text'}>{transaction.type === 'income' ? '+' : '-'}{formatMoney(transaction.amountCents)}</b><div className="row-actions"><button aria-label="Transaktion bearbeiten" onClick={() => openEditTransaction(transaction)}><Pencil size={16}/></button><button aria-label="Transaktion löschen" onClick={() => deleteTransaction(transaction.id)}><Trash2 size={16}/></button></div></div>)}</div></section>}
+      {tab === 'transactions' && <section className="panel table-panel"><div className="panel-header"><div><p className="eyebrow">Verlauf</p><h2>Alle Buchungen</h2></div></div><div className="transaction-list">{[...state.transactions].sort((a, b) => b.date.localeCompare(a.date)).map((transaction) => <div className="transaction-row" key={transaction.id}><div className={transaction.type === 'income' ? 'transaction-icon income' : 'transaction-icon expense'}>{transaction.type === 'income' ? <ArrowUpRight size={18}/> : <ArrowDownRight size={18}/>}</div><div><strong>{transaction.description}</strong><span>{transaction.category} · {new Date(transaction.date).toLocaleDateString('de-DE')}</span></div>{transaction.recurring && <span className="pill"><Repeat2 size={13}/> regelmäßig</span>}<b className={transaction.type === 'income' ? 'positive-text' : 'negative-text'}>{transaction.type === 'income' ? '+' : '-'}{formatMoney(transaction.amountCents)}</b><div className="row-actions"><button type="button" aria-label="Transaktion bearbeiten" onClick={() => openEditTransaction(transaction)}><Pencil size={16}/></button><button type="button" aria-label="Transaktion löschen" onClick={() => deleteTransaction(transaction.id)}><Trash2 size={16}/></button></div></div>)}</div></section>}
       {tab === 'goals' && <SavingsGoals state={state} onChange={setState}/>} 
       {tab === 'recurring' && <section className="panel table-panel"><div className="panel-header"><div><p className="eyebrow">Automatisch erkannt</p><h2>Verträge & feste Zahlungen</h2></div><span className="pill"><CalendarClock size={14}/> {formatMoney(recurring.reduce((sum, item) => sum + item.amountCents, 0))} / Monat</span></div><div className="transaction-list">{recurring.map((transaction) => <div className="transaction-row" key={transaction.id}><div className="transaction-icon expense"><Repeat2 size={18}/></div><div><strong>{transaction.description}</strong><span>{transaction.category} · regelmäßig</span></div><b className="negative-text">-{formatMoney(transaction.amountCents)}</b></div>)}</div></section>}
       {tab === 'connections' && <ConnectionsPanel state={state} onApply={setState}/>} 
       {tab === 'ai' && <AiPanel transactions={state.transactions} onApply={applyAiSuggestion}/>} 
       {tab === 'assistant' && <FinanceAssistant state={state}/>} 
       {tab === 'receipt' && <ReceiptReview/>}
-      {tab === 'data' && <DataTools state={state} onRestore={setState} onReset={resetAll}/>} 
+      {tab === 'data' && <DataTools userId={userId} state={state} onRestore={setState} onReset={resetAll}/>} 
     </main>
 
-    {deletedTransaction && <div className="undo-toast" role="status"><span>„{deletedTransaction.description}“ wurde gelöscht.</span><button onClick={undoDelete}><Undo2 size={16}/> Rückgängig</button></div>}
-    {dialogOpen && <div className="modal-backdrop" onMouseDown={() => setDialogOpen(false)}><form className="modal" onSubmit={(event) => { event.preventDefault(); saveTransaction(new FormData(event.currentTarget)) }} onMouseDown={(event) => event.stopPropagation()}><div className="panel-header"><div><p className="eyebrow">{editing ? 'Buchung ändern' : 'Neue Buchung'}</p><h2>{editing ? 'Transaktion bearbeiten' : 'Transaktion hinzufügen'}</h2></div></div><div className="segmented"><button type="button" className={transactionType === 'expense' ? 'active' : ''} onClick={() => setTransactionType('expense')}>Ausgabe</button><button type="button" className={transactionType === 'income' ? 'active' : ''} onClick={() => setTransactionType('income')}>Einnahme</button></div><label>Beschreibung<input name="description" required maxLength={160} defaultValue={editing?.description ?? ''} placeholder="z. B. Supermarkt"/></label><label>Betrag in €<input name="amount" type="number" required min="0.01" max="100000000" step="0.01" inputMode="decimal" defaultValue={editing ? editing.amountCents / 100 : undefined} placeholder="0,00"/></label><label>Kategorie<input name="category" required maxLength={80} defaultValue={editing?.category ?? ''} placeholder="z. B. Lebensmittel"/></label><label>Konto<select name="accountId" defaultValue={editing?.accountId ?? state.accounts[0]?.id}>{state.accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label><label>Datum<input name="date" type="date" required defaultValue={editing?.date ?? new Date().toISOString().slice(0, 10)}/></label><label className="checkbox"><input name="recurring" type="checkbox" defaultChecked={Boolean(editing?.recurring)}/> Wiederkehrende Zahlung</label>{formError && <p className="status-message error-message" role="alert">{formError}</p>}<div className="modal-actions"><button type="button" className="secondary" onClick={() => setDialogOpen(false)}>Abbrechen</button><button type="submit" className="primary">{editing ? 'Änderungen speichern' : 'Speichern'}</button></div></form></div>}
+    {deletedTransaction && <div className="undo-toast" role="status"><span>„{deletedTransaction.description}“ wurde gelöscht.</span><button type="button" onClick={undoDelete}><Undo2 size={16}/> Rückgängig</button></div>}
+    {dialogOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setDialogOpen(false)}><form className="modal" role="dialog" aria-modal="true" aria-labelledby="transaction-dialog-title" onSubmit={(event) => { event.preventDefault(); saveTransaction(new FormData(event.currentTarget)) }} onMouseDown={(event) => event.stopPropagation()}><div className="panel-header"><div><p className="eyebrow">{editing ? 'Buchung ändern' : 'Neue Buchung'}</p><h2 id="transaction-dialog-title">{editing ? 'Transaktion bearbeiten' : 'Transaktion hinzufügen'}</h2></div></div><div className="segmented"><button type="button" aria-pressed={transactionType === 'expense'} className={transactionType === 'expense' ? 'active' : ''} onClick={() => setTransactionType('expense')}>Ausgabe</button><button type="button" aria-pressed={transactionType === 'income'} className={transactionType === 'income' ? 'active' : ''} onClick={() => setTransactionType('income')}>Einnahme</button></div><label>Beschreibung<input autoFocus name="description" required maxLength={160} defaultValue={editing?.description ?? ''} placeholder="z. B. Supermarkt"/></label><label>Betrag in €<input name="amount" type="number" required min="0.01" max="100000000" step="0.01" inputMode="decimal" defaultValue={editing ? editing.amountCents / 100 : undefined} placeholder="0,00"/></label><label>Kategorie<input name="category" required maxLength={80} defaultValue={editing?.category ?? ''} placeholder="z. B. Lebensmittel"/></label><label>Konto<select name="accountId" defaultValue={editing?.accountId ?? state.accounts[0]?.id}>{state.accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label><label>Datum<input name="date" type="date" required defaultValue={editing?.date ?? new Date().toISOString().slice(0, 10)}/></label><label className="checkbox"><input name="recurring" type="checkbox" defaultChecked={Boolean(editing?.recurring)}/> Wiederkehrende Zahlung</label>{formError && <p className="status-message error-message" role="alert">{formError}</p>}<div className="modal-actions"><button type="button" className="secondary" onClick={() => setDialogOpen(false)}>Abbrechen</button><button type="submit" className="primary">{editing ? 'Änderungen speichern' : 'Speichern'}</button></div></form></div>}
   </div>
 }
 
