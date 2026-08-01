@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import pg from 'pg'
 import { EncryptedStore } from './crypto-store.js'
 import { PostgresStore } from './postgres-store.js'
+import { RetentionManager } from './retention.js'
 
 const { Pool } = pg
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations')
@@ -75,26 +76,32 @@ export async function createConnectorStore(env = process.env) {
     activeDatabasePool = null
     const store = new EncryptedStore(env.CONNECTOR_STORE_PATH || './data/connectors.enc.json', env.CONNECTOR_MASTER_KEY || '')
     await store.load()
-    return { store: addWebhookEventState(store, null), pool: null, close: async () => {}, driver }
+    return { store: addWebhookEventState(store, null), pool: null, retention: null, close: async () => {}, driver }
   }
   if (driver !== 'postgres') throw new Error('CONNECTOR_STORE_DRIVER must be file or postgres.')
 
   const pool = createDatabase(env.DATABASE_URL)
+  let retention = null
   try {
     await migrateDatabase(pool)
     const store = new PostgresStore(pool, env.CONNECTOR_MASTER_KEY || '')
     await store.load()
+    retention = new RetentionManager({ pool, env })
+    retention.start()
     activeDatabasePool = pool
     return {
       store: addWebhookEventState(store, pool),
       pool,
+      retention,
       close: async () => {
+        retention?.close()
         if (activeDatabasePool === pool) activeDatabasePool = null
         await pool.end()
       },
       driver,
     }
   } catch (error) {
+    retention?.close()
     if (activeDatabasePool === pool) activeDatabasePool = null
     await pool.end().catch(() => {})
     throw error
