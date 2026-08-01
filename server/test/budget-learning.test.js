@@ -141,6 +141,8 @@ test('explicit feedback changes later allocations, caps, and optional recommenda
   learned = applyBudgetFeedback(learned, baseline.planId, 'goal-allocation', 'rejected', now)
   learned = applyBudgetFeedback(learned, baseline.planId, 'reduce-flexible-spending', 'rejected', now)
   learned = applyBudgetFeedback(learned, baseline.planId, 'sustainable-budget', 'rejected', now)
+  const nextPlan = createDeterministicBudgetPlan(snapshot, learned, new Date('2026-08-01T00:00:00Z'))
+  learned = applyBudgetFeedback(learned, nextPlan.planId, 'sustainable-budget', 'rejected', now)
   const changed = createDeterministicBudgetPlan(snapshot, learned, now)
 
   assert.ok(changed.allocations.emergencyFundCents >= baseline.allocations.emergencyFundCents)
