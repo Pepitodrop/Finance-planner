@@ -1,4 +1,5 @@
-import { HttpError } from './runtime-security.js'
+import { isIP } from 'node:net'
+import { clientIp, HttpError } from './runtime-security.js'
 import {
   applyBudgetFeedback,
   buildBudgetSnapshot,
@@ -6,7 +7,6 @@ import {
   publicLearningProfile,
   updateLearningProfile,
   validateBudgetPreferences,
-  validateLocationContext,
 } from './budget-learning.js'
 
 const BUDGET_MODEL = Object.freeze({
@@ -14,19 +14,92 @@ const BUDGET_MODEL = Object.freeze({
   license: 'Apache-2.0',
   routing: 'hugging-face-provider-managed',
 })
+const IP_GEOLOCATION_ENDPOINT = 'https://ipwho.is'
 const ALLOWED_FEEDBACK_IDS = new Set(['resolve-deficit', 'emergency-fund', 'goal-allocation', 'review-recurring-costs', 'smooth-spending', 'reduce-flexible-spending', 'sustainable-budget', 'location-context'])
-const UNSAFE_TEXT = /(?:ignore\s+(?:all\s+)?previous|system[\s_-]*prompt|developer[\s_-]*message|\b(?:iban|swift|bic|password|secret|access[_ -]?token|refresh[_ -]?token)\b|(?:transfer|send|wire|withdraw|invest|buy|sell|trade|borrow)\b.{0,40}(?:€|\b(?:eur|money|funds?|shares?|stocks?|crypto|now|immediately)\b))/i
 const PLAN_ID = /^budget-\d{4}-\d{2}-\d{2}-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const GEO_LABEL = /^[\p{L}\p{M}0-9 .,'’()\-]{1,100}$/u
+const GEO_INSTRUCTION_TEXT = /\b(?:ignore|previous|instruction|prompt|system|assistant|developer|password|secret|token|transfer|überweisung)\b/i
+const AI_EMPHASIS = new Set(['priority', 'habit', 'caution', 'motivation'])
+const SAFE_AI_EXPLANATIONS = Object.freeze({
+  priority: 'Diese Empfehlung ist im aktuellen Plan besonders wichtig.',
+  habit: 'Diese Empfehlung eignet sich als wiederkehrende Gewohnheit.',
+  caution: 'Setze diese Empfehlung schrittweise um und prüfe die Wirkung.',
+  motivation: 'Diese Empfehlung unterstützt deine bestätigten Präferenzen.',
+})
 
-function boundedText(value, field, maxLength) {
-  if (typeof value !== 'string') throw new Error(`${field} must be a string`)
-  const text = value.trim()
-  if (!text || text.length > maxLength || /[\u0000-\u001f\u007f]/.test(text) || UNSAFE_TEXT.test(text)) throw new Error(`${field} is invalid`)
+function normalizeIp(value) {
+  let ip = String(value || '').trim()
+  if (ip.startsWith('[') && ip.includes(']')) ip = ip.slice(1, ip.indexOf(']'))
+  if (ip.includes('%')) ip = ip.slice(0, ip.indexOf('%'))
+  if (ip.toLowerCase().startsWith('::ffff:')) ip = ip.slice(7)
+  return ip
+}
+
+function isPublicIp(value) {
+  const ip = normalizeIp(value)
+  const version = isIP(ip)
+  if (version === 4) {
+    const [a, b] = ip.split('.').map(Number)
+    if (a === 0 || a === 10 || a === 127 || a >= 224) return false
+    if (a === 100 && b >= 64 && b <= 127) return false
+    if (a === 169 && b === 254) return false
+    if (a === 172 && b >= 16 && b <= 31) return false
+    if (a === 192 && (b === 0 || b === 168)) return false
+    if (a === 198 && (b === 18 || b === 19 || b === 51)) return false
+    if (a === 203 && b === 0) return false
+    return true
+  }
+  if (version === 6) {
+    const lower = ip.toLowerCase()
+    if (lower === '::' || lower === '::1' || lower.startsWith('fc') || lower.startsWith('fd')) return false
+    if (/^fe[89ab]/.test(lower) || lower.startsWith('ff') || lower.startsWith('2001:db8:')) return false
+    return true
+  }
+  return false
+}
+
+function safeGeoLabel(value) {
+  if (typeof value !== 'string') return null
+  const text = value.normalize('NFKC').trim()
+  if (!GEO_LABEL.test(text) || GEO_INSTRUCTION_TEXT.test(text)) return null
   return text
 }
 
+function sanitizeIpLocation(value) {
+  if (!value || value.success !== true) throw new Error('IP geolocation failed.')
+  const country = String(value.country_code || '').toUpperCase()
+  if (!/^[A-Z]{2}$/.test(country)) throw new Error('IP geolocation returned no valid country.')
+  return {
+    country,
+    region: safeGeoLabel(value.region),
+    city: safeGeoLabel(value.city),
+    costLevel: 'unknown',
+  }
+}
+
+async function resolveIpLocation({ request, env, fetchImpl }) {
+  const remote = env.TRUST_PROXY === 'true' ? clientIp(request) : request.socket?.remoteAddress
+  const ip = normalizeIp(remote)
+  if (!isPublicIp(ip)) throw new Error('A public client IP is unavailable.')
+  const timeoutMs = Number(env.IP_GEOLOCATION_TIMEOUT_MS || 4_000)
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 10_000) throw new Error('IP_GEOLOCATION_TIMEOUT_MS must be between 1000 and 10000.')
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(new Error('IP geolocation timed out.')), timeoutMs)
+  try {
+    const response = await fetchImpl(`${IP_GEOLOCATION_ENDPOINT}/${encodeURIComponent(ip)}?fields=success,country_code,region,city&lang=de`, {
+      method: 'GET',
+      headers: { accept: 'application/json' },
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error('IP geolocation provider failed.')
+    return sanitizeIpLocation(await response.json())
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 function extractJson(text) {
-  if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > 32_768) throw new Error('Budget AI response is invalid')
+  if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > 16_384) throw new Error('Budget AI response is invalid')
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]
   const start = text.indexOf('{')
   const end = text.lastIndexOf('}')
@@ -35,36 +108,35 @@ function extractJson(text) {
 
 function validateBudgetModelResult(value, recommendationIds) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Budget AI response is not an object')
-  if (Object.keys(value).some((key) => !['summary', 'confidence', 'explanations'].includes(key))) throw new Error('Budget AI response contains an unexpected field')
-  const summary = boundedText(value.summary, 'summary', 800)
+  if (Object.keys(value).some((key) => !['confidence', 'explanations'].includes(key))) throw new Error('Budget AI response contains an unexpected field')
   const confidence = Number(value.confidence)
   if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) throw new Error('confidence is invalid')
   if (!Array.isArray(value.explanations) || value.explanations.length > 8) throw new Error('explanations is invalid')
   const seen = new Set()
   const explanations = value.explanations.map((item, index) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error(`explanations[${index}] is invalid`)
-    if (Object.keys(item).some((key) => !['recommendationId', 'explanation'].includes(key))) throw new Error(`explanations[${index}] contains an unexpected field`)
+    if (Object.keys(item).some((key) => !['recommendationId', 'emphasis'].includes(key))) throw new Error(`explanations[${index}] contains an unexpected field`)
     const recommendationId = String(item.recommendationId || '')
+    const emphasis = String(item.emphasis || '')
     if (!recommendationIds.has(recommendationId) || seen.has(recommendationId)) throw new Error(`explanations[${index}].recommendationId is invalid`)
+    if (!AI_EMPHASIS.has(emphasis)) throw new Error(`explanations[${index}].emphasis is invalid`)
     seen.add(recommendationId)
-    return { recommendationId, explanation: boundedText(item.explanation, `explanations[${index}].explanation`, 400) }
+    return { recommendationId, explanation: SAFE_AI_EXPLANATIONS[emphasis] }
   })
-  return { summary, confidence: Number(confidence.toFixed(2)), explanations }
+  return { confidence: Number(confidence.toFixed(2)), explanations }
 }
 
 function validatePlanRequest(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(400, 'invalid_budget_request', 'Budget-plan input must be an object.')
-  if (Object.keys(input).some((key) => !['consentBehaviorLearning', 'consentExternalAi', 'consentLocationContext', 'location', 'preferences'].includes(key))) {
+  if (Object.keys(input).some((key) => !['consentBehaviorLearning', 'consentExternalAi', 'consentLocationContext', 'preferences'].includes(key))) {
     throw new HttpError(400, 'invalid_budget_request', 'Unexpected budget-plan request field.')
   }
   if (input.consentBehaviorLearning !== true) throw new HttpError(400, 'behavior_consent_required', 'Explicit consent is required for persistent behavior learning.')
   if (input.consentExternalAi !== undefined && typeof input.consentExternalAi !== 'boolean') throw new HttpError(400, 'invalid_budget_request', 'consentExternalAi must be boolean.')
   if (input.consentLocationContext !== undefined && typeof input.consentLocationContext !== 'boolean') throw new HttpError(400, 'invalid_budget_request', 'consentLocationContext must be boolean.')
-  if (input.location && input.consentLocationContext !== true) throw new HttpError(400, 'location_consent_required', 'Explicit consent is required before storing location context.')
   return {
     consentExternalAi: input.consentExternalAi === true,
     consentLocationContext: input.consentLocationContext === true,
-    location: input.consentLocationContext === true ? validateLocationContext(input.location) : null,
     preferences: validateBudgetPreferences(input.preferences),
   }
 }
@@ -86,8 +158,8 @@ function deterministicSummary(plan) {
   return `Der monatliche Budgetvorschlag reserviert ${allocation.essentialCents} Cent für Grundbedarf, ${allocation.flexibleCents} Cent für flexible Ausgaben, ${allocation.emergencyFundCents} Cent für den Notgroschen und ${allocation.savingsGoalsCents} Cent für aktive Sparziele.`
 }
 
-async function enrichWithHuggingFace({ env, fetchImpl, plan, profile, shareLocation }) {
-  if (!env.HF_TOKEN) return { summary: deterministicSummary(plan), confidence: plan.confidence, source: 'deterministic-budget-engine', model: null, warnings: ['Hugging Face inference is not configured.'] }
+async function enrichWithHuggingFace({ env, fetchImpl, plan, profile, location }) {
+  if (!env.HF_TOKEN) return { confidence: plan.confidence, source: 'deterministic-budget-engine', model: null, warnings: ['Hugging Face inference is not configured.'], explanations: [] }
   const model = env.HF_BUDGET_MODEL || BUDGET_MODEL.id
   if (model !== BUDGET_MODEL.id) throw new Error('HF_BUDGET_MODEL must match the reviewed allowlist.')
   const timeoutMs = Number(env.HF_BUDGET_TIMEOUT_MS || 30_000)
@@ -101,29 +173,28 @@ async function enrichWithHuggingFace({ env, fetchImpl, plan, profile, shareLocat
       emergencyFund: plan.emergencyFund,
       goalAllocations: plan.goalAllocations.map((goal, index) => ({ rank: index + 1, targetDate: goal.targetDate, remainingCents: goal.remainingCents, recommendedMonthlyCents: goal.recommendedMonthlyCents, requiredMonthlyCents: goal.requiredMonthlyCents, onTrack: goal.onTrack })),
       categoryCaps: plan.categoryCaps.map((category, index) => ({ rank: index + 1, historicalMonthlyCents: category.historicalMonthlyCents, recommendedCapCents: category.recommendedCapCents })),
-      recommendations: plan.recommendations,
+      recommendations: plan.recommendations.map(({ id, priority, title }) => ({ id, priority, title })),
       dataQuality: plan.dataQuality,
     },
     learnedProfile: {
       preferences: profile.preferences,
-      location: shareLocation ? profile.location : null,
+      location: location ? { country: location.country } : null,
       patterns: { ...profile.patterns, categoryPreferences: profile.patterns.categoryPreferences.map((category, index) => ({ rank: index + 1, monthlyAverageCents: category.monthlyAverageCents, weight: category.weight })) },
       confidence: profile.confidence,
       feedbackSummary: publicLearningProfile(profile).feedbackSummary,
     },
   }
   const schema = {
-    type: 'object', additionalProperties: false, required: ['summary', 'confidence', 'explanations'],
+    type: 'object', additionalProperties: false, required: ['confidence', 'explanations'],
     properties: {
-      summary: { type: 'string', minLength: 1, maxLength: 800 },
       confidence: { type: 'number', minimum: 0, maximum: 1 },
       explanations: {
         type: 'array', maxItems: 8,
         items: {
-          type: 'object', additionalProperties: false, required: ['recommendationId', 'explanation'],
+          type: 'object', additionalProperties: false, required: ['recommendationId', 'emphasis'],
           properties: {
             recommendationId: { type: 'string', enum: [...ids] },
-            explanation: { type: 'string', minLength: 1, maxLength: 400 },
+            emphasis: { type: 'string', enum: [...AI_EMPHASIS] },
           },
         },
       },
@@ -138,24 +209,21 @@ async function enrichWithHuggingFace({ env, fetchImpl, plan, profile, shareLocat
       body: JSON.stringify({
         model,
         temperature: 0,
-        max_tokens: 1200,
+        max_tokens: 500,
         messages: [
           {
             role: 'system',
             content: [
-              'Du bist ein vorsichtiger deutschsprachiger Budget-Coach.',
-              'Die Zahlen und Budgetzuweisungen wurden deterministisch berechnet und dürfen nicht verändert werden.',
-              'Erkläre nur die vorhandenen Empfehlungen und priorisiere sie verständlich.',
-              'Erfinde keine Transaktionen, Preise, Mieten, Angebote oder Standortdaten.',
-              'Standortangaben sind grob und keine Live-Kostenquelle.',
-              'Führe niemals Zahlungen, Überweisungen, Käufe, Kündigungen oder Budgetänderungen aus.',
-              'Jede Empfehlung bleibt freigabepflichtig.',
+              'Du klassifizierst ausschließlich die Betonung bereits berechneter Budgetempfehlungen.',
+              'Gib keine freie Erklärung, keine Zahl, keinen Betrag, kein Datum und keine neue Tatsachenbehauptung aus.',
+              'Wähle pro Empfehlung nur eine erlaubte emphasis-Kategorie aus dem JSON-Schema.',
+              'Die Budgetzahlen sind unveränderlich und jede Empfehlung bleibt freigabepflichtig.',
               'Antworte ausschließlich als JSON nach dem Schema.',
             ].join(' '),
           },
           { role: 'user', content: `Verifizierter Budgetkontext: ${JSON.stringify(context)}` },
         ],
-        response_format: { type: 'json_schema', json_schema: { name: 'learning_budget_explanation', strict: true, schema } },
+        response_format: { type: 'json_schema', json_schema: { name: 'learning_budget_emphasis', strict: true, schema } },
       }),
       signal: controller.signal,
     })
@@ -208,8 +276,17 @@ export function createBudgetRouter({ env = process.env, send, body, userId, stat
       const cloud = await stateStore.get(user)
       if (!cloud.payload) throw new HttpError(409, 'budget_history_missing', 'No synchronized finance history is available for budget learning.')
       const snapshot = buildBudgetSnapshot(cloud.payload.state)
-      const stored = await profileStore.update(user, (existing) => updateLearningProfile(existing, snapshot, input))
-      const plan = createDeterministicBudgetPlan(snapshot, stored.profile, new Date(), { useLocation: input.consentLocationContext })
+      let location = null
+      const warnings = []
+      if (input.consentLocationContext) {
+        try {
+          location = await resolveIpLocation({ request, env, fetchImpl })
+        } catch {
+          warnings.push('Der ungefähre IP-Standort konnte nicht bestimmt werden; der Plan wurde ohne Standortkontext erstellt.')
+        }
+      }
+      const stored = await profileStore.update(user, (existing) => updateLearningProfile(existing, snapshot, { ...input, location }))
+      const plan = createDeterministicBudgetPlan(snapshot, stored.profile, new Date(), { useLocation: Boolean(location) })
       const issued = await profileStore.update(user, (profile) => ({
         ...profile,
         lastPlanId: plan.planId,
@@ -218,27 +295,30 @@ export function createBudgetRouter({ env = process.env, send, body, userId, stat
       let ai
       if (input.consentExternalAi) {
         try {
-          ai = await enrichWithHuggingFace({ env, fetchImpl, plan, profile: issued.profile, shareLocation: input.consentLocationContext })
-        } catch (error) {
-          ai = { summary: deterministicSummary(plan), confidence: plan.confidence, source: 'deterministic-budget-engine', model: null, warnings: [String(error instanceof Error ? error.message : error).slice(0, 240)] }
+          ai = await enrichWithHuggingFace({ env, fetchImpl, plan, profile: issued.profile, location })
+        } catch {
+          ai = { confidence: plan.confidence, source: 'deterministic-budget-engine', model: null, warnings: ['Die optionale KI-Betonung war nicht verfügbar.'], explanations: [] }
         }
       } else {
-        ai = { summary: deterministicSummary(plan), confidence: plan.confidence, source: 'deterministic-budget-engine', model: null, warnings: [] }
+        ai = { confidence: plan.confidence, source: 'deterministic-budget-engine', model: null, warnings: [], explanations: [] }
       }
-      const explanationMap = new Map((ai.explanations || []).map((item) => [item.recommendationId, item.explanation]))
+      const explanationMap = new Map(ai.explanations.map((item) => [item.recommendationId, item.explanation]))
       const recommendations = plan.recommendations.map((item) => ({ ...item, aiExplanation: explanationMap.get(item.id) || null }))
       send(response, 200, {
         ...plan,
         recommendations,
-        summary: ai.summary,
-        ai: { source: ai.source, model: ai.model, confidence: Math.min(ai.confidence, plan.confidence), warnings: ai.warnings },
+        summary: deterministicSummary(plan),
+        locationContext: location,
+        ai: { source: ai.source, model: ai.model, confidence: Math.min(ai.confidence, plan.confidence), warnings: [...warnings, ...ai.warnings] },
         learningProfile: publicLearningProfile(issued.profile),
         profileVersion: issued.version,
         privacy: {
           descriptionsSentToModel: false,
           accountNamesSentToModel: false,
           preciseLocationSentToModel: false,
-          coarseLocationSentToModel: input.consentExternalAi && input.consentLocationContext,
+          coarseLocationSentToModel: input.consentExternalAi && Boolean(location),
+          ipAddressPersisted: false,
+          ipLocationLookupRequested: input.consentLocationContext,
           automaticMoneyMovement: false,
         },
       })
