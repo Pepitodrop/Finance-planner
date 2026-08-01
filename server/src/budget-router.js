@@ -316,7 +316,7 @@ export function createBudgetRouter({ env = process.env, send, body, userId, stat
           descriptionsSentToModel: false,
           accountNamesSentToModel: false,
           preciseLocationSentToModel: false,
-          coarseLocationSentToModel: input.consentExternalAi && Boolean(location),
+          coarseLocationSentToModel: ai.source === 'hugging-face-budget-explanation' && Boolean(location),
           ipAddressPersisted: false,
           ipLocationLookupRequested: input.consentLocationContext,
           automaticMoneyMovement: false,
