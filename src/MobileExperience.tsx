@@ -55,9 +55,18 @@ function activateFromUrl() {
 export function MobileExperience() {
   const [active, setActive] = useState('Übersicht')
   const [moreOpen, setMoreOpen] = useState(false)
+  const [isMobileNavigationPresented, setIsMobileNavigationPresented] = useState(() => window.matchMedia('(max-width: 760px)').matches)
   const touchStart = useRef<{ x: number; y: number } | null>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
   const primaryItems = useMemo(() => ITEMS.slice(0, 4), [])
+
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 760px)')
+    const update = () => setIsMobileNavigationPresented(query.matches)
+    update()
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
 
   useEffect(() => {
     const boundButtons = new Map<HTMLButtonElement, EventListener>()
@@ -196,7 +205,7 @@ export function MobileExperience() {
             key={item.label}
             type="button"
             className={active === item.label ? 'active' : ''}
-            aria-current={active === item.label ? 'page' : undefined}
+            aria-current={isMobileNavigationPresented && active === item.label ? 'page' : undefined}
             onClick={() => activate(item.label)}
           >
             {item.icon}<span>{item.label}</span>
