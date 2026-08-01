@@ -21,6 +21,21 @@
   outline-offset: 3px;
 }
 
+.save-announcement {
+  position: fixed;
+  right: 1rem;
+  bottom: calc(1rem + env(safe-area-inset-bottom));
+  z-index: 9998;
+  max-width: min(28rem, calc(100vw - 2rem));
+  padding: 0.8rem 1rem;
+  border: 1px solid color-mix(in srgb, #5fe0a0 45%, transparent);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--surface, #11182b) 94%, #5fe0a0 6%);
+  color: var(--text, #fff);
+  box-shadow: 0 12px 34px rgb(0 0 0 / 30%);
+  font-weight: 650;
+}
+
 .account-deletion-panel {
   display: grid;
   grid-template-columns: minmax(0, 1.3fr) minmax(17rem, 0.7fr);
@@ -77,6 +92,12 @@
   .account-deletion-panel {
     grid-template-columns: 1fr;
     align-items: stretch;
+  }
+
+  .save-announcement {
+    right: 0.75rem;
+    bottom: calc(5.5rem + env(safe-area-inset-bottom));
+    max-width: calc(100vw - 1.5rem);
   }
 
   :where(button, [role="button"], input, select) {
