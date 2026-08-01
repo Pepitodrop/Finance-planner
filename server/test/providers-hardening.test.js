@@ -47,28 +47,29 @@ test('retries retryable provider responses before succeeding', async () => {
   }
 })
 
-test('rejects expired GoCardless consent before account synchronization', async () => {
+test('rejects expired or revoked GoCardless consent before account synchronization', async () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = async () => new Response(JSON.stringify({ status: 'EX', accounts: ['account-1'] }), { status: 200 })
 
   try {
     await assert.rejects(
       syncGoCardless({ requisitionId: 'req-1', token: { access: 'token' } }, { PROVIDER_RETRIES: '0' }),
-      /GoCardless consent is not ready: EX/,
+      /GoCardless consent expired or was revoked: EX/,
     )
   } finally {
     globalThis.fetch = originalFetch
   }
 })
 
-test('bank connectors enforce incremental, pagination and reconciliation controls', async () => {
+test('bank connectors enforce consent, incremental, pagination and reconciliation controls', async () => {
   const source = await readFile(new URL('../src/providers.js', import.meta.url), 'utf8')
   assert.match(source, /AbortController/)
   assert.match(source, /response\.status === 429 \|\| response\.status >= 500/)
   assert.match(source, /requisition\.status !== 'LN'/)
+  assert.match(source, /gocardlessConsentExpiresAt/)
   assert.match(source, /date_from/)
   assert.match(source, /lastSyncedAt/)
   assert.match(source, /MAX_PAYPAL_PAGES/)
   assert.match(source, /pagination exceeds safety limit/)
-  assert.match(source, /reconciliation:/)
+  assert.match(source, /validateProviderReconciliation/)
 })
