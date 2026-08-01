@@ -5,7 +5,7 @@ export type BudgetDecision = 'approved' | 'rejected'
 export interface BudgetProfile {
   enabled: boolean
   preferences: { savingsStyle: SavingsStyle; emergencyFundMonths: number; sustainabilityPriority: number }
-  location: { country: string; region: string | null; city: string | null; costLevel: CostLevel }
+  location: { country: string; region: string | null; city: string | null; costLevel: CostLevel } | null
   patterns: {
     categoryPreferences: Array<{ category: string; monthlyAverageCents: number; weight: number }>
     monthlyIncomeCents: number
@@ -41,6 +41,8 @@ export interface BudgetPlan {
   planId: string
   period: 'monthly'
   generatedAt: string
+  cashflowStatus: 'balanced' | 'deficit'
+  monthlyDeficitCents: number
   summary: string
   allocations: {
     incomeCents: number
@@ -101,9 +103,10 @@ function errorMessage(payload: unknown, fallback: string): string {
 function isBudgetProfile(value: unknown): value is BudgetProfile {
   if (typeof value !== 'object' || value === null) return false
   const profile = value as Partial<BudgetProfile>
+  const validLocation = profile.location === null || (typeof profile.location === 'object' && profile.location !== null)
   return profile.enabled === true
     && typeof profile.preferences === 'object'
-    && typeof profile.location === 'object'
+    && validLocation
     && typeof profile.patterns === 'object'
     && typeof profile.confidence === 'number'
     && typeof profile.learnedFromTransactions === 'number'
@@ -114,7 +117,10 @@ function isBudgetPlan(value: unknown): value is BudgetPlan {
   if (typeof value !== 'object' || value === null) return false
   const plan = value as Partial<BudgetPlan>
   return typeof plan.planId === 'string'
+    && /^budget-\d{4}-\d{2}-\d{2}-[0-9a-f-]{36}$/i.test(plan.planId)
     && typeof plan.summary === 'string'
+    && (plan.cashflowStatus === 'balanced' || plan.cashflowStatus === 'deficit')
+    && typeof plan.monthlyDeficitCents === 'number'
     && typeof plan.allocations === 'object'
     && Array.isArray(plan.recommendations)
     && Array.isArray(plan.goalAllocations)
