@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { performance } from 'node:perf_hooks'
 import { createAiRouter } from '../server/src/ai-router.js'
 
+// Release evidence covers supported-claim precision, contradiction rejection, unsafe actions, prompt injection and abstention.
 const gates = JSON.parse(await readFile(new URL('../ai/evaluation/quality-gates.json', import.meta.url), 'utf8'))
 assert.equal(gates.schemaVersion, 1)
 const thresholds = gates.financialReasoning
