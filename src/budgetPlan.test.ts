@@ -15,14 +15,23 @@ const profile = {
 }
 
 const plan = {
-  planId: 'budget-2026-08-01-20-3', period: 'monthly', generatedAt: '2026-08-01T00:00:00.000Z', summary: 'Plan',
+  planId: 'budget-2026-08-01-123e4567-e89b-42d3-a456-426614174000',
+  period: 'monthly',
+  generatedAt: '2026-08-01T00:00:00.000Z',
+  cashflowStatus: 'balanced',
+  monthlyDeficitCents: 0,
+  summary: 'Plan',
   allocations: { incomeCents: 250000, essentialCents: 100000, flexibleCents: 50000, emergencyFundCents: 30000, savingsGoalsCents: 70000, unallocatedCents: 0 },
   emergencyFund: { targetMonths: 3, targetCents: 300000, currentBalanceCents: 100000, gapCents: 200000 },
-  goalAllocations: [], categoryCaps: [],
+  goalAllocations: [],
+  categoryCaps: [],
   recommendations: [{ id: 'emergency-fund', priority: 1, title: 'Notgroschen', explanation: 'Aufbauen', aiExplanation: null, requiresApproval: true }],
-  confidence: 0.7, dataQuality: { transactionCount: 20, monthsCovered: 3, level: 'medium' }, limitations: [],
+  confidence: 0.7,
+  dataQuality: { transactionCount: 20, monthsCovered: 3, level: 'medium' },
+  limitations: [],
   ai: { source: 'deterministic-budget-engine', model: null, confidence: 0.7, warnings: [] },
-  learningProfile: profile, profileVersion: 1,
+  learningProfile: profile,
+  profileVersion: 1,
   privacy: { descriptionsSentToModel: false, accountNamesSentToModel: false, preciseLocationSentToModel: false, coarseLocationSentToModel: false, automaticMoneyMovement: false },
 }
 
@@ -39,7 +48,9 @@ describe('requestLearningBudgetPlan', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
     const result = await requestLearningBudgetPlan({
-      consentBehaviorLearning: true, consentExternalAi: false, consentLocationContext: true,
+      consentBehaviorLearning: true,
+      consentExternalAi: false,
+      consentLocationContext: true,
       location: { country: 'DE', region: 'Baden-Württemberg', city: 'Karlsruhe', costLevel: 'medium' },
       preferences: { savingsStyle: 'balanced', emergencyFundMonths: 3, sustainabilityPriority: 60 },
     })
@@ -47,10 +58,26 @@ describe('requestLearningBudgetPlan', () => {
     expect(fetchMock).toHaveBeenCalledOnce()
   })
 
+  it('accepts a profile without stored location', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ ...plan, learningProfile: { ...profile, location: null } }),
+    })))
+    const result = await requestLearningBudgetPlan({
+      consentBehaviorLearning: true,
+      consentExternalAi: false,
+      consentLocationContext: false,
+      preferences: { savingsStyle: 'balanced', emergencyFundMonths: 3, sustainabilityPriority: 60 },
+    })
+    expect(result.learningProfile.location).toBeNull()
+  })
+
   it('rejects malformed budget responses', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ planId: 'missing-fields' }) })))
     await expect(requestLearningBudgetPlan({
-      consentBehaviorLearning: true, consentExternalAi: false, consentLocationContext: false,
+      consentBehaviorLearning: true,
+      consentExternalAi: false,
+      consentLocationContext: false,
       preferences: { savingsStyle: 'balanced', emergencyFundMonths: 3, sustainabilityPriority: 60 },
     })).rejects.toThrow(/ungültiges Ergebnis/)
   })
