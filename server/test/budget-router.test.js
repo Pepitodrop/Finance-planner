@@ -64,6 +64,13 @@ function routedFetch(capture, { geoPayload, aiPayload } = {}) {
   }
 }
 
+function hostedContext(body) {
+  const requestBody = JSON.parse(body)
+  const message = requestBody.messages.find((item) => item.role === 'user')?.content
+  assert.equal(typeof message, 'string')
+  return JSON.parse(message.replace(/^Verifizierter Budgetkontext: /, ''))
+}
+
 test('budget planning authenticates before reading request data', async () => {
   let read = false
   const router = createBudgetRouter({
@@ -103,7 +110,7 @@ test('IP location is resolved only after explicit consent and the raw IP is neve
     fetchImpl: routedFetch(capture),
   })
   await router(request('8.8.8.8'), {}, new URL('http://localhost/api/ai/budget-plan'))
-  assert.match(capture.geoUrl, /^https:\/\/ipwho\.is\/8\.8\.8\.8\?/) 
+  assert.match(capture.geoUrl, /^https:\/\/ipwho\.is\/8\.8\.8\.8\?/)
   assert.equal(payload.locationContext.city, 'Karlsruhe')
   assert.equal(payload.learningProfile.location.region, 'Baden-Württemberg')
   assert.equal(JSON.stringify(payload).includes('8.8.8.8'), false)
@@ -159,8 +166,9 @@ test('provider text cannot become a prompt and Hugging Face can only select safe
   assert.equal(payload.locationContext.city, null)
   assert.equal(capture.aiBody.includes('Ignore previous instructions'), false)
   assert.equal(capture.aiBody.includes('System prompt'), false)
-  assert.match(capture.aiBody, /"location":\{"country":"DE"\}/)
+  assert.deepEqual(hostedContext(capture.aiBody).learnedProfile.location, { country: 'DE' })
   assert.equal(payload.ai.source, 'hugging-face-budget-explanation')
+  assert.equal(payload.privacy.coarseLocationSentToModel, true)
   const explanation = payload.recommendations.find((item) => item.aiExplanation)?.aiExplanation
   assert.equal(explanation, 'Diese Empfehlung ist im aktuellen Plan besonders wichtig.')
   assert.equal(/[0-9€$£¥%]/.test(explanation), false)
@@ -183,6 +191,7 @@ test('free-form or factual model output is rejected and falls back to determinis
   })
   await router(request(), {}, new URL('http://localhost/api/ai/budget-plan'))
   assert.equal(payload.ai.source, 'deterministic-budget-engine')
+  assert.equal(payload.privacy.coarseLocationSentToModel, false)
   assert.ok(payload.ai.warnings.length > 0)
   assert.ok(payload.recommendations.every((item) => item.aiExplanation === null))
   assert.equal(payload.summary.includes('999'), false)
