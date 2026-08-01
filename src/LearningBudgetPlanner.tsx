@@ -46,14 +46,22 @@ export function LearningBudgetPlanner() {
         setSavingsStyle(stored.preferences.savingsStyle)
         setEmergencyMonths(stored.preferences.emergencyFundMonths)
         setSustainabilityPriority(stored.preferences.sustainabilityPriority)
-        setCountry(stored.location.country)
-        setRegion(stored.location.region || '')
-        setCity(stored.location.city || '')
-        setCostLevel(stored.location.costLevel)
-        setLocationConsent(Boolean(stored.location.city || stored.location.region))
+        if (stored.location) {
+          setCountry(stored.location.country)
+          setRegion(stored.location.region || '')
+          setCity(stored.location.city || '')
+          setCostLevel(stored.location.costLevel)
+          setLocationConsent(true)
+        } else {
+          setLocationConsent(false)
+        }
       })
-      .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : 'Das Lernprofil konnte nicht geladen werden.') })
-      .finally(() => { if (active) setProfileLoading(false) })
+      .catch((reason: unknown) => {
+        if (active) setError(reason instanceof Error ? reason.message : 'Das Lernprofil konnte nicht geladen werden.')
+      })
+      .finally(() => {
+        if (active) setProfileLoading(false)
+      })
     return () => { active = false }
   }, [])
 
@@ -102,6 +110,8 @@ export function LearningBudgetPlanner() {
       setProfile(null)
       setPlan(null)
       setLearningConsent(false)
+      setExternalConsent(false)
+      setLocationConsent(false)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Das Lernprofil konnte nicht zurückgesetzt werden.')
     } finally {
@@ -111,7 +121,11 @@ export function LearningBudgetPlanner() {
 
   return <section className="learning-budget" aria-labelledby="learning-budget-title">
     <article className="panel learning-budget-hero">
-      <div><p className="eyebrow">Persistentes Verhaltenslernen</p><h2 id="learning-budget-title">Lernender Monatsbudgetplan</h2><p>Der Plan verbindet deine synchronisierten Transaktionen, Sparziele, wiederkehrenden Kosten, bestätigten Entscheidungen und optional groben Standortkontext. Er lernt aus Zustimmung und Ablehnung, führt aber niemals selbst Geldbewegungen aus.</p></div>
+      <div>
+        <p className="eyebrow">Persistentes Verhaltenslernen</p>
+        <h2 id="learning-budget-title">Lernender Monatsbudgetplan</h2>
+        <p>Der Plan verbindet synchronisierte Transaktionen, aktive Sparziele, wiederkehrende Kosten, bestätigte Entscheidungen und optional groben Standortkontext. Er lernt aus Zustimmung und Ablehnung, führt aber niemals Geldbewegungen aus.</p>
+      </div>
       <div className="ai-model"><BrainCircuit size={18}/><div><strong>Deterministische Planung + optionale Qwen-Erklärung</strong><span>PostgreSQL-Lernprofil · Hugging Face nur nach Zustimmung</span></div></div>
     </article>
 
@@ -119,8 +133,8 @@ export function LearningBudgetPlanner() {
       <article className="panel">
         <div className="panel-header"><div><p className="eyebrow">Einstellungen</p><h2>Was darf gelernt werden?</h2></div><ShieldCheck size={20}/></div>
         <label className="checkbox"><input type="checkbox" checked={learningConsent} onChange={(event) => setLearningConsent(event.target.checked)} disabled={loading}/><span>Ich stimme zu, dass aus meiner verschlüsselten Finanzhistorie ein persönliches Lernprofil abgeleitet und verschlüsselt in PostgreSQL gespeichert wird.</span></label>
-        <label className="checkbox"><input type="checkbox" checked={externalConsent} onChange={(event) => setExternalConsent(event.target.checked)} disabled={loading}/><span>Ich stimme für diesen Lauf zu, dass ausschließlich aggregierte Budgetwerte und das abgeleitete Profil an das konfigurierte Hugging-Face-Modell gesendet werden. Beschreibungen und Kontonamen werden nicht übertragen.</span></label>
-        <label className="checkbox"><input type="checkbox" checked={locationConsent} onChange={(event) => setLocationConsent(event.target.checked)} disabled={loading}/><span>Groben Standortkontext verwenden und im Lernprofil speichern. Es werden keine GPS-Koordinaten und keine Live-Preis- oder Mietdaten verwendet.</span></label>
+        <label className="checkbox"><input type="checkbox" checked={externalConsent} onChange={(event) => setExternalConsent(event.target.checked)} disabled={loading}/><span>Ich stimme für diesen Lauf zu, dass ausschließlich aggregierte Budgetwerte und das abgeleitete Profil an das konfigurierte Hugging-Face-Modell gesendet werden.</span></label>
+        <label className="checkbox"><input type="checkbox" checked={locationConsent} onChange={(event) => setLocationConsent(event.target.checked)} disabled={loading}/><span>Groben Standortkontext für diesen Plan verwenden. Ohne Zustimmung wird kein Standortwert berechnet oder an Hugging Face übertragen.</span></label>
 
         {locationConsent && <div className="learning-budget-location">
           <label>Land<input value={country} maxLength={2} onChange={(event) => setCountry(event.target.value.toUpperCase())}/></label>
@@ -142,9 +156,9 @@ export function LearningBudgetPlanner() {
       <article className="panel">
         <div className="panel-header"><div><p className="eyebrow">Lernstatus</p><h2>Persistentes Profil</h2></div>{profile ? <CircleCheck size={20}/> : <MapPin size={20}/>}</div>
         {profileLoading && <p className="status-message" role="status"><LoaderCircle className="spin" size={17}/> Lernprofil wird geladen …</p>}
-        {!profileLoading && !profile && <div className="receipt-empty"><BrainCircuit size={38}/><strong>Noch kein serverseitiges Lernprofil</strong><span>Nach dem ersten Plan werden nur abgeleitete Muster, Einstellungen und deine Rückmeldungen verschlüsselt gespeichert.</span></div>}
+        {!profileLoading && !profile && <div className="receipt-empty"><BrainCircuit size={38}/><strong>Noch kein serverseitiges Lernprofil</strong><span>Nach dem ersten Plan werden nur abgeleitete Muster, Einstellungen und Rückmeldungen verschlüsselt gespeichert.</span></div>}
         {profile && <>
-          <div className="learning-stats"><div><strong>{Math.round(profile.confidence * 100)}%</strong><span>Konfidenz</span></div><div><strong>{profile.learnedFromTransactions}</strong><span>Transaktionen</span></div><div><strong>{profile.patterns.goalCount}</strong><span>Sparziele</span></div></div>
+          <div className="learning-stats"><div><strong>{Math.round(profile.confidence * 100)}%</strong><span>Konfidenz</span></div><div><strong>{profile.learnedFromTransactions}</strong><span>Transaktionen</span></div><div><strong>{profile.patterns.goalCount}</strong><span>Aktive Sparziele</span></div></div>
           <p className="muted">Letztes Lernen: {new Date(profile.lastLearnedAt).toLocaleString('de-DE')}. Rohbeschreibungen und präzise Koordinaten werden nicht im Lernprofil gespeichert.</p>
           <button className="secondary" type="button" onClick={() => void resetProfile()} disabled={loading}><RotateCcw size={16}/> Lernprofil zurücksetzen</button>
         </>}
@@ -153,15 +167,18 @@ export function LearningBudgetPlanner() {
 
     {plan && <>
       <article className="panel">
-        <div className="panel-header"><div><p className="eyebrow">Monatsplan</p><h2>Dein Budgetvorschlag</h2></div><span className="pill">Datenqualität: {plan.dataQuality.level === 'high' ? 'hoch' : plan.dataQuality.level === 'medium' ? 'mittel' : 'niedrig'}</span></div><p>{plan.summary}</p>
+        <div className="panel-header"><div><p className="eyebrow">Monatsplan</p><h2>Dein Budgetvorschlag</h2></div><span className="pill">Datenqualität: {plan.dataQuality.level === 'high' ? 'hoch' : plan.dataQuality.level === 'medium' ? 'mittel' : 'niedrig'}</span></div>
+        <p>{plan.summary}</p>
+        {plan.cashflowStatus === 'deficit' && <p className="status-message error-message" role="status"><AlertTriangle size={17}/><span>Monatliches Defizit: {formatMoney(plan.monthlyDeficitCents)}. Sparziel- und Notgroschenbeiträge werden nicht aus nicht vorhandenem Einkommen erzeugt.</span></p>}
         <div className="learning-budget-allocations">
           <div><span>Einnahmen</span><strong>{formatMoney(plan.allocations.incomeCents)}</strong></div>
           <div><span>Grundbedarf</span><strong>{formatMoney(plan.allocations.essentialCents)}</strong></div>
           <div><span>Flexibel</span><strong>{formatMoney(plan.allocations.flexibleCents)}</strong></div>
           <div><span>Notgroschen</span><strong>{formatMoney(plan.allocations.emergencyFundCents)}</strong></div>
-          <div><span>Sparziele</span><strong>{formatMoney(plan.allocations.savingsGoalsCents)}</strong></div>
+          <div><span>Aktive Sparziele</span><strong>{formatMoney(plan.allocations.savingsGoalsCents)}</strong></div>
         </div>
-        <p className="muted">Liquider Notgroschen: {formatMoney(plan.emergencyFund.currentBalanceCents)} von {formatMoney(plan.emergencyFund.targetCents)} Zielwert · verbleibende Lücke {formatMoney(plan.emergencyFund.gapCents)}.</p><p className="muted">Quelle: {plan.ai.source === 'hugging-face-budget-explanation' ? `${plan.ai.model?.id} über Hugging Face` : 'deterministische Budget-Engine'}. Modelltexte dürfen die berechneten Beträge nicht verändern.</p>
+        <p className="muted">Liquider Notgroschen: {formatMoney(plan.emergencyFund.currentBalanceCents)} von {formatMoney(plan.emergencyFund.targetCents)} Zielwert · verbleibende Lücke {formatMoney(plan.emergencyFund.gapCents)}.</p>
+        <p className="muted">Quelle: {plan.ai.source === 'hugging-face-budget-explanation' ? `${plan.ai.model?.id} über Hugging Face` : 'deterministische Budget-Engine'}. Modelltexte dürfen die berechneten Beträge nicht verändern.</p>
       </article>
 
       {plan.categoryCaps.length > 0 && <article className="panel"><div className="panel-header"><div><p className="eyebrow">Kategorien</p><h2>Monatliche Richtwerte</h2></div><Target size={20}/></div><div className="transaction-list">{plan.categoryCaps.map((category) => <div className="transaction-row" key={category.category}><div><strong>{category.category}</strong><span>{category.rationale} · bisher {formatMoney(category.historicalMonthlyCents)}</span></div><b>{formatMoney(category.recommendedCapCents)}</b></div>)}</div></article>}
