@@ -1,6 +1,7 @@
 .learning-budget { display: grid; gap: 14px; margin-top: 14px; }
 .learning-budget-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
 .learning-budget-hero > div:first-child { max-width: 780px; }
+.learning-budget-hero .eyebrow { text-transform: none; letter-spacing: .08em; }
 .learning-budget-hero p:not(.eyebrow) { margin-top: 10px; color: #a8b3c9; line-height: 1.6; }
 .learning-budget-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(320px, .85fr); gap: 14px; }
 .learning-budget-location { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 15px; }
