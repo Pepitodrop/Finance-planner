@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "target": 90,
+  "reviewedAt": "2026-08-01",
+  "scope": ["mobile", "web", "ai", "smartness", "bank", "frontend", "backend"],
+  "method": "Repository-controlled score. Every weighted gate requires checked-in, machine-verifiable implementation or workflow evidence. External acceptance is reported separately and is never inferred from source code.",
+  "categories": [
+    {
+      "id": "mobile",
+      "label": "Mobile App",
+      "gates": [
+        { "id": "pwa-offline", "weight": 20, "evidence": [{ "path": "public/manifest.webmanifest", "contains": ["standalone", "shortcuts"] }, { "path": "public/sw.js", "contains": ["APP_SHELL", "navigate"] }] },
+        { "id": "android-twa", "weight": 25, "evidence": [{ "path": ".github/workflows/android.yml", "contains": ["assembleDebug", "bundleRelease", "apksigner"] }, { "path": "docs/ANDROID.md", "contains": ["Trusted Web Activity", "Digital Asset Links"] }] },
+        { "id": "mobile-security", "weight": 20, "evidence": [{ "path": "scripts/verify-mobile.mjs", "contains": ["mobile"] }, { "path": "src/VaultGate.tsx", "contains": ["shouldLockAfterBackground", "setPrivacyShield"] }] },
+        { "id": "real-browser-mobile", "weight": 25, "evidence": [{ "path": "scripts/browser-production-acceptance.mjs", "contains": ["setDeviceMetricsOverride", "offline", "serviceWorker"] }, { "path": ".github/workflows/production-acceptance.yml", "contains": ["Production browser acceptance", "PostgreSQL-backed connector"] }] },
+        { "id": "release-governance", "weight": 10, "evidence": [{ "path": ".github/workflows/release-readiness.yml", "contains": ["production-release", "verify:release"] }] }
+      ],
+      "externalDependencies": ["Android and iOS physical-device matrix", "permanent Android signing and Digital Asset Links", "Play Store publication", "native iOS App Store package"]
+    },
+    {
+      "id": "web",
+      "label": "Web App",
+      "gates": [
+        { "id": "production-delivery", "weight": 25, "evidence": [{ "path": "Dockerfile.web", "contains": ["nginx"] }, { "path": "compose.yaml", "contains": ["connector", "postgres"] }] },
+        { "id": "browser-acceptance", "weight": 30, "evidence": [{ "path": "scripts/browser-production-acceptance.mjs", "contains": ["transactionCrud", "desktopAccessibility", "offline"] }] },
+        { "id": "auth-and-vault", "weight": 20, "evidence": [{ "path": "src/AuthGate.tsx", "contains": ["passkey", "Google"] }, { "path": "src/vault.ts", "contains": ["AES-GCM", "PBKDF2"] }] },
+        { "id": "cloud-persistence", "weight": 15, "evidence": [{ "path": "server/src/user-state-store.js", "contains": ["AES-256-GCM", "version"] }, { "path": "src/infrastructure/persistence/storage.ts", "contains": ["CloudStateConflictError", "synchronizeUnlockedState"] }] },
+        { "id": "release-observability", "weight": 10, "evidence": [{ "path": "server/src/operational-metrics.js", "contains": ["prometheus", "recordHttp"] }, { "path": "docs/PRODUCTION.md", "contains": ["Monitoring", "Rollback"] }] }
+      ],
+      "externalDependencies": ["independent accessibility assessment", "representative load test", "deployed penetration test"]
+    },
+    {
+      "id": "ai",
+      "label": "AI",
+      "gates": [
+        { "id": "model-governance", "weight": 20, "evidence": [{ "path": "ai/model-lock.json", "contains": ["revision", "license"] }, { "path": "scripts/verify-ai-model-lock.mjs", "contains": ["productionEligible"] }] },
+        { "id": "deterministic-boundary", "weight": 20, "evidence": [{ "path": "server/src/budget-router.js", "contains": ["deterministicSummary", "SAFE_AI_EXPLANATIONS"] }, { "path": "server/src/ai-router.js", "contains": ["consent"] }] },
+        { "id": "quality-evaluation", "weight": 20, "evidence": [{ "path": "scripts/verify-ai-quality-gates.mjs", "contains": ["precision", "abstention"] }, { "path": "scripts/verify-budget-learning-quality.mjs", "contains": ["privacyRedactionRate", "feedbackAdaptationRate"] }] },
+        { "id": "runtime-canaries", "weight": 20, "evidence": [{ "path": ".github/workflows/runtime-canaries.yml", "contains": ["Hugging Face", "runtime evidence"] }, { "path": "scripts/verify-personal-launch.mjs", "contains": ["maximumHostedErrorRate", "p95LatencyMs"] }] },
+        { "id": "privacy-fallback", "weight": 20, "evidence": [{ "path": "server/test/budget-router.test.js", "contains": ["free-form", "deterministic"] }, { "path": "server/src/operational-metrics.js", "contains": ["sourceClass", "finance_planner_ai_responses_total"] }] }
+      ],
+      "externalDependencies": ["production-token latency and failure evidence", "ongoing drift review", "independent AI safety and privacy review"]
+    },
+    {
+      "id": "smartness",
+      "label": "Smartness",
+      "gates": [
+        { "id": "persistent-learning", "weight": 25, "evidence": [{ "path": "server/src/budget-profile-store.js", "contains": ["AES-256-GCM", "update"] }, { "path": "server/migrations/007_budget_learning_profiles.sql", "contains": ["user_budget_learning_profiles"] }] },
+        { "id": "feedback-adaptation", "weight": 20, "evidence": [{ "path": "server/src/budget-learning.js", "contains": ["applyBudgetFeedback", "feedback"] }, { "path": "server/test/budget-learning.test.js", "contains": ["changes later allocations", "idempotent"] }] },
+        { "id": "budget-benchmark", "weight": 25, "evidence": [{ "path": "ai/evaluation/budget-learning-quality.json", "contains": ["allocationConservationRate", "feedbackAdaptationRate"] }, { "path": "scripts/verify-budget-learning-quality.mjs", "contains": ["deficitSafetyRate", "liquidReserveIntegrityRate"] }] },
+        { "id": "receipt-intelligence", "weight": 15, "evidence": [{ "path": "server/src/receipt-intelligence.js", "contains": ["evidenceStatus", "imageStored"] }] },
+        { "id": "behavior-prediction", "weight": 15, "evidence": [{ "path": "server/src/behavior-intelligence.js", "contains": ["predicted", "confidence"] }] }
+      ],
+      "externalDependencies": ["longitudinal real-user usefulness measurement", "bias and recommendation-quality review"]
+    },
+    {
+      "id": "bank",
+      "label": "Bank connection",
+      "gates": [
+        { "id": "connector-lifecycle", "weight": 25, "evidence": [{ "path": "server/src/providers.js", "contains": ["gocardlessConsentExpiresAt", "tokenIsUsable", "syncWindow"] }] },
+        { "id": "reconciliation", "weight": 20, "evidence": [{ "path": "server/src/providers.js", "contains": ["validateProviderReconciliation", "transactionCount"] }, { "path": "server/test/providers-production.test.js", "contains": ["reconciliation", "duplicate"] }] },
+        { "id": "webhook-security", "weight": 20, "evidence": [{ "path": "server/src/webhook-security.js", "contains": ["signature", "idempot"] }, { "path": "server/test/webhook-security.test.js", "contains": ["replay"] }] },
+        { "id": "runtime-canary", "weight": 15, "evidence": [{ "path": "scripts/provider-runtime-canary.mjs", "contains": ["financialRecordsRead", "institutions"] }, { "path": ".github/workflows/runtime-canaries.yml", "contains": ["GoCardless", "PayPal"] }] },
+        { "id": "health-and-observability", "weight": 20, "evidence": [{ "path": "server/src/server.js", "contains": ["/health/bank", "recordBank"] }, { "path": "server/src/operational-metrics.js", "contains": ["finance_planner_bank_operations_total"] }] }
+      ],
+      "externalDependencies": ["live GoCardless certification", "PayPal partner approval where third-party accounts are required", "real-account reconciliation and reversal testing"]
+    },
+    {
+      "id": "frontend",
+      "label": "Frontend",
+      "gates": [
+        { "id": "browser-acceptance", "weight": 30, "evidence": [{ "path": "scripts/browser-production-acceptance.mjs", "contains": ["desktopAccessibility", "transactionCrud", "accountDeletion"] }] },
+        { "id": "accessibility", "weight": 25, "evidence": [{ "path": "src/App.tsx", "contains": ["skip-link", "aria-current", "aria-modal"] }, { "path": "src/production-readiness.css", "contains": ["focus-visible", "prefers-reduced-motion"] }] },
+        { "id": "responsive-pwa", "weight": 20, "evidence": [{ "path": "src/mobile.css", "contains": ["@media"] }, { "path": "public/manifest.webmanifest", "contains": ["share_target", "shortcuts"] }] },
+        { "id": "automated-tests", "weight": 15, "evidence": [{ "path": "package.json", "contains": ["vitest run", "verify-production-readiness"] }, { "path": ".github/workflows/production-acceptance.yml", "contains": ["Chromium", "accessibility"] }] },
+        { "id": "fault-and-sync-ux", "weight": 10, "evidence": [{ "path": "src/ErrorBoundary.tsx", "contains": ["ErrorBoundary"] }, { "path": "src/features/sync/CloudSyncStatus.tsx", "contains": ["conflict"] }] }
+      ],
+      "externalDependencies": ["manual screen-reader validation", "manual keyboard and contrast review on representative browsers"]
+    },
+    {
+      "id": "backend",
+      "label": "Backend",
+      "gates": [
+        { "id": "postgres-persistence", "weight": 20, "evidence": [{ "path": "server/src/database.js", "contains": ["pg_advisory_lock", "migrateDatabase"] }, { "path": "server/migrations/008_session_revocations.sql", "contains": ["user_session_revocations"] }] },
+        { "id": "security", "weight": 20, "evidence": [{ "path": "server/src/runtime-security.js", "contains": ["METRICS_TOKEN", "CONNECTOR_STORE_DRIVER=postgres"] }, { "path": "server/src/session-revocation.js", "contains": ["SessionRevocationRegistry", "revoke"] }] },
+        { "id": "observability", "weight": 20, "evidence": [{ "path": "server/src/operational-metrics.js", "contains": ["finance_planner_http_request_duration_ms", "finance_planner_build_info"] }, { "path": ".github/workflows/production-acceptance.yml", "contains": ["operational metrics"] }] },
+        { "id": "retention-and-deletion", "weight": 20, "evidence": [{ "path": "server/src/retention.js", "contains": ["oauth_nonces", "webhook_events"] }, { "path": "server/src/account-deletion.js", "contains": ["user_finance_state", "user_budget_learning_profiles"] }, { "path": "src/DataTools.tsx", "contains": ["Konto endgültig löschen", "DELETE MY ACCOUNT"] }] },
+        { "id": "ci-and-containers", "weight": 20, "evidence": [{ "path": ".github/workflows/ci.yml", "contains": ["connector-server", "containers"] }, { "path": "Dockerfile.server", "contains": ["node"] }] }
+      ],
+      "externalDependencies": ["managed dashboards and paging", "independent penetration test", "restore drill in the production environment"]
+    }
+  ]
+}

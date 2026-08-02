@@ -18,6 +18,15 @@ export const AI_MODEL_CATALOG = Object.freeze([
     purpose: 'Optional second-pass critic that removes unsupported claims and calibrates confidence.',
   },
   {
+    id: 'Qwen/Qwen2.5-VL-7B-Instruct:fastest',
+    capability: 'sustainable-receipt-review',
+    execution: 'hosted-or-self-hosted',
+    integrationStatus: 'integrated',
+    enabledByDefault: true,
+    license: 'Apache-2.0',
+    purpose: 'Provider-routed vision-language model for one-time grocery receipt extraction and estimated BIO, Fairtrade, environmental and affordability guidance.',
+  },
+  {
     id: 'BAAI/bge-m3',
     capability: 'multilingual-retrieval',
     execution: 'local-optional',
@@ -51,7 +60,7 @@ export const AI_MODEL_CATALOG = Object.freeze([
     integrationStatus: 'worker-ready',
     enabledByDefault: false,
     license: 'MIT',
-    purpose: 'Open vision-language model for receipt and invoice extraction in a sandboxed worker.',
+    purpose: 'Open vision-language model for future fully local receipt and invoice extraction in a sandboxed worker.',
   },
 ])
 

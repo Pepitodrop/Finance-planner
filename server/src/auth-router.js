@@ -6,6 +6,7 @@ import {
   verifyAuthenticationResponse,
   verifyRegistrationResponse,
 } from '@simplewebauthn/server'
+import { validateAccountDeletionInput } from './account-deletion.js'
 import { AuthStore } from './auth-store.js'
 import { createSession, verifySession } from './security.js'
 
@@ -22,6 +23,8 @@ function cookie(name, value, origin, maxAge = 600) {
 }
 
 async function jsonBody(request) {
+  const contentType = String(request.headers['content-type'] || '').split(';')[0].trim().toLowerCase()
+  if (contentType && contentType !== 'application/json') throw new Error('Content-Type must be application/json.')
   const chunks = []
   let size = 0
   for await (const chunk of request) {
@@ -32,9 +35,9 @@ async function jsonBody(request) {
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}
 }
 
-function sessionUser(request, secret) {
+function sessionUser(request, verifyActiveSession) {
   const token = parseCookies(request).fp_session
-  return token ? verifySession(token, secret) : null
+  return token ? verifyActiveSession(token) : null
 }
 
 function configuredSessionTtl(env) {
@@ -43,10 +46,18 @@ function configuredSessionTtl(env) {
   return Math.max(3600, Math.min(365 * 24 * 60 * 60, configured))
 }
 
-export async function createAuthRouter({ env, origin, sessionSecret, send }) {
+function removeUserFromAuthStore(data, userId) {
+  delete data.users[userId]
+  for (const key of Object.keys(data.challenges)) {
+    if (key.endsWith(`:${userId}`)) delete data.challenges[key]
+  }
+}
+
+export async function createAuthRouter({ env, origin, sessionSecret, send, verifyActiveSession, deleteUserData }) {
   const rpId = env.WEBAUTHN_RP_ID || new URL(origin).hostname
   const rpName = env.WEBAUTHN_RP_NAME || 'Finance Planner'
   const sessionTtlSeconds = configuredSessionTtl(env)
+  const verifyToken = verifyActiveSession || ((token) => verifySession(token, sessionSecret))
   const primaryAuthSecret = env.AUTH_MASTER_KEY || env.CONNECTOR_MASTER_KEY || ''
   const store = new AuthStore(
     env.AUTH_STORE_PATH || './data/auth.enc.json',
@@ -76,7 +87,7 @@ export async function createAuthRouter({ env, origin, sessionSecret, send }) {
 
     if (request.method === 'GET' && url.pathname === '/api/auth/session') {
       let userId = null
-      try { userId = sessionUser(request, sessionSecret) } catch { userId = null }
+      try { userId = sessionUser(request, verifyToken) } catch { userId = null }
       const user = userId ? store.data.users[userId] : null
       const headers = user ? { 'Set-Cookie': cookie('fp_session', createSession(user.id, sessionSecret, sessionTtlSeconds), origin, sessionTtlSeconds) } : {}
       send(response, 200, { authenticated: Boolean(user), user: user ? { id: user.id, email: user.email, name: user.name, picture: user.picture, passkeyCount: user.passkeys?.length || 0 } : null }, headers)
@@ -85,6 +96,21 @@ export async function createAuthRouter({ env, origin, sessionSecret, send }) {
 
     if (request.method === 'POST' && url.pathname === '/api/auth/logout') {
       send(response, 200, { authenticated: false }, { 'Set-Cookie': cookie('fp_session', '', origin, 0) })
+      return true
+    }
+
+    if (request.method === 'DELETE' && url.pathname === '/api/auth/account') {
+      const userId = sessionUser(request, verifyToken)
+      if (!userId || !store.data.users[userId]) throw new Error('Authentication required.')
+      validateAccountDeletionInput(await jsonBody(request))
+      if (typeof deleteUserData !== 'function') throw new Error('Account deletion is unavailable.')
+      const deleted = await deleteUserData(userId)
+      await store.mutate((data) => removeUserFromAuthStore(data, userId))
+      send(response, 200, {
+        deleted: true,
+        sessionRevokedAt: deleted.revokedBefore,
+        recordsDeleted: deleted.deleted,
+      }, { 'Set-Cookie': cookie('fp_session', '', origin, 0) })
       return true
     }
 
@@ -106,7 +132,7 @@ export async function createAuthRouter({ env, origin, sessionSecret, send }) {
       const claims = ticket.getPayload()
       if (!claims?.sub || !claims.email || !claims.email_verified || claims.nonce !== cookies.fp_google_nonce) throw new Error('Google identity could not be verified.')
       const existing = store.findByEmail(claims.email)
-      const user = existing || { id: `google:${claims.sub}`, email: claims.email.toLowerCase(), passkeys: [] }
+      const user = existing || { id: `google:${claims.sub}`, email: claims.email.toLowerCase(), passkeys: [], createdAt: new Date().toISOString() }
       Object.assign(user, { name: claims.name || claims.email, picture: claims.picture, updatedAt: new Date().toISOString() })
       await store.mutate((data) => { data.users[user.id] = user })
       const token = createSession(user.id, sessionSecret, sessionTtlSeconds)
@@ -116,7 +142,7 @@ export async function createAuthRouter({ env, origin, sessionSecret, send }) {
     }
 
     if (request.method === 'POST' && url.pathname === '/api/auth/passkeys/register/options') {
-      const userId = sessionUser(request, sessionSecret)
+      const userId = sessionUser(request, verifyToken)
       const user = userId && store.data.users[userId]
       if (!user) throw new Error('Authentication required.')
       const options = await generateRegistrationOptions({
@@ -134,7 +160,7 @@ export async function createAuthRouter({ env, origin, sessionSecret, send }) {
     }
 
     if (request.method === 'POST' && url.pathname === '/api/auth/passkeys/register/verify') {
-      const userId = sessionUser(request, sessionSecret)
+      const userId = sessionUser(request, verifyToken)
       const user = userId && store.data.users[userId]
       const challenge = user && store.data.challenges[`register:${user.id}`]
       if (!user || !challenge || challenge.expiresAt < Date.now()) throw new Error('Passkey registration expired.')

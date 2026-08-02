@@ -1,0 +1,112 @@
+.skip-link {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 10000;
+  padding: 0.7rem 1rem;
+  border-radius: 0.65rem;
+  background: var(--surface, #11182b);
+  color: var(--text, #fff);
+  box-shadow: 0 8px 30px rgb(0 0 0 / 35%);
+  transform: translateY(-160%);
+  transition: transform 120ms ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+:where(button, a, input, select, textarea):focus-visible {
+  outline: 3px solid color-mix(in srgb, currentColor 65%, transparent);
+  outline-offset: 3px;
+}
+
+.save-announcement {
+  position: fixed;
+  right: 1rem;
+  bottom: calc(1rem + env(safe-area-inset-bottom));
+  z-index: 9998;
+  max-width: min(28rem, calc(100vw - 2rem));
+  padding: 0.8rem 1rem;
+  border: 1px solid color-mix(in srgb, #5fe0a0 45%, transparent);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--surface, #11182b) 94%, #5fe0a0 6%);
+  color: var(--text, #fff);
+  box-shadow: 0 12px 34px rgb(0 0 0 / 30%);
+  font-weight: 650;
+}
+
+.account-deletion-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(17rem, 0.7fr);
+  gap: 1.5rem;
+  align-items: end;
+  border-color: color-mix(in srgb, #ff6b74 42%, transparent);
+}
+
+.account-deletion-copy p {
+  max-width: 72ch;
+}
+
+.account-deletion-controls {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.account-deletion-controls code {
+  display: inline-block;
+  margin-inline: 0.2rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.35rem;
+  background: rgb(255 255 255 / 8%);
+  font-size: 0.9em;
+  user-select: all;
+}
+
+.danger-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  min-height: 44px;
+  padding: 0.75rem 1rem;
+  border: 1px solid #ff6b74;
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, #ff6b74 14%, transparent);
+  color: #ffd9dc;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.danger-action:hover:not(:disabled) {
+  background: color-mix(in srgb, #ff6b74 24%, transparent);
+}
+
+.danger-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+@media (max-width: 760px) {
+  .account-deletion-panel {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .save-announcement {
+    right: 0.75rem;
+    bottom: calc(5.5rem + env(safe-area-inset-bottom));
+    max-width: calc(100vw - 1.5rem);
+  }
+
+  :where(button, [role="button"], input, select) {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skip-link {
+    transition: none;
+  }
+}

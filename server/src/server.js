@@ -1,14 +1,21 @@
-import { randomUUID } from 'node:crypto'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
 import { URL } from 'node:url'
+import { deleteAccountData } from './account-deletion.js'
 import { createAiRouter } from './ai-router.js'
 import { createAuthRouter } from './auth-router.js'
+import { behaviorEventsFromFinanceState } from './budget-learning.js'
+import { BudgetProfileStore } from './budget-profile-store.js'
+import { createBudgetRouter } from './budget-router.js'
 import { createConnectorStore } from './database.js'
 import { createRateLimiters } from './distributed-rate-limiter.js'
 import { createFinanceRouter } from './finance-router.js'
-import { createSession, issueState, verifySession, verifyState } from './security.js'
+import { OperationalMetrics } from './operational-metrics.js'
 import { startGoCardless, startPayPal, syncGoCardless, syncPayPal } from './providers.js'
 import { HttpError, SlidingWindowRateLimiter, classifyError, clientIp, requestId, validateProductionConfig } from './runtime-security.js'
+import { bearerToken, createSession, issueState, verifySessionClaims, verifyState } from './security.js'
+import { SessionRevocationRegistry } from './session-revocation.js'
+import { PostgresUserStateStore } from './user-state-store.js'
 import { bankProductionCapabilities, processWebhook } from './webhook-security.js'
 
 const env = process.env
@@ -16,6 +23,8 @@ const port = Number(env.PORT || 8787)
 const host = env.HOST || '127.0.0.1'
 const origin = env.APP_ORIGIN || 'http://localhost:5173'
 const sessionSecret = env.SESSION_SECRET || ''
+const releaseVersion = env.RELEASE_VERSION || '0.2.0'
+const releaseCommit = env.RELEASE_SHA || env.GIT_COMMIT || 'unknown'
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be an integer between 1 and 65535.')
 if (!['127.0.0.1', '0.0.0.0', '::'].includes(host)) throw new Error('HOST must be 127.0.0.1, 0.0.0.0, or ::.')
 if (sessionSecret.length < 32) throw new Error('SESSION_SECRET must contain at least 32 characters.')
@@ -23,6 +32,16 @@ validateProductionConfig(env, origin)
 
 const persistence = await createConnectorStore(env)
 const store = persistence.store
+const userStateStore = persistence.pool ? new PostgresUserStateStore(persistence.pool, env.CONNECTOR_MASTER_KEY || '') : null
+const budgetProfileStore = persistence.pool ? new BudgetProfileStore(persistence.pool, env.CONNECTOR_MASTER_KEY || '') : null
+const sessionRevocations = new SessionRevocationRegistry({
+  pool: persistence.pool,
+  secret: sessionSecret,
+  refreshMs: Number(env.SESSION_REVOCATION_REFRESH_MS || 30_000),
+})
+await sessionRevocations.load()
+sessionRevocations.start()
+const metrics = new OperationalMetrics({ version: releaseVersion, commit: releaseCommit })
 const bankCapabilities = () => bankProductionCapabilities(env, persistence)
 let ready = true
 let shuttingDown = false
@@ -41,9 +60,9 @@ const activeSyncs = new Map()
 const syncReplayCache = new Map()
 const SYNC_REPLAY_TTL_MS = 2 * 60_000
 
-function send(response, status, payload, headers = {}) {
-  const securityHeaders = {
-    'Content-Type': 'application/json; charset=utf-8',
+function securityHeaders(contentType = 'application/json; charset=utf-8') {
+  const headers = {
+    'Content-Type': contentType,
     'Cache-Control': 'no-store',
     'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
     'Cross-Origin-Opener-Policy': 'same-origin',
@@ -52,11 +71,31 @@ function send(response, status, payload, headers = {}) {
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'no-referrer',
-    ...headers,
   }
-  if (origin.startsWith('https://')) securityHeaders['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
-  response.writeHead(status, securityHeaders)
+  if (origin.startsWith('https://')) headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+  return headers
+}
+
+function send(response, status, payload, headers = {}) {
+  const aiSource = payload?.source || payload?.ai?.source
+  if (typeof aiSource === 'string') response.financePlannerAiSource = aiSource
+  response.writeHead(status, { ...securityHeaders(), ...headers })
   response.end(JSON.stringify(payload))
+}
+
+function metricsAuthorized(request) {
+  const configured = String(env.METRICS_TOKEN || '')
+  if (!configured) return env.NODE_ENV !== 'production' || env.PUBLIC_DEPLOYMENT !== 'true'
+  const supplied = bearerToken(request)
+  const actual = Buffer.from(supplied)
+  const expected = Buffer.from(configured)
+  return actual.length === expected.length && timingSafeEqual(actual, expected)
+}
+
+function sendMetrics(request, response) {
+  if (!metricsAuthorized(request)) return send(response, 401, { error: { code: 'metrics_unauthorized', message: 'Metrics authentication required.' } })
+  response.writeHead(200, securityHeaders('text/plain; version=0.0.4; charset=utf-8'))
+  response.end(metrics.prometheus())
 }
 
 async function body(request) {
@@ -81,10 +120,14 @@ function cookies(request) {
   return Object.fromEntries(String(request.headers.cookie || '').split(';').map((part) => part.trim().split('=').map(decodeURIComponent)).filter((entry) => entry.length === 2))
 }
 
+function verifyActiveSession(token) {
+  return sessionRevocations.verify(verifySessionClaims(token, sessionSecret))
+}
+
 function userId(request) {
   const token = cookies(request).fp_session
   if (!token) throw new Error('Authentication required.')
-  return verifySession(token, sessionSecret)
+  return verifyActiveSession(token)
 }
 
 function cors(request, response) {
@@ -158,8 +201,10 @@ async function buildSyncPayload(user) {
           : (() => { throw new Error('finAPI adapter is not configured.') })()
       const lastSyncAt = new Date().toISOString()
       await store.set(user, provider, { ...synced.credential, consentId: stored.consentId, redirectUri: stored.redirectUri, lastSyncAt, consentExpiresAt: synced.consentExpiresAt })
-      results.push({ connection: { ...connection(provider, stored), lastSyncAt }, accounts: synced.accounts, transactions: synced.transactions, reconciliation: synced.reconciliation })
+      metrics.recordBank(provider, 'success')
+      results.push({ connection: { ...connection(provider, stored), lastSyncAt, consentExpiresAt: synced.consentExpiresAt }, accounts: synced.accounts, transactions: synced.transactions, reconciliation: synced.reconciliation })
     } catch (error) {
+      metrics.recordBank(provider, /consent.*expired/i.test(String(error?.message || error)) ? 'expired' : 'failure')
       results.push({ connection: connection(provider, stored, error instanceof Error ? error.message : 'Synchronization failed.'), accounts: [], transactions: [] })
     }
   }
@@ -212,21 +257,39 @@ async function handleWebhook(provider, request, response) {
       console.log(JSON.stringify({ level: 'info', event: 'bank_webhook_verified', provider, eventId, occurredAt, eventType: payload?.event_type || payload?.type || payload?.action || 'unknown' }))
     },
   })
+  metrics.recordBank(provider, 'success')
   return send(response, result.duplicate ? 200 : 202, result, { 'Idempotency-Replayed': String(result.duplicate) })
 }
 
-const handleAuth = await createAuthRouter({ env, origin, sessionSecret, send })
+async function loadBehaviorEvents(user) {
+  if (!userStateStore) throw new HttpError(503, 'behavior_history_unavailable', 'Trusted server-side financial history requires PostgreSQL cloud state.')
+  const cloud = await userStateStore.get(user)
+  return cloud.payload ? behaviorEventsFromFinanceState(cloud.payload.state) : []
+}
+
+const handleAuth = await createAuthRouter({
+  env,
+  origin,
+  sessionSecret,
+  send,
+  verifyActiveSession,
+  deleteUserData: (user) => deleteAccountData({ userId: user, persistence, store, sessionRevocations }),
+})
 const handleFinance = createFinanceRouter({ env, send, body, userId })
-const handleAi = createAiRouter({ env, send, body, userId })
+const handleBudget = createBudgetRouter({ env, send, body, userId, stateStore: userStateStore, profileStore: budgetProfileStore })
+const handleAi = createAiRouter({ env, send, body, userId, loadBehaviorEvents })
 
 const server = createServer(async (request, response) => {
   const startedAt = Date.now()
   const id = requestId(request.headers)
+  let pathname = 'unknown'
   response.setHeader('X-Request-ID', id)
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
+    pathname = url.pathname
     if (shuttingDown && url.pathname !== '/health/live') return send(response, 503, { error: { code: 'shutting_down', message: 'Service is shutting down.' }, requestId: id })
     if (!cors(request, response)) return send(response, 403, { error: { code: 'origin_forbidden', message: 'Origin not allowed.' }, requestId: id })
+    if (request.method === 'GET' && url.pathname === '/metrics') return sendMetrics(request, response)
     if (!await rateLimit(request, response, url.pathname)) return
     if (request.method === 'OPTIONS') {
       response.writeHead(204, { 'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, X-Request-ID, Idempotency-Key', 'Access-Control-Max-Age': '600' })
@@ -240,12 +303,23 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && (url.pathname === '/health' || url.pathname === '/health/ready')) {
       const capabilities = bankCapabilities()
       const serviceReady = ready && (!capabilities.production || capabilities.ready)
-      return send(response, serviceReady ? 200 : 503, { status: serviceReady ? 'ready' : 'not_ready', service: 'finance-planner-connector', version: '0.1.0', persistence: persistence.driver, distributedRateLimiting: Boolean(distributedLimiters?.distributed), bank: capabilities })
+      return send(response, serviceReady ? 200 : 503, {
+        status: serviceReady ? 'ready' : 'not_ready',
+        service: 'finance-planner-connector',
+        version: releaseVersion,
+        commit: releaseCommit,
+        persistence: persistence.driver,
+        distributedRateLimiting: Boolean(distributedLimiters?.distributed),
+        sessionRevocation: persistence.pool ? 'postgres-refresh-cache' : 'process-local',
+        observability: { prometheusMetrics: true, authenticated: Boolean(env.METRICS_TOKEN) },
+        bank: capabilities,
+      })
     }
     const webhook = url.pathname.match(/^\/api\/connectors\/webhooks\/(gocardless|finapi|paypal)$/)
     if (request.method === 'POST' && webhook) return await handleWebhook(webhook[1], request, response)
     if (await handleAuth(request, response, url)) return
     if (await handleFinance(request, response, url)) return
+    if (await handleBudget(request, response, url)) return
     if (await handleAi(request, response, url)) return
     if (request.method === 'POST' && url.pathname === '/api/session/local') {
       if (env.AUTH_MODE !== 'local') return send(response, 404, { error: { code: 'not_found', message: 'Not found.' }, requestId: id })
@@ -259,6 +333,7 @@ const server = createServer(async (request, response) => {
     if (request.method === 'DELETE' && disconnect) {
       const user = userId(request)
       await store.remove(user, disconnect[1])
+      metrics.recordBank(disconnect[1], 'disconnected')
       return send(response, 200, { disconnected: true })
     }
     if (request.method === 'GET' && url.pathname === '/api/connectors/callback') {
@@ -277,7 +352,11 @@ const server = createServer(async (request, response) => {
     if (failure.status >= 500) console.error(JSON.stringify({ level: 'error', requestId: id, error: error instanceof Error ? error.stack : String(error) }))
     send(response, failure.status, { error: { code: failure.code, message: failure.message }, requestId: id })
   } finally {
-    console.log(JSON.stringify({ level: 'info', requestId: id, method: request.method, path: request.url, status: response.statusCode, durationMs: Date.now() - startedAt }))
+    const durationMs = Date.now() - startedAt
+    metrics.recordHttp({ method: request.method, pathname, status: response.statusCode, durationMs })
+    if (response.financePlannerAiSource) metrics.recordAi(pathname, response.financePlannerAiSource)
+    if (request.method === 'DELETE' && pathname === '/api/auth/account') metrics.recordAccountDeletion(response.statusCode < 300 ? 'success' : 'failure')
+    console.log(JSON.stringify({ level: 'info', requestId: id, method: request.method, path: pathname, status: response.statusCode, durationMs }))
   }
 })
 
@@ -295,6 +374,7 @@ function shutdown(signal) {
   server.close(async (error) => {
     try {
       if (error) throw error
+      sessionRevocations.close()
       await persistence.close()
       clearTimeout(force)
       console.log(JSON.stringify({ level: 'info', event: 'shutdown_complete' }))
@@ -318,4 +398,14 @@ process.on('unhandledRejection', (error) => {
   shutdown('unhandledRejection')
 })
 
-server.listen(port, host, () => console.log(JSON.stringify({ level: 'info', event: 'server_listening', host, port, persistence: persistence.driver, distributedRateLimiting: Boolean(distributedLimiters?.distributed), bank: bankCapabilities() })))
+server.listen(port, host, () => console.log(JSON.stringify({
+  level: 'info',
+  event: 'server_listening',
+  host,
+  port,
+  version: releaseVersion,
+  commit: releaseCommit,
+  persistence: persistence.driver,
+  distributedRateLimiting: Boolean(distributedLimiters?.distributed),
+  bank: bankCapabilities(),
+})))

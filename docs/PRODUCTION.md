@@ -1,45 +1,50 @@
 # Production operations runbook
 
-This runbook defines the minimum deployment and operating standard for Finance Planner. It is intentionally stricter than the local-development setup.
+This runbook defines the minimum deployment and operating standard for Finance Planner. It is intentionally stricter than local development.
 
 ## 1. Deployment model
 
-The supported baseline is one web container and one connector container on a single trusted host. Place a TLS-terminating reverse proxy or managed load balancer in front of the web service. Keep the connector port bound to loopback and route `/api` traffic internally.
+The supported baseline is one web container, one connector container and PostgreSQL on a trusted host. Place a TLS-terminating reverse proxy or managed load balancer in front of the web service. Keep PostgreSQL private and keep the connector host port bound to loopback.
 
-Do not run multiple connector replicas against the file-backed encrypted store. Horizontal scaling requires a shared transactional database and distributed coordination.
+The connector uses PostgreSQL for encrypted user finance state, auth/passkey data, provider connections, OAuth state, webhook idempotency, session revocation and distributed rate limiting. File-backed persistence is development-only for a public deployment.
 
 ## 2. Required production configuration
 
-Copy `.env.example` to a deployment-specific secret source. For a public deployment:
+Copy `.env.example` into a deployment-specific secret source. A public deployment requires at least:
 
 ```dotenv
 APP_ORIGIN=https://finance.example.com
-AUTH_MODE=<configured-production-mode>
+AUTH_MODE=google
 PUBLIC_DEPLOYMENT=true
+CONNECTOR_STORE_DRIVER=postgres
+TRUST_PROXY=true
 SESSION_SECRET=<independent-random-secret>
 CONNECTOR_MASTER_KEY=<independent-random-secret>
+AUTH_MASTER_KEY=<independent-random-secret>
+METRICS_TOKEN=<independent-random-secret>
+RELEASE_VERSION=<release-version>
+RELEASE_SHA=<exact-git-commit>
 PAYPAL_ENVIRONMENT=live
 ```
 
-Generate each secret independently with at least 256 bits of entropy. Store secrets in the platform secret manager. Never bake them into an image, commit them, or print them in logs.
+Generate every secret independently with at least 256 bits of entropy. Store secrets in the platform secret manager. Never bake them into an image, commit them, or print them in logs.
 
-If a reverse proxy (nginx or otherwise) sits in front of the connector, also set `TRUST_PROXY=true` on the connector so it derives the real client IP from the proxy's `X-Real-IP` header instead of the proxy's own socket address. The Compose stack already sets this, but a manual, non-Compose deployment must set it explicitly. Without it, sign-in, bank-connection, and AI rate limiting collapses every client behind the proxy into a single shared bucket instead of limiting per real client.
-
-`TRUST_PROXY=true` trusts `X-Real-IP` unconditionally — it does not itself verify the request came through nginx. In the bundled Compose stack, the connector's port is also published to the host's loopback interface (`127.0.0.1:${CONNECTOR_PORT:-8787}`, see step 4 below) so the documented health check can reach it directly, which means a process with host-level shell access to the deployment machine can bypass nginx and forge `X-Real-IP` to spoof its rate-limit identity. Restrict host-level access to trusted operators only — the same requirement `SESSION_SECRET`, `CONNECTOR_MASTER_KEY`, and the encrypted store already depend on. If any additional proxy, load balancer, or CDN sits in front of nginx, it must strip or overwrite client-supplied `X-Real-IP`/`X-Forwarded-For` headers before they reach nginx, since nginx passes whatever it receives straight through to the connector.
+`TRUST_PROXY=true` trusts the proxy-provided `X-Real-IP`. The bundled Nginx path overwrites this header, and the connector port is bound to host loopback. Restrict host-level access and ensure every additional CDN or load balancer strips or overwrites client-supplied forwarding headers.
 
 ## 3. Pre-deployment gate
 
 Before every production release:
 
-1. Confirm CI succeeded for the exact commit.
-2. Build images from a clean checkout.
-3. Run production dependency and container vulnerability scans.
-4. Validate the Compose configuration with production environment values.
-5. Back up the connector data volume.
-6. Confirm the restore procedure using a disposable environment.
-7. Verify OAuth callback URLs and provider environments.
-8. Verify HTTPS, security headers, CORS, and authentication behavior.
-9. Record the deployed commit and rollback image tags.
+1. Confirm standard CI, Android CI and production-browser acceptance succeeded for the exact commit.
+2. Run `npm run verify:readiness` and review its external-dependency disclosures.
+3. Build images from a clean checkout and run dependency and container scans.
+4. Validate Compose with production environment values.
+5. Back up PostgreSQL and encryption keys separately.
+6. Restore the backup into a disposable environment and verify representative encrypted rows.
+7. Verify OAuth callbacks, provider environments and webhook secrets.
+8. Verify HTTPS, CSP, CORS, authentication, passkeys and account deletion.
+9. Record release version, commit, image digests and rollback images.
+10. Run manually enforced runtime canaries with the intended Hugging Face and provider credentials.
 
 ## 4. Start and verify
 
@@ -48,68 +53,111 @@ docker compose build --pull
 docker compose up -d
 docker compose ps
 curl --fail http://127.0.0.1:${CONNECTOR_PORT:-8787}/health/ready
+curl --fail http://127.0.0.1:${CONNECTOR_PORT:-8787}/health/bank
 curl --fail http://127.0.0.1:${WEB_PORT:-8080}/healthz
+curl --fail \
+  -H "Authorization: Bearer $METRICS_TOKEN" \
+  http://127.0.0.1:${CONNECTOR_PORT:-8787}/metrics
 ```
 
-The connector is ready only when `/health/ready` returns HTTP 200. Do not route traffic before both service health checks pass.
+Do not route traffic before web and connector readiness succeed. `/health/ready` reports the deployed version and commit, persistence backend, distributed rate limiting, session-revocation mode, observability and bank-production capability.
 
-## 5. Backup and restore
+## 5. Monitoring and alerting
 
-The encrypted store remains sensitive even though it is encrypted. Backups must be access-controlled, integrity-protected, and retained separately from the application host. The encryption key must be backed up independently; losing it makes the store unrecoverable.
+`/metrics` exposes privacy-safe Prometheus metrics after bearer-token authentication. Route labels are normalized and never contain user IDs, query strings, transaction descriptions, account names or credentials.
 
-Create a backup:
+Collect and alert on:
 
-```bash
-bash scripts/backup-connector-data.sh
+- request volume and latency percentiles by normalized route;
+- HTTP 5xx and 429 rates;
+- authentication and account-deletion failures;
+- provider synchronization, consent-expiry and webhook failures;
+- AI hosted/deterministic fallback ratio;
+- retention-job failures;
+- PostgreSQL pool saturation, disk usage and backup age;
+- readiness failures, restart loops and certificate expiry;
+- release version and commit mismatch.
+
+Keep metrics access private. Central logs may contain request IDs, normalized paths, status and duration, but must not contain cookies, tokens, encryption keys, request bodies or full financial records.
+
+## 6. Retention and account deletion
+
+Operational cleanup runs periodically in PostgreSQL. Defaults are:
+
+```dotenv
+RETENTION_INTERVAL_MS=21600000
+WEBHOOK_RETENTION_DAYS=90
+ABANDONED_WEBHOOK_RETENTION_DAYS=7
+SESSION_REVOCATION_RETENTION_DAYS=400
 ```
 
-Restore only during a maintenance window:
+Expired OAuth nonces and rate-limit rows are removed immediately during cleanup. Completed and abandoned webhook rows follow their configured windows. Session-revocation markers remain long enough to cover the maximum session lifetime and incident-response window.
 
-```bash
-bash scripts/restore-connector-data.sh backups/<archive>.tar.gz
-```
+Finance state and learning profiles do not expire automatically. The user can reset finance data separately or permanently delete the account from **Daten & Backup**. Permanent deletion:
 
-After restoration, start the connector and verify `/health/ready`, authentication, and one provider synchronization. Perform a scheduled restore drill at least quarterly.
+- revokes existing sessions first;
+- deletes provider connections and OAuth state;
+- deletes encrypted finance state and budget-learning profiles;
+- removes passkeys and the auth profile;
+- clears the account-bound local vault from the requesting device.
 
-## 6. Monitoring and alerting
+Run a deletion acceptance test in staging and verify no user-bound rows remain. Do not log the user identifier or deleted financial content in the evidence.
 
-Collect container stdout/stderr centrally. Alert on:
+## 7. Backup and restore
 
-- connector readiness failures
-- restart loops
-- HTTP 5xx rate increases
-- authentication failures above the normal baseline
-- rate-limit saturation
-- provider synchronization failures
-- disk usage and backup age
-- certificate expiry
+The PostgreSQL dump is the primary backup. Backups must be access-controlled, checksummed and retained separately from the application host. Encryption keys must be recoverable through a different protected channel; losing them makes encrypted rows unreadable.
 
-Logs must not contain session cookies, provider tokens, encryption keys, full financial records, or request bodies.
+A valid restore drill includes:
 
-## 7. Incident response
+1. successful `pg_dump`;
+2. recorded checksum;
+3. successful `pg_restore --list`;
+4. restore into a disposable database;
+5. migration-version verification;
+6. representative auth, finance, provider and revocation row verification;
+7. application readiness and one authenticated sync.
 
-For a suspected credential or host compromise:
+Perform a documented restore drill at least quarterly.
+
+## 8. Runtime canaries
+
+`.github/workflows/runtime-canaries.yml` runs weekly and can be dispatched with `require_all=true` for release acceptance.
+
+- The Hugging Face canary sends only fixed health-check prompts and validates error rate and p95 latency.
+- The GoCardless canary obtains an application token and lists German institutions; it creates no end-user consent and reads no accounts.
+- The PayPal canary validates OAuth client credentials; it reads no transaction report.
+
+Missing credentials produce explicit skipped evidence unless the manually enforced mode requires all canaries. Never treat a skipped canary as provider certification.
+
+## 9. Incident response
+
+For suspected credential, provider or host compromise:
 
 1. Remove public traffic.
-2. Preserve relevant logs and deployment metadata.
-3. Rotate `SESSION_SECRET`, provider credentials, and affected OAuth applications.
-4. Rotate `CONNECTOR_MASTER_KEY` only through a tested data re-encryption process; replacing it without migration makes existing data unreadable.
-5. Rebuild from a trusted commit and clean host.
-6. Restore a verified backup where appropriate.
-7. Document scope, user impact, and corrective actions.
+2. Preserve logs, metric snapshots and deployment metadata.
+3. Revoke provider credentials and affected OAuth applications.
+4. Revoke active sessions through the durable revocation registry.
+5. Rotate `SESSION_SECRET` and provider secrets.
+6. Rotate encryption keys only through a tested re-encryption process; replacing them directly makes existing data unreadable.
+7. Rebuild from a trusted commit and clean host.
+8. Restore a verified backup where appropriate.
+9. Document scope, user impact, remediation and notification obligations.
 
-## 8. Rollback
+## 10. Rollback
 
-Keep the previous web and connector images available. Application rollback must not silently downgrade the encrypted-store format. Before rollback, verify that the previous version can read the current data format. If compatibility is uncertain, restore the pre-deployment backup in a disposable environment first.
+Keep previous web and connector images available. A rollback must not silently downgrade database or encrypted-payload formats. Verify the prior version against a restored copy of the current database before switching traffic. Record the rollback commit and re-run health, auth, cloud-sync and provider checks.
 
-## 9. Remaining production gaps
+## 11. Remaining external production gaps
 
-The largest architectural gaps are:
+Repository-controlled non-desktop readiness is machine-checked, but these external gates still require independent evidence:
 
-- transactional shared database and migrations
-- distributed rate limiting and multi-instance coordination
-- managed identity/session infrastructure
-- full end-to-end browser and real-device test matrix
-- native iOS, Android, Windows, macOS, and Linux packaging
-- formal threat model, penetration test, and privacy/legal review
-- SLOs, dashboards, paging, and automated disaster-recovery exercises
+- physical Android and iOS device matrices;
+- permanent Android signing, Digital Asset Links and Play publication;
+- live GoCardless certification and real-account reconciliation;
+- PayPal partner approval where third-party accounts are required;
+- production-token AI latency, failure and drift evidence;
+- manual screen-reader, keyboard and contrast review;
+- independent threat model, penetration test and privacy/legal review;
+- managed dashboards, paging and production restore exercises.
+
+See `docs/NON_DESKTOP_READINESS.md` and `docs/PRODUCTION-READINESS-GATES.md` for the scoring and evidence boundary.

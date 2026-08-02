@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-08-01",
+  "currency": "EUR",
+  "minimumCases": 24,
+  "thresholds": {
+    "allocationConservationRate": 1,
+    "deficitSafetyRate": 1,
+    "activeGoalIntegrityRate": 1,
+    "liquidReserveIntegrityRate": 1,
+    "approvalBoundaryRate": 1,
+    "privacyRedactionRate": 1,
+    "feedbackAdaptationRate": 1,
+    "maximumP95LatencyMs": 50
+  },
+  "dimensions": {
+    "monthlyIncomeCents": [0, 120000, 240000, 500000],
+    "monthlyExpenseRatios": [0.35, 0.75, 1, 1.25],
+    "savingsStyles": ["conservative", "balanced", "ambitious"],
+    "goalStates": ["none", "active", "completed"],
+    "liquidityStates": ["none", "partial", "funded"]
+  }
+}

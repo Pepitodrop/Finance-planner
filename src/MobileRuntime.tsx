@@ -210,7 +210,7 @@ export function MobileRuntime() {
         </div>
       )}
       {canInstall && (
-        <div className="mobile-install-card" role="dialog" aria-label="Finance Planner installieren">
+        <section className="mobile-install-card" role="region" aria-label="Finance Planner installieren">
           <div>
             <strong>Finance Planner installieren</strong>
             <p>Wie eine App öffnen, den Vollbildmodus nutzen und die Offline-Hülle verfügbar halten.</p>
@@ -219,10 +219,10 @@ export function MobileRuntime() {
             <button type="button" onClick={dismissInstall} className="mobile-install-card__secondary">Nicht jetzt</button>
             <button type="button" onClick={install} disabled={installing}>{installing ? 'Wird geöffnet …' : 'Installieren'}</button>
           </div>
-        </div>
+        </section>
       )}
       {showIosGuide && (
-        <div className="mobile-install-card" role="dialog" aria-label="Finance Planner auf iPhone oder iPad installieren">
+        <section className="mobile-install-card" role="region" aria-label="Finance Planner auf iPhone oder iPad installieren">
           <div>
             <strong>Finance Planner zum Home-Bildschirm hinzufügen</strong>
             <p>In Safari auf „Teilen“ tippen, dann „Zum Home-Bildschirm“ wählen. Das aktiviert die eigenständige App-Ansicht.</p>
@@ -230,10 +230,10 @@ export function MobileRuntime() {
           <div className="mobile-install-card__actions mobile-install-card__actions--single">
             <button type="button" onClick={dismissInstall} className="mobile-install-card__secondary">Verstanden</button>
           </div>
-        </div>
+        </section>
       )}
       {shouldOfferStorageProtection && (
-        <div className="mobile-install-card" role="dialog" aria-label="Lokal gespeicherte Finanzdaten schützen">
+        <section className="mobile-install-card" role="region" aria-label="Lokal gespeicherte Finanzdaten schützen">
           <div>
             <strong>Lokale Daten vor automatischer Bereinigung schützen</strong>
             <p>Den Browser bitten, den verschlüsselten lokalen Speicher dieser App bei der Gerätebereinigung zu behalten.</p>
@@ -242,7 +242,7 @@ export function MobileRuntime() {
             <button type="button" onClick={dismissStorageProtection} className="mobile-install-card__secondary">Später</button>
             <button type="button" onClick={protectStorage} disabled={protectingStorage}>{protectingStorage ? 'Wird geprüft …' : 'Daten schützen'}</button>
           </div>
-        </div>
+        </section>
       )}
     </div>
   )
