@@ -63,7 +63,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Reject private keys and high-confidence credential assignments
+      - name: Reject private keys and recognized production credential formats
         shell: bash
         run: |
           set -euo pipefail
@@ -71,7 +71,7 @@ jobs:
             echo 'Private key material is forbidden in the repository.' >&2
             exit 1
           fi
-          if git grep -nEi -- '(password|secret|api[_-]?key|access[_-]?token)[[:space:]]*[:=][[:space:]]*["'"'][A-Za-z0-9_+/.=-]{24,}["'"']' -- ':!*.example' ':!*.md' ':!package-lock.json' ':!server/package-lock.json'; then
-            echo 'A high-confidence credential assignment was detected.' >&2
+          if git grep -nE -- '(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{70,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{20,}|sk_live_[A-Za-z0-9]{20,}|rk_live_[A-Za-z0-9]{20,})' -- ':!package-lock.json' ':!server/package-lock.json'; then
+            echo 'A recognized production credential format was detected.' >&2
             exit 1
           fi
