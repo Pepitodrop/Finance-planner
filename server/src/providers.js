@@ -1,3 +1,4 @@
+import { assessBankConnectionHealth, chooseBankSyncBackoff } from './bank-sync-health.js'
 import { normalizeSignedAmount } from './cobol-engine.js'
 
 const GC_BASE = 'https://bankaccountdata.gocardless.com/api/v2'
@@ -91,12 +92,12 @@ export async function jsonFetch(url, options = {}, policy = {}) {
 
       lastError = error
       const providerDelay = retryDelayMs(response.headers.get('retry-after'))
-      await sleep(providerDelay ?? 250 * (2 ** attempt))
+      await sleep(chooseBankSyncBackoff(attempt, providerDelay))
       continue
     } catch (error) {
       lastError = error
       if (error?.name === 'AbortError' && attempt < retries) {
-        await sleep(250 * (2 ** attempt))
+        await sleep(chooseBankSyncBackoff(attempt))
         continue
       }
       break
@@ -130,6 +131,23 @@ function tokenIsUsable(token, now = Date.now()) {
   if (!token?.access) return false
   if (!token.accessExpiresAt) return true
   return Date.parse(token.accessExpiresAt) - now >= 120_000
+}
+
+function completedHealth({ completedAt, consentExpiresAt = null, accounts, transactions }) {
+  const externalIds = transactions.map((transaction) => transaction.externalId)
+  const duplicateCount = externalIds.length - new Set(externalIds).size
+  const health = assessBankConnectionHealth({
+    consentExpiresAt,
+    lastSyncedAt: completedAt.toISOString(),
+    consecutiveFailures: 0,
+    accountCount: accounts.length,
+    reconciledAccountCount: accounts.length,
+    transactionCount: transactions.length,
+    pendingTransactionCount: transactions.filter((transaction) => transaction.pending).length,
+    duplicateTransactionCount: duplicateCount,
+  }, completedAt)
+  if (!health.importAllowed) throw new Error(`Provider synchronization blocked by health policy: ${health.reasons.join(',') || health.state}`)
+  return health
 }
 
 export async function gocardlessToken(env) {
@@ -217,12 +235,14 @@ export async function syncGoCardless(credential, env) {
   }
   const reconciliation = { accountCount: accounts.length, transactionCount: transactions.length, dateFrom: window.dateFrom, dateTo: window.dateTo, syncedAt: completedAt.toISOString() }
   validateProviderReconciliation({ accounts, transactions, reconciliation })
+  const health = completedHealth({ completedAt, consentExpiresAt, accounts, transactions })
   return {
     accounts,
     transactions,
-    credential: { ...credential, token, lastSyncedAt: completedAt.toISOString(), consentExpiresAt },
-    reconciliation,
+    credential: { ...credential, token, lastSyncedAt: completedAt.toISOString(), consentExpiresAt, health },
+    reconciliation: { ...reconciliation, health },
     consentExpiresAt,
+    health,
   }
 }
 
@@ -278,5 +298,12 @@ export async function syncPayPal(credential, env) {
   const accounts = [{ externalId: 'paypal-eur', name: 'PayPal EUR', type: 'cash', balanceCents, currency: 'EUR' }]
   const reconciliation = { pageCount: totalPages, transactionCount: transactions.length, dateFrom: window.dateFrom, dateTo: window.dateTo, syncedAt: completedAt.toISOString() }
   validateProviderReconciliation({ accounts, transactions, reconciliation })
-  return { accounts, transactions, credential: { ...credential, lastSyncedAt: completedAt.toISOString() }, reconciliation }
+  const health = completedHealth({ completedAt, accounts, transactions })
+  return {
+    accounts,
+    transactions,
+    credential: { ...credential, lastSyncedAt: completedAt.toISOString(), health },
+    reconciliation: { ...reconciliation, health },
+    health,
+  }
 }

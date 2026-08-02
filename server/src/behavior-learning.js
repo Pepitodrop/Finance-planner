@@ -1,4 +1,5 @@
 import { HttpError } from './runtime-security.js'
+import { calibrateIntelligenceQuality, robustWeeklyTrend } from './intelligence-quality.js'
 
 const MAX_EVENTS = 5000
 const DAY_MS = 86_400_000
@@ -92,11 +93,24 @@ export function learnBehaviorPatterns(events, now = new Date()) {
   const coverage = clamp(activeWeeks / 12, 0, 1)
   const sampleScore = clamp(recent.length / 80, 0, 1)
   const stabilityScore = predictedNextMonthExpenseCents ? clamp(1 - (uncertaintyCents / Math.max(1, predictedNextMonthExpenseCents)), 0, 1) : 0
-  const confidence = Number(clamp(0.15 + 0.35 * coverage + 0.3 * sampleScore + 0.2 * stabilityScore, 0.15, 0.95).toFixed(3))
-  const insufficientData = recent.length < MIN_PREDICTION_EVENTS || activeWeeks < MIN_ACTIVE_WEEKS
+  const rawConfidence = Number(clamp(0.15 + 0.35 * coverage + 0.3 * sampleScore + 0.2 * stabilityScore, 0.15, 0.95).toFixed(3))
+  const recurringClassified = expenses.filter((event) => event.recurring).length
+  const recurringCoverage = expenses.length ? clamp((recurringClassified + Math.min(expenses.length - recurringClassified, 12)) / Math.max(1, expenses.length), 0, 1) : 0
+  const latestEventAt = recent.reduce((latest, event) => !latest || event.date > latest ? event.date : latest, null)?.toISOString()
+  const calibration = calibrateIntelligenceQuality({
+    baseConfidence: rawConfidence,
+    coverage,
+    sampleScore,
+    stabilityScore,
+    recurringCoverage,
+    providerCompleteness: 1,
+    latestEventAt,
+    now,
+  })
+  const insufficientData = recent.length < MIN_PREDICTION_EVENTS || activeWeeks < MIN_ACTIVE_WEEKS || calibration.abstain
   const signals = []
 
-  if (insufficientData) signals.push({ type: 'insufficient-data', severity: 'info', explanation: 'Not enough recent history exists for a reliable forward-looking estimate.', requiresApproval: false })
+  if (insufficientData) signals.push({ type: 'insufficient-data', severity: 'info', explanation: 'Not enough recent and reliable history exists for a forward-looking estimate.', requiresApproval: false })
   if (!insufficientData && predictedFreeCashCents < 0) signals.push({ type: 'cashflow', severity: 'warning', explanation: 'Recent spending patterns predict a negative monthly free cash flow.', requiresApproval: true })
   if (weeklyValues.length >= 6 && mad > 0) {
     const newest = weeklyValues.at(-1)
@@ -107,14 +121,15 @@ export function learnBehaviorPatterns(events, now = new Date()) {
 
   const recurringExpenseCents = expenses.filter((event) => event.recurring).reduce((sum, event) => sum + event.amountCents, 0)
   const totalExpenseCents = expenses.reduce((sum, event) => sum + event.amountCents, 0)
+  const trend = robustWeeklyTrend(weeklyValues)
 
   return {
     generatedAt: now.toISOString(),
     sampleSize: recent.length,
     horizonDays: 30,
-    confidence,
+    confidence: calibration.calibratedConfidence,
     abstained: insufficientData,
-    abstentionReason: insufficientData ? 'insufficient_recent_history' : null,
+    abstentionReason: insufficientData ? calibration.reasons[0] || 'insufficient_recent_history' : null,
     predictions: insufficientData ? null : {
       nextMonthExpenseCents: predictedNextMonthExpenseCents,
       nextMonthIncomeCents: averageMonthlyIncomeCents,
@@ -129,10 +144,20 @@ export function learnBehaviorPatterns(events, now = new Date()) {
       highestSpendWeekday: weekday?.averageCents ? weekday.day : null,
       recurringExpenseShare: totalExpenseCents ? recurringExpenseCents / totalExpenseCents : 0,
       weeklyVolatilityCents: volatilityCents,
+      weeklyTrend: trend,
       activeWeeks,
     },
     signals,
-    quality: { coverage, sampleScore, stabilityScore, lookbackDays: LOOKBACK_DAYS, method: 'recency-weighted-robust-forecast-v2' },
+    quality: {
+      coverage,
+      sampleScore,
+      stabilityScore,
+      recurringCoverage,
+      rawConfidence,
+      calibration,
+      lookbackDays: LOOKBACK_DAYS,
+      method: 'recency-weighted-robust-forecast-v3-calibrated',
+    },
     privacy: { persistedByModule: false, rawDescriptionsUsed: false, userApprovalRequired: true, trustedServerHistoryRequired: true },
   }
 }
