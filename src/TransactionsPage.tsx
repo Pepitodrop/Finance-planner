@@ -26,10 +26,12 @@ export function TransactionsPage({ transactions, accounts, onEdit, onDelete }: T
   const [amountFilter, setAmountFilter] = useState('all')
   const [dateFilter, setDateFilter] = useState<DateFilter>('month')
   const [filtersOpen, setFiltersOpen] = useState(true)
+  const [optionsOpen, setOptionsOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [page, setPage] = useState(1)
   const filterPanelRef = useRef<HTMLElement>(null)
   const firstFilterRef = useRef<HTMLSelectElement>(null)
+  const optionsRef = useRef<HTMLDivElement>(null)
 
   const accountById = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts])
   const categoryOptions = useMemo(() => [...new Set(transactions.map((transaction) => transaction.category))].sort((a, b) => a.localeCompare(b)), [transactions])
@@ -68,6 +70,20 @@ export function TransactionsPage({ transactions, accounts, onEdit, onDelete }: T
   }, [accountById, accountFilter, amountFilter, categoryFilter, dateFilter, searchQuery, transactions, typeFilter])
 
   useEffect(() => setPage(1), [typeFilter, searchQuery, categoryFilter, accountFilter, amountFilter, dateFilter])
+  useEffect(() => {
+    if (!optionsOpen) return
+    const closeOptions = (event: MouseEvent | KeyboardEvent) => {
+      if (event instanceof KeyboardEvent && event.key === 'Escape') setOptionsOpen(false)
+      if (event instanceof MouseEvent && !optionsRef.current?.contains(event.target as Node)) setOptionsOpen(false)
+    }
+    document.addEventListener('mousedown', closeOptions)
+    document.addEventListener('keydown', closeOptions)
+    return () => {
+      document.removeEventListener('mousedown', closeOptions)
+      document.removeEventListener('keydown', closeOptions)
+    }
+  }, [optionsOpen])
+
   const pageCount = Math.max(1, Math.ceil(filteredTransactions.length / PAGE_SIZE))
   useEffect(() => setPage((current) => Math.min(current, pageCount)), [pageCount])
   const pageTransactions = filteredTransactions.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
@@ -138,7 +154,14 @@ export function TransactionsPage({ transactions, accounts, onEdit, onDelete }: T
         <div className="transactions-toolbar-actions">
           <label className="transactions-search"><Search size={17}/><span className="sr-only">Transaktionen durchsuchen</span><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Transaktionen durchsuchen …"/></label>
           <button type="button" className={`transactions-filter-trigger ${filtersOpen ? 'active' : ''}`} aria-expanded={filtersOpen} aria-controls="transaction-filter-panel" onClick={toggleFilters}><Filter size={16}/> Filter</button>
-          <button type="button" className="transactions-more" aria-label="Weitere Tabellenoptionen"><MoreHorizontal size={18}/></button>
+          <div className="transactions-options" ref={optionsRef}>
+            <button type="button" className="transactions-more" aria-label="Weitere Tabellenoptionen" aria-haspopup="menu" aria-expanded={optionsOpen} aria-controls="transaction-options-menu" onClick={() => setOptionsOpen((current) => !current)}><MoreHorizontal size={18}/></button>
+            {optionsOpen && <div id="transaction-options-menu" className="transactions-options-menu" role="menu">
+              <button type="button" role="menuitem" disabled={pageIds.length === 0} onClick={() => { togglePageSelection(); setOptionsOpen(false) }}>{allPageSelected ? 'Sichtbare Auswahl aufheben' : 'Sichtbare auswählen'}</button>
+              <button type="button" role="menuitem" disabled={selectedIds.size === 0} onClick={() => { setSelectedIds(new Set()); setOptionsOpen(false) }}>Gesamte Auswahl aufheben</button>
+              <button type="button" role="menuitem" onClick={() => { resetFilters(); setOptionsOpen(false) }}>Filter zurücksetzen</button>
+            </div>}
+          </div>
         </div>
       </div>
 
