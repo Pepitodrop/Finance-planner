@@ -20,36 +20,57 @@
   outline-offset: 3px;
 }
 
+.platform-action-bar {
+  position: fixed;
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  z-index: 9998;
+  display: flex;
+  gap: 0.65rem;
+  padding: 0.7rem;
+  border: 1px solid rgb(255 255 255 / 0.16);
+  border-radius: 1rem;
+  background: rgb(7 17 31 / 0.94);
+  box-shadow: 0 1rem 3rem rgb(0 0 0 / 0.32);
+  backdrop-filter: blur(18px);
+}
+
+.platform-action-bar button {
+  min-height: 44px;
+  padding: 0.65rem 0.9rem;
+  border: 1px solid rgb(255 255 255 / 0.18);
+  border-radius: 0.75rem;
+  background: rgb(124 92 255 / 0.22);
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 :focus-visible {
   outline: 3px solid Highlight;
   outline-offset: 3px;
 }
 
-main:focus {
-  outline: none;
-}
+main:focus { outline: none; }
+button, a, input, select, textarea { touch-action: manipulation; }
 
-button,
-a,
-input,
-select,
-textarea {
-  touch-action: manipulation;
+@media (max-width: 640px) {
+  .platform-action-bar {
+    right: max(0.65rem, env(safe-area-inset-right));
+    bottom: calc(max(0.65rem, env(safe-area-inset-bottom)) + 4.5rem);
+    left: max(0.65rem, env(safe-area-inset-left));
+    justify-content: stretch;
+  }
+  .platform-action-bar button { flex: 1; }
 }
 
 @media (pointer: coarse) {
-  button,
-  a,
-  input,
-  select {
-    min-height: 44px;
-  }
+  button, a, input, select { min-height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  *, *::before, *::after {
     scroll-behavior: auto !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
@@ -58,10 +79,7 @@ textarea {
 }
 
 @media (forced-colors: active) {
-  .active,
-  .primary,
-  .pill,
-  .mobile-bottom-nav button {
+  .active, .primary, .pill, .mobile-bottom-nav button, .platform-action-bar, .platform-action-bar button {
     border: 1px solid ButtonText;
   }
 }
