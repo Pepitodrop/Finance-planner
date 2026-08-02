@@ -7,7 +7,9 @@
     "start": "node src/server.js",
     "test": "node --test",
     "test:ai-evaluation": "node --test test/ai-evaluation.test.js",
-    "migrate": "node src/migrate.js"
+    "migrate": "node src/migrate.js",
+    "database:reset-demo": "node scripts/reset-and-seed-demo.mjs",
+    "database:reset-demo:dry-run": "node scripts/reset-and-seed-demo.mjs --dry-run"
   },
   "dependencies": {
     "@simplewebauthn/server": "^13.1.2",
