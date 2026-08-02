@@ -53,8 +53,10 @@ assert.match(webhookSecurity, /webhook_processing/, 'In-flight webhook collision
 assert.match(database, /completed_at/, 'Durable webhook completion state must be queryable')
 assert.match(database, /lease_until/, 'Active webhook leases must be queryable')
 assert.match(webhookSecurity, /postgres_persistence_required/, 'Public production deployments must require durable database storage')
-assert.match(panel, /Verbindungszustand/, 'Connection health must be visible')
+assert.match(panel, /Meine Verbindungen/, 'Connection health and active connections must be visible')
 assert.match(panel, /Zustimmung/, 'Consent expiry must be shown to the user')
-assert.match(panel, /Provider-Tokens wurden serverseitig entfernt/, 'Disconnect semantics must be explicit')
+assert.match(panel, /Bereits importierte Buchungen bleiben erhalten/, 'Disconnect data-retention semantics must be explicit')
+assert.match(panel, /Kein Passwort bei uns/, 'The guided setup must explain credential isolation')
+assert.match(panel, /Bankkonto verbinden/, 'The guided setup must expose a clear primary action')
 
 console.log('Mobile and bank production gate passed.')
