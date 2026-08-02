@@ -25,7 +25,7 @@ test('abstains when history is too sparse for a reliable prediction', () => {
   ]
   const result = learnBehaviorPatterns(events, new Date('2026-07-28T00:00:00Z'))
   assert.equal(result.abstained, true)
-  assert.equal(result.abstentionReason, 'insufficient_recent_history')
+  assert.equal(result.abstentionReason, 'insufficient_history_coverage')
   assert.equal(result.predictions, null)
   assert.ok(result.signals.some((signal) => signal.type === 'insufficient-data'))
 })
@@ -53,10 +53,11 @@ test('learns calibrated patterns, ranges and amount-weighted recurring share', (
   assert.ok(result.predictions.expenseRangeCents.low <= result.predictions.nextMonthExpenseCents)
   assert.ok(result.predictions.expenseRangeCents.high >= result.predictions.nextMonthExpenseCents)
   assert.ok(result.patterns.recurringExpenseShare > 0.8)
-  assert.equal(result.quality.method, 'recency-weighted-robust-forecast-v2')
+  assert.equal(result.quality.method, 'recency-weighted-robust-forecast-v3-calibrated')
+  assert.equal(result.quality.calibration.policyVersion, 'intelligence-calibration-v3')
 })
 
-test('flags a robust spending anomaly without using descriptions', () => {
+test('flags a robust spending anomaly even when forecast calibration abstains', () => {
   const events = []
   for (let week = 0; week < 8; week += 1) {
     events.push({ date: new Date(Date.UTC(2026, 5, 1 + week * 7)).toISOString(), amountCents: week === 7 ? 300000 : 20000 + (week % 3) * 500, type: 'expense', categoryRank: 1, recurring: false })
@@ -64,8 +65,10 @@ test('flags a robust spending anomaly without using descriptions', () => {
   events.push({ date: '2026-06-01', amountCents: 250000, type: 'income', categoryRank: 0, recurring: true })
   events.push({ date: '2026-07-01', amountCents: 250000, type: 'income', categoryRank: 0, recurring: true })
   const result = learnBehaviorPatterns(events, new Date('2026-07-28T00:00:00Z'))
-  assert.equal(result.abstained, false)
+  assert.equal(result.abstained, true)
+  assert.equal(result.predictions, null)
   assert.ok(result.signals.some((signal) => signal.type === 'anomaly'))
+  assert.ok(result.signals.some((signal) => signal.type === 'insufficient-data'))
 })
 
 test('rejects text, excessive histories, and future-dated events', () => {
