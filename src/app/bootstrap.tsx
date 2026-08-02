@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from '../App'
 import { AuthGate } from '../AuthGate'
+import { AutomaticTransactionAnalysis } from '../AutomaticTransactionAnalysis'
 import { ErrorBoundary } from '../ErrorBoundary'
 import { FrontendExperience } from '../FrontendExperience'
 import { MobileConnectivityStatus } from '../MobileConnectivityStatus'
@@ -25,6 +26,7 @@ import '../mobile-enhancements.css'
 import '../mobile-experience.css'
 import '../web-mobile-hardening.css'
 import '../frontend-experience.css'
+import '../automatic-analysis.css'
 import '../production-readiness.css'
 import '../auth.css'
 import '../features/sync/cloud-sync.css'
@@ -39,7 +41,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <MobileConnectivityStatus />
       <MobileEnhancements />
       <MobileExperience />
-      <AuthGate>{(user) => <VaultGate key={user.id} userId={user.id}><><App userId={user.id} /><CloudSyncStatus /></></VaultGate>}</AuthGate>
+      <AuthGate>{(user) => <VaultGate key={user.id} userId={user.id}><><App userId={user.id} /><CloudSyncStatus /><AutomaticTransactionAnalysis /></></VaultGate>}</AuthGate>
     </ErrorBoundary>
   </React.StrictMode>,
 )
