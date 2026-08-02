@@ -2,6 +2,10 @@ import { HttpError } from './runtime-security.js'
 
 const MAX_EVENTS = 5000
 const DAY_MS = 86_400_000
+const WEEK_MS = 7 * DAY_MS
+const LOOKBACK_DAYS = 180
+const MIN_PREDICTION_EVENTS = 8
+const MIN_ACTIVE_WEEKS = 4
 
 function integer(value, field, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
   if (!Number.isSafeInteger(value) || value < min || value > max) throw new HttpError(400, 'invalid_behavior_history', `${field} is invalid.`)
@@ -32,50 +36,103 @@ export function validateBehaviorHistory(value, now = new Date()) {
   })
 }
 
-function mean(values) {
-  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
+function mean(values) { return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0 }
+function median(values) {
+  if (!values.length) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2
 }
-
-function standardDeviation(values, average) {
+function standardDeviation(values, average = mean(values)) {
   if (values.length < 2) return 0
   return Math.sqrt(values.reduce((sum, value) => sum + ((value - average) ** 2), 0) / values.length)
 }
+function clamp(value, min, max) { return Math.max(min, Math.min(max, value)) }
+function weightedMean(items) {
+  const weight = items.reduce((sum, item) => sum + item.weight, 0)
+  return weight ? items.reduce((sum, item) => sum + item.value * item.weight, 0) / weight : 0
+}
+function monthKey(date) { return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}` }
 
 export function learnBehaviorPatterns(events, now = new Date()) {
   const history = validateBehaviorHistory(events, now)
-  const cutoff = now.getTime() - (120 * DAY_MS)
+  const cutoff = now.getTime() - (LOOKBACK_DAYS * DAY_MS)
   const recent = history.filter((event) => event.date.getTime() >= cutoff)
   const expenses = recent.filter((event) => event.type === 'expense')
   const incomes = recent.filter((event) => event.type === 'income')
   const weeklyExpense = new Map()
+  const monthlyIncome = new Map()
   const weekdayExpense = Array.from({ length: 7 }, () => [])
   const categoryTotals = new Map()
 
   for (const event of expenses) {
-    const week = Math.floor(event.date.getTime() / (7 * DAY_MS))
+    const week = Math.floor(event.date.getTime() / WEEK_MS)
     weeklyExpense.set(week, (weeklyExpense.get(week) ?? 0) + event.amountCents)
     weekdayExpense[event.date.getUTCDay()].push(event.amountCents)
     categoryTotals.set(event.categoryRank, (categoryTotals.get(event.categoryRank) ?? 0) + event.amountCents)
   }
+  for (const event of incomes) monthlyIncome.set(monthKey(event.date), (monthlyIncome.get(monthKey(event.date)) ?? 0) + event.amountCents)
 
-  const weeklyValues = [...weeklyExpense.values()]
-  const averageWeeklyExpenseCents = Math.round(mean(weeklyValues))
-  const volatilityCents = Math.round(standardDeviation(weeklyValues, averageWeeklyExpenseCents))
-  const averageMonthlyIncomeCents = Math.round(mean(incomes.map((event) => event.amountCents)) * Math.max(1, incomes.length / 4))
+  const weeklyEntries = [...weeklyExpense.entries()].sort((a, b) => a[0] - b[0])
+  const weeklyValues = weeklyEntries.map(([, value]) => value)
+  const recentWeightedWeeks = weeklyEntries.map(([week, value], index) => ({ value, weight: 1 + index / Math.max(1, weeklyEntries.length - 1) }))
+  const averageWeeklyExpenseCents = Math.round(weightedMean(recentWeightedWeeks))
+  const volatilityCents = Math.round(standardDeviation(weeklyValues))
+  const medianWeekly = median(weeklyValues)
+  const mad = median(weeklyValues.map((value) => Math.abs(value - medianWeekly)))
+  const monthlyIncomeValues = [...monthlyIncome.values()]
+  const averageMonthlyIncomeCents = Math.round(mean(monthlyIncomeValues))
   const predictedNextMonthExpenseCents = Math.round(averageWeeklyExpenseCents * 4.345)
   const predictedFreeCashCents = averageMonthlyIncomeCents - predictedNextMonthExpenseCents
+  const uncertaintyCents = Math.round(Math.max(volatilityCents * 4.345, predictedNextMonthExpenseCents * 0.08))
   const strongestCategory = [...categoryTotals.entries()].sort((a, b) => b[1] - a[1])[0]
   const weekday = weekdayExpense.map((values, day) => ({ day, averageCents: Math.round(mean(values)) })).sort((a, b) => b.averageCents - a.averageCents)[0]
-  const confidence = Math.max(0.2, Math.min(0.92, recent.length / 100))
+
+  const activeWeeks = weeklyValues.length
+  const coverage = clamp(activeWeeks / 12, 0, 1)
+  const sampleScore = clamp(recent.length / 80, 0, 1)
+  const stabilityScore = predictedNextMonthExpenseCents ? clamp(1 - (uncertaintyCents / Math.max(1, predictedNextMonthExpenseCents)), 0, 1) : 0
+  const confidence = Number(clamp(0.15 + 0.35 * coverage + 0.3 * sampleScore + 0.2 * stabilityScore, 0.15, 0.95).toFixed(3))
+  const insufficientData = recent.length < MIN_PREDICTION_EVENTS || activeWeeks < MIN_ACTIVE_WEEKS
   const signals = []
-  if (predictedFreeCashCents < 0) signals.push({ type: 'cashflow', severity: 'warning', explanation: 'Learned recent spending patterns predict a negative monthly free cash flow.', requiresApproval: true })
-  if (volatilityCents > averageWeeklyExpenseCents * 0.5) signals.push({ type: 'anomaly', severity: 'info', explanation: 'Weekly spending varies strongly, so predictions should be treated cautiously.', requiresApproval: true })
+
+  if (insufficientData) signals.push({ type: 'insufficient-data', severity: 'info', explanation: 'Not enough recent history exists for a reliable forward-looking estimate.', requiresApproval: false })
+  if (!insufficientData && predictedFreeCashCents < 0) signals.push({ type: 'cashflow', severity: 'warning', explanation: 'Recent spending patterns predict a negative monthly free cash flow.', requiresApproval: true })
+  if (weeklyValues.length >= 6 && mad > 0) {
+    const newest = weeklyValues.at(-1)
+    const robustZ = Math.abs(newest - medianWeekly) / (1.4826 * mad)
+    if (robustZ >= 3.5) signals.push({ type: 'anomaly', severity: 'warning', explanation: 'The latest weekly spending is a statistically unusual deviation from the recent pattern.', requiresApproval: true })
+  }
+  if (volatilityCents > averageWeeklyExpenseCents * 0.5) signals.push({ type: 'volatility', severity: 'info', explanation: 'Weekly spending varies strongly, widening the forecast range.', requiresApproval: false })
+
+  const recurringExpenseCents = expenses.filter((event) => event.recurring).reduce((sum, event) => sum + event.amountCents, 0)
+  const totalExpenseCents = expenses.reduce((sum, event) => sum + event.amountCents, 0)
 
   return {
-    generatedAt: now.toISOString(), sampleSize: recent.length, horizonDays: 30, confidence,
-    predictions: { nextMonthExpenseCents: predictedNextMonthExpenseCents, nextMonthIncomeCents: averageMonthlyIncomeCents, freeCashCents: predictedFreeCashCents },
-    patterns: { strongestCategoryRank: strongestCategory?.[0] ?? null, highestSpendWeekday: weekday?.averageCents ? weekday.day : null, recurringExpenseShare: expenses.length ? expenses.filter((event) => event.recurring).length / expenses.length : 0, weeklyVolatilityCents: volatilityCents },
+    generatedAt: now.toISOString(),
+    sampleSize: recent.length,
+    horizonDays: 30,
+    confidence,
+    abstained: insufficientData,
+    abstentionReason: insufficientData ? 'insufficient_recent_history' : null,
+    predictions: insufficientData ? null : {
+      nextMonthExpenseCents: predictedNextMonthExpenseCents,
+      nextMonthIncomeCents: averageMonthlyIncomeCents,
+      freeCashCents: predictedFreeCashCents,
+      expenseRangeCents: {
+        low: Math.max(0, predictedNextMonthExpenseCents - uncertaintyCents),
+        high: predictedNextMonthExpenseCents + uncertaintyCents,
+      },
+    },
+    patterns: {
+      strongestCategoryRank: strongestCategory?.[0] ?? null,
+      highestSpendWeekday: weekday?.averageCents ? weekday.day : null,
+      recurringExpenseShare: totalExpenseCents ? recurringExpenseCents / totalExpenseCents : 0,
+      weeklyVolatilityCents: volatilityCents,
+      activeWeeks,
+    },
     signals,
+    quality: { coverage, sampleScore, stabilityScore, lookbackDays: LOOKBACK_DAYS, method: 'recency-weighted-robust-forecast-v2' },
     privacy: { persistedByModule: false, rawDescriptionsUsed: false, userApprovalRequired: true, trustedServerHistoryRequired: true },
   }
 }
