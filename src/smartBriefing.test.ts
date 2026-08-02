@@ -28,4 +28,30 @@ describe('createSmartBriefing', () => {
     expect(briefing.length).toBeLessThanOrEqual(4)
     expect(briefing.every((item, index) => index === 0 || briefing[index - 1]!.priority >= item.priority)).toBe(true)
   })
+
+  it('includes income booked on the first day of the current month', () => {
+    const productionRegressionState: AppState = {
+      accounts: [{ id: 'checking', name: 'Girokonto', type: 'checking', balanceCents: 695950, currency: 'EUR' }],
+      goals: [],
+      transactions: [
+        { id: 'salary', accountId: 'checking', description: 'Gehalt', category: 'Einkommen', type: 'income', amountCents: 185000, date: '2026-07-01', recurring: true },
+        { id: 'job', accountId: 'checking', description: 'Werkstudentenjob', category: 'Einkommen', type: 'income', amountCents: 62000, date: '2026-07-15', recurring: true },
+        { id: 'rent', accountId: 'checking', description: 'Warmmiete', category: 'Wohnen', type: 'expense', amountCents: 72000, date: '2026-07-03', recurring: true },
+        { id: 'ticket', accountId: 'checking', description: 'Deutschlandticket', category: 'Mobilität', type: 'expense', amountCents: 5800, date: '2026-07-12', recurring: true },
+        { id: 'gym', accountId: 'checking', description: 'Fitnessstudio', category: 'Verträge', type: 'expense', amountCents: 2990, date: '2026-07-10', recurring: true },
+        { id: 'market', accountId: 'checking', description: 'Supermarkt', category: 'Lebensmittel', type: 'expense', amountCents: 6840, date: '2026-07-08' },
+        { id: 'restaurant', accountId: 'checking', description: 'Restaurant', category: 'Freizeit', type: 'expense', amountCents: 4200, date: '2026-07-18' },
+        { id: 'game', accountId: 'checking', description: 'Minecraft', category: 'Game', type: 'expense', amountCents: 10000, date: '2026-07-29' },
+        { id: 'rewe', accountId: 'checking', description: 'REWE', category: 'Lebensmittel', type: 'expense', amountCents: 9000, date: '2026-07-30' },
+      ],
+    }
+
+    const briefing = createSmartBriefing(productionRegressionState, new Date('2026-07-31T19:40:00+02:00'))
+
+    expect(briefing).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'savings-rate', title: 'Sparquote 55 %', severity: 'positive' }),
+      expect.objectContaining({ id: 'cash-runway', title: '6,3 Monate Reichweite', severity: 'positive' }),
+    ]))
+    expect(briefing.some((item) => item.id === 'recurring-load')).toBe(false)
+  })
 })

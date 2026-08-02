@@ -12,14 +12,29 @@ export interface SmartBriefingItem {
 
 const DAY = 86_400_000
 const sum = (items: Transaction[], type: Transaction['type']) => items.filter((item) => item.type === type).reduce((total, item) => total + item.amountCents, 0)
+const timestamp = (value: string) => new Date(`${value}T12:00:00`).getTime()
+
+function monthToDateWindows(now: Date) {
+  const year = now.getFullYear()
+  const month = now.getMonth()
+  const day = now.getDate()
+  const previousMonth = new Date(year, month - 1, 1)
+  const previousMonthDays = new Date(year, month, 0).getDate()
+  const previousEndDay = Math.min(day, previousMonthDays)
+
+  return {
+    currentStart: new Date(year, month, 1).getTime(),
+    currentEnd: new Date(year, month, day, 23, 59, 59, 999).getTime(),
+    previousStart: previousMonth.getTime(),
+    previousEnd: new Date(previousMonth.getFullYear(), previousMonth.getMonth(), previousEndDay, 23, 59, 59, 999).getTime(),
+  }
+}
 
 export function createSmartBriefing(state: AppState, now = new Date()): SmartBriefingItem[] {
   const end = now.getTime()
-  const currentStart = end - 30 * DAY
-  const previousStart = end - 60 * DAY
-  const timestamp = (value: string) => new Date(`${value}T12:00:00`).getTime()
-  const current = state.transactions.filter((item) => { const date = timestamp(item.date); return date >= currentStart && date <= end })
-  const previous = state.transactions.filter((item) => { const date = timestamp(item.date); return date >= previousStart && date < currentStart })
+  const { currentStart, currentEnd, previousStart, previousEnd } = monthToDateWindows(now)
+  const current = state.transactions.filter((item) => { const date = timestamp(item.date); return date >= currentStart && date <= currentEnd })
+  const previous = state.transactions.filter((item) => { const date = timestamp(item.date); return date >= previousStart && date <= previousEnd })
   const currentExpenses = sum(current, 'expense')
   const previousExpenses = sum(previous, 'expense')
   const currentIncome = sum(current, 'income')
@@ -32,7 +47,7 @@ export function createSmartBriefing(state: AppState, now = new Date()): SmartBri
     if (Math.abs(change) >= 10) items.push({
       id: 'spending-trend',
       title: change > 0 ? 'Ausgaben steigen' : 'Ausgaben sinken',
-      detail: `Deine Ausgaben liegen in den letzten 30 Tagen ${Math.abs(change)} % ${change > 0 ? 'über' : 'unter'} dem vorherigen Zeitraum.`,
+      detail: `Deine Ausgaben liegen im laufenden Monat bis heute ${Math.abs(change)} % ${change > 0 ? 'über' : 'unter'} dem gleichen Zeitraum des Vormonats.`,
       severity: change > 0 ? 'attention' : 'positive',
       priority: change > 0 ? 95 : 70,
     })
@@ -52,7 +67,7 @@ export function createSmartBriefing(state: AppState, now = new Date()): SmartBri
   if (currentIncome > 0 && recurring > currentIncome * 0.35) items.push({
     id: 'recurring-load',
     title: 'Hohe Fixkostenquote',
-    detail: `${Math.round((recurring / currentIncome) * 100)} % deiner letzten Einnahmen sind durch wiederkehrende Ausgaben gebunden.`,
+    detail: `${Math.round((recurring / currentIncome) * 100)} % deiner Einnahmen im laufenden Monat sind durch wiederkehrende Ausgaben gebunden.`,
     severity: 'attention',
     priority: 90,
   })
