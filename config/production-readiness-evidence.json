@@ -8,7 +8,7 @@
     "modelLicensesAndRevisions": { "status": "pending", "evidence": ["config/ai-model-lock.json"] },
     "aiEvaluationAndDrift": { "status": "partial", "evidence": ["ai/evaluation/transaction-categories.json", "scripts/verify-ai-evaluation.mjs"] },
     "bankProviderCertification": { "status": "pending", "evidence": [] },
-    "playwrightAndAccessibility": { "status": "pending", "evidence": [] },
+    "playwrightAndAccessibility": { "status": "partial", "evidence": ["src/appAccessibility.test.tsx"] },
     "physicalAndroidValidation": { "status": "partial", "evidence": ["android/app/src/main/AndroidManifest.xml", ".github/workflows/android.yml", "scripts/verify-android-app.mjs", "docs/ANDROID.md"] },
     "physicalIosValidation": { "status": "pending", "evidence": [] },
     "signedLinuxRelease": { "status": "pending", "evidence": [] },
