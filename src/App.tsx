@@ -35,11 +35,11 @@ import type { AppState, Transaction, TransactionType } from './types'
 import { validateTransactionInput } from './validation'
 
 type Tab = 'dashboard' | 'transactions' | 'goals' | 'recurring' | 'connections' | 'ai' | 'assistant' | 'receipt' | 'data'
-interface AppProps { userId: string }
+interface AppProps { userId: string; userName?: string }
 
 const CATEGORY_COLORS = ['#5878ff', '#5fe0a0', '#ff9f5b', '#ff8b96', '#7dd3fc', '#c084fc', '#f4d35e', '#4dd0c4']
 
-function App({ userId }: AppProps) {
+function App({ userId, userName }: AppProps) {
   const [state, setState] = useState<AppState>(() => loadState())
   const [tab, setTab] = useState<Tab>('dashboard')
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -68,6 +68,7 @@ function App({ userId }: AppProps) {
   )
   const net = totals.incomeCents - totals.expenseCents
   const monthLabel = new Intl.DateTimeFormat('de-DE', { month: 'long' }).format(new Date())
+  const greetingName = userName?.trim().split(/\s+/)[0] || 'there'
 
   const openNewTransaction = () => {
     setEditing(null)
@@ -197,7 +198,7 @@ function App({ userId }: AppProps) {
       <header className={`topbar ${tab === 'dashboard' ? 'dashboard-topbar' : ''}`}>
         <div>
           {tab === 'dashboard' ? <>
-            <h1>Good evening, Luis <span aria-hidden="true">👋</span></h1>
+            <h1>Good evening, {greetingName} <span aria-hidden="true">👋</span></h1>
             <p className="dashboard-subtitle">Here&apos;s what&apos;s happening with your finances today.</p>
           </> : <>
             <p className="eyebrow">Persönliche Finanzen</p>
