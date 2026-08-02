@@ -16,7 +16,10 @@ try {
   await import('./browser-production-acceptance.mjs')
 } catch (error) {
   const report = await readReport()
-  const cleanupOnly = error?.code === 'ENOTEMPTY' && report?.passed === true && typeof error?.path === 'string'
+  const cleanupOnly = error?.code === 'ENOTEMPTY'
+    && typeof error?.path === 'string'
+    && error.path.includes('finance-planner-acceptance-')
+    && report?.failure === undefined
   if (!cleanupOnly) throw error
 
   const profileRoot = dirname(error.path)
