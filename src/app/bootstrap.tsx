@@ -10,7 +10,6 @@ import { MobileEnhancements } from '../MobileEnhancements'
 import { MobileExperience } from '../MobileExperience'
 import { MobileProductionRuntime } from '../MobileProductionRuntime'
 import { MobileRuntime } from '../MobileRuntime'
-import { NavigationAccessibility } from '../NavigationAccessibility'
 import { VaultGate } from '../VaultGate'
 import { WebMobileHardening } from '../WebMobileHardening'
 import { CloudSyncStatus } from '../features/sync/CloudSyncStatus'
@@ -45,7 +44,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <MobileConnectivityStatus />
       <MobileEnhancements />
       <MobileExperience />
-      <NavigationAccessibility />
       <AuthGate>{(user) => <VaultGate key={user.id} userId={user.id}><><App userId={user.id} userName={user.name} /><CloudSyncStatus /><AutomaticTransactionAnalysis /></></VaultGate>}</AuthGate>
     </ErrorBoundary>
   </React.StrictMode>,
