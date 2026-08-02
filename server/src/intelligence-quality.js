@@ -9,22 +9,26 @@ function finite(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback
 }
 
+function median(values) {
+  if (!values.length) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2
+}
+
 export function robustWeeklyTrend(values) {
   if (!Array.isArray(values) || values.length < 4) {
     return { slopeCentsPerWeek: 0, direction: 'insufficient-data', strength: 0 }
   }
+  const normalized = values.map((value) => finite(value))
   const slopes = []
-  for (let left = 0; left < values.length - 1; left += 1) {
-    for (let right = left + 1; right < values.length; right += 1) {
-      const a = finite(values[left])
-      const b = finite(values[right])
-      slopes.push((b - a) / (right - left))
+  for (let left = 0; left < normalized.length - 1; left += 1) {
+    for (let right = left + 1; right < normalized.length; right += 1) {
+      slopes.push((normalized[right] - normalized[left]) / (right - left))
     }
   }
-  slopes.sort((a, b) => a - b)
-  const middle = Math.floor(slopes.length / 2)
-  const slope = slopes.length % 2 ? slopes[middle] : (slopes[middle - 1] + slopes[middle]) / 2
-  const baseline = Math.max(1, values.reduce((sum, value) => sum + Math.abs(finite(value)), 0) / values.length)
+  const slope = median(slopes)
+  const baseline = Math.max(1, median(normalized.map((value) => Math.abs(value))))
   const strength = clamp(Math.abs(slope) / baseline)
   return {
     slopeCentsPerWeek: Math.round(slope),
@@ -56,13 +60,22 @@ export function calibrateIntelligenceQuality(input) {
   const providerCompleteness = clamp(finite(input?.providerCompleteness, 1))
 
   const evidenceScore = (
-    coverage * 0.28 +
-    sampleScore * 0.22 +
-    stabilityScore * 0.2 +
+    coverage * 0.25 +
+    sampleScore * 0.2 +
+    stabilityScore * 0.18 +
     recurringCoverage * 0.12 +
-    providerCompleteness * 0.18
+    providerCompleteness * 0.25
   )
-  const calibratedConfidence = clamp(Math.min(baseConfidence, evidenceScore) * freshness.confidenceMultiplier, 0, 0.97)
+  const providerCap = providerCompleteness < 0.5
+    ? 0.55 + providerCompleteness * 0.5
+    : providerCompleteness < 0.8
+      ? 0.72 + (providerCompleteness - 0.5) * 0.4
+      : 0.97
+  const calibratedConfidence = clamp(
+    Math.min(baseConfidence, evidenceScore, providerCap) * freshness.confidenceMultiplier,
+    0,
+    0.97,
+  )
   const reasons = []
   if (coverage < 0.5) reasons.push('insufficient_history_coverage')
   if (sampleScore < 0.4) reasons.push('insufficient_sample_size')
@@ -71,14 +84,14 @@ export function calibrateIntelligenceQuality(input) {
   if (providerCompleteness < 0.8) reasons.push('incomplete_provider_data')
   if (freshness.level !== 'fresh') reasons.push(`data_${freshness.level}`)
 
-  const abstain = freshness.abstain || calibratedConfidence < 0.35 || coverage < 0.25 || sampleScore < 0.2
+  const abstain = freshness.abstain || calibratedConfidence < 0.35 || coverage < 0.25 || sampleScore < 0.2 || providerCompleteness < 0.15
   return {
     calibratedConfidence: Number(calibratedConfidence.toFixed(3)),
     evidenceScore: Number(evidenceScore.toFixed(3)),
     abstain,
     reasons,
     freshness,
-    policyVersion: 'intelligence-calibration-v3',
+    policyVersion: 'intelligence-calibration-v4',
   }
 }
 
