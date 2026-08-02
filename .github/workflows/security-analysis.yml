@@ -1,0 +1,77 @@
+name: Security analysis
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '41 3 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: security-analysis-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codeql:
+    name: CodeQL JavaScript analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-extended
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install frontend dependencies
+        run: npm install --no-fund --no-audit --silent
+      - name: Install backend dependencies
+        working-directory: server
+        run: npm install --no-fund --no-audit --silent
+      - name: Build analyzable production bundle
+        run: npm run build
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:javascript-typescript
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          deny-licenses: AGPL-1.0-only, AGPL-1.0-or-later, SSPL-1.0
+
+  secret-baseline:
+    name: Repository secret baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reject private keys and high-confidence credential assignments
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -nE -- '-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----' -- ':!package-lock.json' ':!server/package-lock.json'; then
+            echo 'Private key material is forbidden in the repository.' >&2
+            exit 1
+          fi
+          if git grep -nEi -- '(password|secret|api[_-]?key|access[_-]?token)[[:space:]]*[:=][[:space:]]*["'"'][A-Za-z0-9_+/.=-]{24,}["'"']' -- ':!*.example' ':!*.md' ':!package-lock.json' ':!server/package-lock.json'; then
+            echo 'A high-confidence credential assignment was detected.' >&2
+            exit 1
+          fi
