@@ -32,6 +32,7 @@ import '../production-readiness.css'
 import '../auth.css'
 import '../features/sync/cloud-sync.css'
 import '../reference-dashboard.css'
+import '../reference-dashboard-fidelity.css'
 
 // Keep production-readiness controls and automatic analysis mounted together.
 ReactDOM.createRoot(document.getElementById('root')!).render(
