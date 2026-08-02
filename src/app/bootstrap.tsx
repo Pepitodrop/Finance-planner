@@ -10,6 +10,7 @@ import { MobileEnhancements } from '../MobileEnhancements'
 import { MobileExperience } from '../MobileExperience'
 import { MobileProductionRuntime } from '../MobileProductionRuntime'
 import { MobileRuntime } from '../MobileRuntime'
+import { NavigationAccessibility } from '../NavigationAccessibility'
 import { VaultGate } from '../VaultGate'
 import { WebMobileHardening } from '../WebMobileHardening'
 import { CloudSyncStatus } from '../features/sync/CloudSyncStatus'
@@ -39,6 +40,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <ErrorBoundary>
       <WebMobileHardening />
       <FrontendExperience />
+      <NavigationAccessibility />
       <MobileProductionRuntime />
       <MobileRuntime />
       <MobileConnectivityStatus />
