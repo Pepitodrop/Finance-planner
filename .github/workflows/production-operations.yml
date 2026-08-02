@@ -37,8 +37,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate monitoring configuration
         run: |
-          docker run --rm --entrypoint=/bin/promtool -v "$PWD/ops/monitoring:/etc/prometheus:ro" prom/prometheus:v3.5.0 check config /etc/prometheus/prometheus.yml
-          docker run --rm --entrypoint=/bin/promtool -v "$PWD/ops/monitoring:/etc/prometheus:ro" prom/prometheus:v3.5.0 check rules /etc/prometheus/alerts.yml
+          mkdir -p artifacts
+          printf '%s\n' 'validation-token' > artifacts/metrics_token
+          docker run --rm --entrypoint=/bin/promtool \
+            -v "$PWD/ops/monitoring:/etc/prometheus:ro" \
+            -v "$PWD/artifacts/metrics_token:/run/secrets/metrics_token:ro" \
+            prom/prometheus:v3.5.0 check config /etc/prometheus/prometheus.yml
+          docker run --rm --entrypoint=/bin/promtool \
+            -v "$PWD/ops/monitoring:/etc/prometheus:ro" \
+            prom/prometheus:v3.5.0 check rules /etc/prometheus/alerts.yml
           docker compose -f docker-compose.yml -f docker-compose.monitoring.yml config >/dev/null
       - name: Seed disposable production-shaped data
         run: |
