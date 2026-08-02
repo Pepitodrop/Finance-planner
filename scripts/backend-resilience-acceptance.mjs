@@ -18,9 +18,30 @@ async function probe(name, path, init = {}, expected = [200]) {
 }
 
 await probe('readiness', '/health/ready')
-await probe('invalid-json', '/api/session/local', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{' }, [400])
-await probe('unsupported-media', '/api/session/local', { method: 'POST', headers: { 'content-type': 'text/plain' }, body: 'x' }, [415])
-await probe('oversized-payload', '/api/session/local', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value: 'x'.repeat(1_010_000) }) }, [413])
+const session = await probe('local-session', '/api/session/local', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: '{}',
+})
+const cookie = session.headers.get('set-cookie')?.split(';', 1)[0]
+if (!cookie) throw new Error('Local acceptance session did not return a session cookie.')
+const authenticatedHeaders = { cookie }
+
+await probe('invalid-json', '/api/finance/project-savings', {
+  method: 'POST',
+  headers: { ...authenticatedHeaders, 'content-type': 'application/json' },
+  body: '{',
+}, [400])
+await probe('unsupported-media', '/api/finance/project-savings', {
+  method: 'POST',
+  headers: { ...authenticatedHeaders, 'content-type': 'text/plain' },
+  body: 'x',
+}, [415])
+await probe('oversized-payload', '/api/finance/project-savings', {
+  method: 'POST',
+  headers: { ...authenticatedHeaders, 'content-type': 'application/json' },
+  body: JSON.stringify({ value: 'x'.repeat(1_010_000) }),
+}, [413])
 
 const concurrent = await Promise.all(Array.from({ length: 40 }, (_, index) => probe(`concurrent-${index}`, '/health/live')))
 if (concurrent.some((response) => response.status !== 200)) throw new Error('Concurrent liveness probes were not all successful.')
