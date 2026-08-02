@@ -13,8 +13,10 @@
   },
   "dependencies": {
     "@simplewebauthn/server": "^13.1.2",
-    "google-auth-library": "^9.15.1",
+    "google-auth-library": "^10.9.1",
     "pg": "^8.16.3"
   },
-  "engines": { "node": ">=22" }
+  "engines": {
+    "node": ">=22"
+  }
 }

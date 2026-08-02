@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Security
+- The passkey authentication-options endpoint (`POST /api/auth/passkeys/authenticate/options`)
+  no longer errors differently for a registered vs. unregistered email, closing an
+  account-enumeration side channel.
+- Fixed a moderate-severity dependency vulnerability (GHSA-w5hq-g745-h8pq, CVSS 7.5,
+  missing buffer bounds check in `uuid` <11.1.1) reachable through the backend's
+  `google-auth-library` Google-login dependency by upgrading it to v10.
+
+### Added
+- Automated accessibility testing (`jsdom` + `axe-core` + React Testing Library) covering
+  the composed app shell, the transaction dialog, and primary navigation. Zero WCAG
+  2.1/2.2 A/AA violations found on the audited surfaces.
+
+### Fixed
+- Removed a duplicate skip-to-content link (`App.tsx` and `WebMobileHardening.tsx` each
+  rendered one); the remaining one already carries the real focus-management behavior.
+- The transaction dialog now correctly restores keyboard focus to the button that opened
+  it after closing. A native `autoFocus` on the description field was running before the
+  dialog's own focus-restoration logic could record the real trigger, so focus silently
+  fell back to the page body instead.
+
 ## [0.3.0] - 2026-07-31
 
 ### Added

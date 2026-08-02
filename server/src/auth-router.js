@@ -179,9 +179,19 @@ export async function createAuthRouter({ env, origin, sessionSecret, send, verif
     if (request.method === 'POST' && url.pathname === '/api/auth/passkeys/authenticate/options') {
       const { email } = await jsonBody(request)
       const user = store.findByEmail(String(email || ''))
-      if (!user?.passkeys?.length) throw new Error('No passkey is registered for this account.')
-      const options = await generateAuthenticationOptions({ rpID: rpId, userVerification: 'required', allowCredentials: user.passkeys.map((credential) => ({ id: credential.id, transports: credential.transports })) })
-      await store.mutate((data) => { data.challenges[`authenticate:${user.id}`] = { value: options.challenge, expiresAt: Date.now() + 300_000 } })
+      // No `allowCredentials`/stored challenge for an unknown email or a user with no
+      // passkeys yet -- still returns 200 with real options so the response can't be
+      // used to enumerate which emails have an account (matches WebAuthn best practice).
+      const options = await generateAuthenticationOptions({
+        rpID: rpId,
+        userVerification: 'required',
+        allowCredentials: user?.passkeys?.length
+          ? user.passkeys.map((credential) => ({ id: credential.id, transports: credential.transports }))
+          : undefined,
+      })
+      if (user?.passkeys?.length) {
+        await store.mutate((data) => { data.challenges[`authenticate:${user.id}`] = { value: options.challenge, expiresAt: Date.now() + 300_000 } })
+      }
       send(response, 200, options)
       return true
     }

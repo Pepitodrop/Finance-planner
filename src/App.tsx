@@ -171,7 +171,6 @@ function App({ userId, userName }: AppProps) {
   )
 
   return <div className="app-shell">
-    <a className="skip-link" href="#main-content">Zum Hauptinhalt springen</a>
     <aside className="sidebar">
       <div className="brand">
         <div className="brand-mark"><Landmark size={22}/></div>
@@ -352,7 +351,7 @@ function App({ userId, userName }: AppProps) {
           <button type="button" aria-pressed={transactionType === 'expense'} className={transactionType === 'expense' ? 'active' : ''} onClick={() => setTransactionType('expense')}>Ausgabe</button>
           <button type="button" aria-pressed={transactionType === 'income'} className={transactionType === 'income' ? 'active' : ''} onClick={() => setTransactionType('income')}>Einnahme</button>
         </div>
-        <label>Beschreibung<input autoFocus name="description" required maxLength={160} defaultValue={editing?.description ?? ''} placeholder="z. B. Supermarkt"/></label>
+        <label>Beschreibung<input name="description" required maxLength={160} defaultValue={editing?.description ?? ''} placeholder="z. B. Supermarkt"/></label>
         <label>Betrag in €<input name="amount" type="number" required min="0.01" max="100000000" step="0.01" inputMode="decimal" defaultValue={editing ? editing.amountCents / 100 : undefined} placeholder="0,00"/></label>
         <label>Kategorie<input name="category" required maxLength={80} defaultValue={editing?.category ?? ''} placeholder="z. B. Lebensmittel"/></label>
         <label>Konto<select name="accountId" defaultValue={editing?.accountId ?? state.accounts[0]?.id}>{state.accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
