@@ -8,13 +8,11 @@ import {
   Landmark,
   Link2,
   MessageCircleQuestion,
-  Pencil,
   PiggyBank,
   Plus,
   ReceiptText,
   Repeat2,
   Target,
-  Trash2,
   Undo2,
   WalletCards,
 } from 'lucide-react'
@@ -28,6 +26,7 @@ import { initialState } from './data'
 import { FinanceAssistant } from './FinanceAssistant'
 import { ReceiptReview } from './ReceiptReview'
 import { SavingsGoals } from './SavingsGoals'
+import { TransactionsPage } from './TransactionsPage'
 import { categoryBreakdown, currentMonthTotals, formatMoney, monthlyProjection, recurringPayments, totalBalance } from './finance'
 import { loadState, resetStoredState, saveState } from './storage'
 import { addTransactionToState, deleteTransactionFromState, updateTransactionInState } from './transactionState'
@@ -76,6 +75,7 @@ function App({ userId, userName }: AppProps) {
     setFormError('')
     setDialogOpen(true)
   }
+
   const openEditTransaction = (transaction: Transaction) => {
     setEditing(transaction)
     setTransactionType(transaction.type)
@@ -195,11 +195,14 @@ function App({ userId, userName }: AppProps) {
     </aside>
 
     <main id="main-content" tabIndex={-1}>
-      <header className={`topbar ${tab === 'dashboard' ? 'dashboard-topbar' : ''}`}>
+      <header className={`topbar ${tab === 'dashboard' ? 'dashboard-topbar' : ''} ${tab === 'transactions' ? 'transactions-topbar' : ''}`}>
         <div>
           {tab === 'dashboard' ? <>
             <h1>Good evening, {greetingName} <span aria-hidden="true">👋</span></h1>
             <p className="dashboard-subtitle">Here&apos;s what&apos;s happening with your finances today.</p>
+          </> : tab === 'transactions' ? <>
+            <h1>Transactions</h1>
+            <p className="dashboard-subtitle">Track, manage and review all your transactions.</p>
           </> : <>
             <p className="eyebrow">Persönliche Finanzen</p>
             <h1>{titles[tab]}</h1>
@@ -300,21 +303,12 @@ function App({ userId, userName }: AppProps) {
         </section>
       </>}
 
-      {tab === 'transactions' && <section className="panel table-panel">
-        <div className="panel-header"><div><p className="eyebrow">Verlauf</p><h2>Alle Buchungen</h2></div></div>
-        <div className="transaction-list">
-          {[...state.transactions].sort((a, b) => b.date.localeCompare(a.date)).map((transaction) => <div className="transaction-row" key={transaction.id}>
-            <div className={transaction.type === 'income' ? 'transaction-icon income' : 'transaction-icon expense'}>{transaction.type === 'income' ? <ArrowUpRight size={18}/> : <ArrowDownRight size={18}/>}</div>
-            <div><strong>{transaction.description}</strong><span>{transaction.category} · {new Date(transaction.date).toLocaleDateString('de-DE')}</span></div>
-            {transaction.recurring && <span className="pill"><Repeat2 size={13}/> regelmäßig</span>}
-            <b className={transaction.type === 'income' ? 'positive-text' : 'negative-text'}>{transaction.type === 'income' ? '+' : '-'}{formatMoney(transaction.amountCents)}</b>
-            <div className="row-actions">
-              <button type="button" aria-label="Transaktion bearbeiten" onClick={() => openEditTransaction(transaction)}><Pencil size={16}/></button>
-              <button type="button" aria-label="Transaktion löschen" onClick={() => deleteTransaction(transaction.id)}><Trash2 size={16}/></button>
-            </div>
-          </div>)}
-        </div>
-      </section>}
+      {tab === 'transactions' && <TransactionsPage
+        transactions={state.transactions}
+        accounts={state.accounts}
+        onEdit={openEditTransaction}
+        onDelete={deleteTransaction}
+      />}
       {tab === 'goals' && <SavingsGoals state={state} onChange={setState}/>} 
       {tab === 'recurring' && <section className="panel table-panel">
         <div className="panel-header">
