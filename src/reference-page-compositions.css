@@ -1,0 +1,309 @@
+/* Layout-level composition matching the dashboard and transactions references. */
+.goals-reference-page {
+  display: grid;
+  gap: 18px;
+}
+
+.reference-page-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px 24px;
+  border: 1px solid rgba(137, 118, 255, .2);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 92% 10%, rgba(135, 72, 255, .16), transparent 30%),
+    linear-gradient(145deg, rgba(15, 22, 51, .96), rgba(7, 12, 31, .96));
+  box-shadow: inset 0 1px rgba(255,255,255,.04), 0 24px 70px rgba(0,0,0,.22);
+}
+
+.reference-page-toolbar h2 {
+  margin: 4px 0 6px;
+  font-size: clamp(1.35rem, 2.3vw, 1.9rem);
+}
+
+.reference-page-toolbar p:last-child {
+  max-width: 760px;
+}
+
+.reference-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.reference-kpi-card {
+  position: relative;
+  min-height: 142px;
+  padding: 20px 22px;
+  overflow: hidden;
+  border: 1px solid rgba(130, 125, 202, .22);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 96% 0%, rgba(133, 69, 255, .22), transparent 36%),
+    linear-gradient(145deg, rgba(21, 28, 60, .98), rgba(9, 15, 37, .98));
+  box-shadow: inset 0 1px rgba(255,255,255,.045), 0 20px 50px rgba(0,0,0,.22);
+}
+
+.reference-kpi-card::after {
+  content: '';
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  width: 46px;
+  height: 46px;
+  border-radius: 13px;
+  background: linear-gradient(145deg, rgba(104, 60, 224, .68), rgba(52, 46, 146, .5));
+  box-shadow: 0 0 25px rgba(136, 76, 255, .35);
+  opacity: .48;
+}
+
+.reference-kpi-card > span,
+.reference-kpi-card > small {
+  color: var(--muted);
+}
+
+.reference-kpi-card > strong {
+  display: block;
+  margin: 13px 0 11px;
+  padding-right: 50px;
+  font-size: clamp(1.45rem, 2.7vw, 2rem);
+  font-weight: 560;
+  letter-spacing: -.025em;
+}
+
+.reference-kpi-card > small {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .78rem;
+}
+
+.reference-kpi-card.highlight {
+  border-color: rgba(162, 109, 255, .38);
+  box-shadow: inset 0 1px rgba(255,255,255,.06), 0 0 36px rgba(112, 54, 238, .14);
+}
+
+.reference-content-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+  align-items: start;
+  gap: 18px;
+}
+
+.reference-primary-column,
+.reference-context-column {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.goals-list-panel {
+  padding: 22px;
+}
+
+.goals-content-grid .goal-card-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.reference-side-card {
+  padding: 20px;
+}
+
+.goal-overall-progress {
+  display: grid;
+  gap: 6px;
+}
+
+.goal-overall-progress > strong {
+  font-size: 2.6rem;
+  line-height: 1;
+}
+
+.goal-overall-progress > span,
+.next-goal-summary > span {
+  color: var(--muted);
+}
+
+.next-goal-summary {
+  display: grid;
+  gap: 9px;
+  padding: 14px;
+  border: 1px solid rgba(129, 132, 185, .18);
+  border-radius: 14px;
+  background: rgba(7, 13, 34, .55);
+}
+
+.next-goal-summary > b {
+  color: #c4b2ff;
+}
+
+.reference-wide-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid rgba(146, 107, 255, .34);
+  border-radius: 14px;
+  color: #e8e0ff;
+  background: linear-gradient(135deg, rgba(75, 42, 169, .64), rgba(38, 42, 107, .62));
+}
+
+/* Existing complex pages are recomposed into the same primary/sidebar rhythm. */
+.connections-page,
+.ai-page,
+.assistant-page,
+.receipt-page,
+.data-tools-page {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  align-items: start;
+}
+
+.connections-page > *,
+.ai-page > *,
+.assistant-page > *,
+.receipt-page > *,
+.data-tools-page > * {
+  grid-column: 1 / -1;
+}
+
+.connections-page .bank-setup-hero,
+.ai-page .ai-hero,
+.assistant-page .assistant-hero,
+.data-tools-page .data-tools-hero {
+  min-height: 200px;
+}
+
+.connections-page .connection-overview,
+.connections-page .sync-preview,
+.ai-page .ai-results,
+.assistant-page .assistant-answer,
+.assistant-page > .panel:nth-last-of-type(2),
+.receipt-page > .panel:first-of-type,
+.data-tools-page .security-form-panel,
+.data-tools-page .data-card-grid {
+  grid-column: 1 / span 8;
+}
+
+.connections-page .statement-import,
+.ai-page .ai-grid,
+.assistant-page .assistant-grid,
+.assistant-page > .panel:nth-last-of-type(3),
+.receipt-page > .panel:not(:first-of-type),
+.data-tools-page .backup-password-panel,
+.data-tools-page .account-deletion-panel {
+  grid-column: 9 / -1;
+}
+
+.ai-page .ai-metrics {
+  grid-column: 1 / -1;
+}
+
+.ai-page .ai-grid {
+  grid-template-columns: 1fr;
+}
+
+.assistant-page .assistant-grid {
+  grid-template-columns: 1fr;
+}
+
+.assistant-page > .panel:nth-last-of-type(2),
+.assistant-page > .panel:nth-last-of-type(3) {
+  padding: 20px;
+}
+
+.data-tools-page .data-card-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.data-tools-page .account-deletion-panel {
+  align-self: stretch;
+}
+
+/* Recurring page: turn the existing table into the same dense ledger style. */
+main > .table-panel:not(.transactions-shell) {
+  padding: 22px;
+  min-height: 540px;
+}
+
+main > .table-panel:not(.transactions-shell) > .panel-header {
+  min-height: 70px;
+  padding-bottom: 17px;
+  border-bottom: 1px solid rgba(123, 129, 179, .15);
+}
+
+main > .table-panel:not(.transactions-shell) .transaction-list {
+  display: grid;
+  gap: 2px;
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(119, 126, 178, .14);
+  border-radius: 16px;
+  background: rgba(5, 10, 28, .48);
+}
+
+main > .table-panel:not(.transactions-shell) .transaction-row {
+  min-height: 76px;
+  padding: 14px 16px;
+  border: 0;
+  border-bottom: 1px solid rgba(119, 126, 178, .1);
+  border-radius: 0;
+  background: linear-gradient(90deg, rgba(16, 23, 51, .78), rgba(10, 16, 38, .7));
+}
+
+main > .table-panel:not(.transactions-shell) .transaction-row:last-child {
+  border-bottom: 0;
+}
+
+main > .table-panel:not(.transactions-shell) .transaction-row:hover {
+  background: linear-gradient(90deg, rgba(28, 31, 67, .94), rgba(15, 22, 51, .88));
+}
+
+@media (max-width: 1180px) {
+  .reference-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .reference-content-grid { grid-template-columns: 1fr; }
+  .reference-context-column { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .reference-wide-action { grid-column: 1 / -1; }
+  .connections-page .connection-overview,
+  .connections-page .sync-preview,
+  .connections-page .statement-import,
+  .ai-page .ai-results,
+  .ai-page .ai-grid,
+  .assistant-page .assistant-answer,
+  .assistant-page .assistant-grid,
+  .assistant-page > .panel:nth-last-of-type(2),
+  .assistant-page > .panel:nth-last-of-type(3),
+  .receipt-page > .panel,
+  .data-tools-page .security-form-panel,
+  .data-tools-page .data-card-grid,
+  .data-tools-page .backup-password-panel,
+  .data-tools-page .account-deletion-panel { grid-column: 1 / -1; }
+  .ai-page .ai-grid,
+  .assistant-page .assistant-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .reference-page-toolbar { align-items: stretch; flex-direction: column; padding: 18px; }
+  .reference-page-toolbar .primary { width: 100%; justify-content: center; }
+  .reference-kpi-grid { grid-template-columns: 1fr; }
+  .reference-kpi-card { min-height: 126px; }
+  .goals-content-grid .goal-card-grid,
+  .reference-context-column,
+  .data-tools-page .data-card-grid,
+  .ai-page .ai-grid,
+  .assistant-page .assistant-grid { grid-template-columns: 1fr; }
+  .goals-list-panel { padding: 15px; }
+  main > .table-panel:not(.transactions-shell) { padding: 15px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .goals-reference-page,
+  .connections-page,
+  .ai-page,
+  .assistant-page,
+  .receipt-page,
+  .data-tools-page { animation: none !important; }
+}
