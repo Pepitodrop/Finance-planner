@@ -1,0 +1,84 @@
+name: Production operations acceptance
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      require_live_bank:
+        description: Require configured live-bank acceptance secrets
+        type: boolean
+        default: false
+  schedule:
+    - cron: '23 4 * * 0'
+
+permissions:
+  contents: read
+
+jobs:
+  config-and-restore-drill:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_DB: finance_ops
+          POSTGRES_USER: finance
+          POSTGRES_PASSWORD: finance-password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U finance -d finance_ops"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+    env:
+      DATABASE_URL: postgresql://finance:finance-password@127.0.0.1:5432/finance_ops
+      RESTORE_DATABASE_URL: postgresql://finance:finance-password@127.0.0.1:5432/finance_restore
+      BACKUP_DIR: artifacts/backups
+      BACKUP_ENCRYPTION_KEY_FILE: artifacts/backup.key
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate monitoring configuration
+        run: |
+          docker run --rm -v "$PWD/ops/monitoring:/etc/prometheus:ro" prom/prometheus:v3.5.0 promtool check config /etc/prometheus/prometheus.yml
+          docker run --rm -v "$PWD/ops/monitoring:/etc/prometheus:ro" prom/prometheus:v3.5.0 promtool check rules /etc/prometheus/alerts.yml
+          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml config >/dev/null
+      - name: Seed disposable production-shaped data
+        run: |
+          createdb "$RESTORE_DATABASE_URL"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'create table acceptance_probe(id bigint primary key, encrypted_payload text not null);'
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "insert into acceptance_probe values (1, 'ciphertext-only');"
+          mkdir -p artifacts
+          openssl rand -hex 32 > "$BACKUP_ENCRYPTION_KEY_FILE"
+      - name: Create encrypted backup
+        run: bash ops/backup/postgres-backup.sh
+      - name: Restore and verify backup
+        run: |
+          export BACKUP_FILE="$(find "$BACKUP_DIR" -name '*.enc' -type f | head -n1)"
+          bash ops/backup/restore-drill.sh
+          test "$(psql "$RESTORE_DATABASE_URL" -Atc 'select count(*) from acceptance_probe')" = "1"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-operations-evidence
+          path: |
+            artifacts/restore-drill.json
+            artifacts/backups/*.sha256
+          if-no-files-found: error
+
+  live-bank-acceptance:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      ACCEPTANCE_CONNECTOR_URL: ${{ secrets.ACCEPTANCE_CONNECTOR_URL }}
+      ACCEPTANCE_BEARER_TOKEN: ${{ secrets.ACCEPTANCE_BEARER_TOKEN }}
+      ACCEPTANCE_CONNECTION_ID: ${{ secrets.ACCEPTANCE_CONNECTION_ID }}
+      REQUIRE_LIVE_BANK_ACCEPTANCE: ${{ inputs.require_live_bank }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: node scripts/live-bank-acceptance.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-bank-acceptance
+          path: artifacts/live-bank-acceptance.json
+          if-no-files-found: error
