@@ -60,14 +60,14 @@ jobs:
           openssl rand -hex 32 > "$BACKUP_ENCRYPTION_KEY_FILE"
       - name: Create encrypted backup
         run: |
-          docker run --rm --network host \
+          docker run --rm --network host --user "$(id -u):$(id -g)" \
             -v "$PWD:/workspace" -w /workspace \
             -e DATABASE_URL -e BACKUP_DIR -e BACKUP_ENCRYPTION_KEY_FILE \
             postgres:17-bookworm bash ops/backup/postgres-backup.sh
       - name: Restore and verify backup
         run: |
           export BACKUP_FILE="$(find "$BACKUP_DIR" -name '*.enc' -type f | head -n1)"
-          docker run --rm --network host \
+          docker run --rm --network host --user "$(id -u):$(id -g)" \
             -v "$PWD:/workspace" -w /workspace \
             -e BACKUP_FILE -e BACKUP_ENCRYPTION_KEY_FILE -e RESTORE_DATABASE_URL \
             postgres:17-bookworm bash ops/backup/restore-drill.sh
