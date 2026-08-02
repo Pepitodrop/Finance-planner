@@ -17,7 +17,7 @@ jobs:
   chromium:
     name: Chromium production acceptance
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:17-bookworm
@@ -108,6 +108,18 @@ jobs:
           grep -q "commit=\"${GITHUB_SHA}\"" artifacts/operational-metrics.prom
           ! grep -Eqi 'password|credential|iban|transaction description|production acceptance coffee' artifacts/operational-metrics.prom
 
+      - name: Enforce sustained-load baseline
+        env:
+          LOAD_WEB_URL: http://127.0.0.1:4173/
+          LOAD_CONNECTOR_URL: http://127.0.0.1:8788/health/live
+          LOAD_DURATION_MS: 12000
+          LOAD_CONCURRENCY: 20
+          LOAD_MAX_ERROR_RATE: 0.01
+          LOAD_MAX_P95_MS: 500
+          LOAD_MIN_WEB_RPS: 40
+          LOAD_ARTIFACT_PATH: artifacts/production-load-acceptance.json
+        run: node scripts/production-load-acceptance.mjs
+
       - name: Upload acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -116,6 +128,7 @@ jobs:
           path: |
             artifacts/browser-production-acceptance.json
             artifacts/operational-metrics.prom
+            artifacts/production-load-acceptance.json
             connector-acceptance.log
             web-acceptance.log
           if-no-files-found: warn
