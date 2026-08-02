@@ -27,6 +27,7 @@ import '../mobile-experience.css'
 import '../web-mobile-hardening.css'
 import '../frontend-experience.css'
 import '../automatic-analysis.css'
+import '../production-readiness.css'
 import '../auth.css'
 import '../features/sync/cloud-sync.css'
 
@@ -40,7 +41,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <MobileConnectivityStatus />
       <MobileEnhancements />
       <MobileExperience />
-      <AuthGate>{(user) => <VaultGate key={user.id} userId={user.id}><><App /><CloudSyncStatus /><AutomaticTransactionAnalysis /></></VaultGate>}</AuthGate>
+      <AuthGate>{(user) => <VaultGate key={user.id} userId={user.id}><><App userId={user.id} /><CloudSyncStatus /><AutomaticTransactionAnalysis /></></VaultGate>}</AuthGate>
     </ErrorBoundary>
   </React.StrictMode>,
 )
