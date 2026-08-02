@@ -41,19 +41,42 @@ jobs:
         with:
           category: /language:javascript-typescript
 
-  dependency-review:
-    name: Dependency review
-    if: github.event_name == 'pull_request'
+  dependency-security:
+    name: Dependency security audit
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/dependency-review-action@v4
+      - uses: actions/setup-node@v4
         with:
-          fail-on-severity: high
-          deny-licenses: AGPL-1.0-only, AGPL-1.0-or-later, SSPL-1.0
+          node-version: 22
+      - name: Audit frontend production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Audit backend production dependencies
+        working-directory: server
+        run: npm audit --omit=dev --audit-level=high
+      - name: Reject prohibited direct dependency licenses
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises'
+          const prohibited = new Set(['AGPL-1.0-only', 'AGPL-1.0-or-later', 'SSPL-1.0'])
+          for (const file of ['package.json', 'server/package.json']) {
+            const manifest = JSON.parse(await readFile(file, 'utf8'))
+            for (const section of ['dependencies', 'optionalDependencies']) {
+              for (const name of Object.keys(manifest[section] ?? {})) {
+                const packageManifest = JSON.parse(await readFile(`${file === 'package.json' ? '' : 'server/'}node_modules/${name}/package.json`, 'utf8'))
+                const licenses = Array.isArray(packageManifest.licenses)
+                  ? packageManifest.licenses.map((entry) => typeof entry === 'string' ? entry : entry.type)
+                  : [packageManifest.license].filter(Boolean)
+                if (licenses.some((license) => prohibited.has(license))) {
+                  throw new Error(`${name} uses prohibited license ${licenses.join(', ')}`)
+                }
+              }
+            }
+          }
+          NODE
 
   secret-baseline:
     name: Repository secret baseline
