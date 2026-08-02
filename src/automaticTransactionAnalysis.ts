@@ -1,7 +1,5 @@
-import { runDeterministicAssistant } from './assistant'
+import { createSmartBriefing } from './smartBriefing'
 import type { AppState } from './types'
-
-export const AUTOMATIC_TRANSACTION_ANALYSIS_PROMPT = 'Analysiere meine aktuellen Transaktionen automatisch. Priorisiere Ausgabentrends, Sparquote, wiederkehrende Belastungen, Liquidität und konkrete nächste Schritte.'
 
 export function transactionAnalysisRevision(state: AppState): string {
   return state.transactions
@@ -22,5 +20,14 @@ export function createAutomaticTransactionAnalysis(state: AppState): string {
   if (state.transactions.length === 0) {
     return 'Sobald Transaktionen vorhanden sind, wird hier automatisch eine Finanzanalyse erstellt.'
   }
-  return runDeterministicAssistant('analysis', state, AUTOMATIC_TRANSACTION_ANALYSIS_PROMPT)
+
+  const briefing = createSmartBriefing(state)
+  if (briefing.length === 0) {
+    return 'Die aktuellen Transaktionen wurden automatisch geprüft. Im laufenden Zeitraum wurden keine auffälligen Ausgabentrends, problematischen Fixkostenquoten oder akuten Liquiditätsrisiken erkannt.'
+  }
+
+  return [
+    'Automatische Transaktionsanalyse',
+    ...briefing.map((item) => `${item.title}: ${item.detail}`),
+  ].join('\n\n')
 }
