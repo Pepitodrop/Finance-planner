@@ -53,12 +53,6 @@ export function buildSyncPreview(state: AppState, payload: SyncPayload): SyncPre
 
 export function applySyncPreview(state: AppState, preview: SyncPreview): AppState { return { ...state, accounts: [...state.accounts, ...preview.accountsToCreate], transactions: [...preview.transactionsToImport, ...state.transactions] } }
 
-async function initializeDevelopmentSession(baseUrl: string): Promise<void> {
-  if (!/^http:\/\/localhost(?::\d+)?$/.test(baseUrl)) return
-  const response = await fetch(`${baseUrl}/api/session/local`, { method: 'POST', credentials: 'include' })
-  if (!response.ok) throw new Error(`Lokale Backend-Sitzung konnte nicht gestartet werden (${response.status}).`)
-}
-
 function delay(milliseconds: number) { return new Promise((resolve) => window.setTimeout(resolve, milliseconds)) }
 
 function idempotencyKey(): string {
@@ -122,10 +116,8 @@ export function connectorReturnUrl(): string {
   return url.toString()
 }
 
-export async function startConnector(provider: ConnectorProvider, backendBaseUrl: string): Promise<void> {
-  const baseUrl = backendBaseUrl.replace(/\/$/, '')
-  await initializeDevelopmentSession(baseUrl)
-  const result = await requestJson<{ redirectUrl?: string }>(`${baseUrl}/api/connectors/${provider}/start`, {
+export async function startConnector(provider: ConnectorProvider): Promise<void> {
+  const result = await requestJson<{ redirectUrl?: string }>(`/api/connectors/${provider}/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ redirectUri: connectorReturnUrl(), country: 'DE' }),
@@ -134,12 +126,10 @@ export async function startConnector(provider: ConnectorProvider, backendBaseUrl
   window.location.assign(result.redirectUrl)
 }
 
-export async function synchronizeConnections(backendBaseUrl: string): Promise<SyncPayload[]> {
+export async function synchronizeConnections(): Promise<SyncPayload[]> {
   if (activeSynchronization) return activeSynchronization
   const operation = (async () => {
-    const baseUrl = backendBaseUrl.replace(/\/$/, '')
-    await initializeDevelopmentSession(baseUrl)
-    const result = await requestJson<{ connections?: SyncPayload[] }>(`${baseUrl}/api/connectors/sync`, {
+    const result = await requestJson<{ connections?: SyncPayload[] }>('/api/connectors/sync', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
     }, { retry: true, idempotent: true })
     if (!Array.isArray(result.connections)) throw new Error('Der Sync-Dienst lieferte ein ungültiges Ergebnis.')
@@ -153,10 +143,8 @@ export async function synchronizeConnections(backendBaseUrl: string): Promise<Sy
   }
 }
 
-export async function disconnectConnector(provider: ConnectorProvider, backendBaseUrl: string): Promise<void> {
-  const baseUrl = backendBaseUrl.replace(/\/$/, '')
-  await initializeDevelopmentSession(baseUrl)
-  await requestJson<{ disconnected: boolean }>(`${baseUrl}/api/connectors/${provider}`, { method: 'DELETE' }, { idempotent: true })
+export async function disconnectConnector(provider: ConnectorProvider): Promise<void> {
+  await requestJson<{ disconnected: boolean }>(`/api/connectors/${provider}`, { method: 'DELETE' }, { idempotent: true })
 }
 
 export function consentDaysRemaining(connection: ConnectorConnection, now = Date.now()): number | null {
