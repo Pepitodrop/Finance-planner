@@ -46,7 +46,7 @@ jobs:
           docker run --rm --entrypoint=/bin/promtool \
             -v "$PWD/ops/monitoring:/etc/prometheus:ro" \
             prom/prometheus:v3.5.0 check rules /etc/prometheus/alerts.yml
-          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml config >/dev/null
+          docker compose -f compose.yaml -f docker-compose.monitoring.yml config >/dev/null
       - name: Seed disposable production-shaped data
         run: |
           createdb "$RESTORE_DATABASE_URL"
