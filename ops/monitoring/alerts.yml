@@ -1,0 +1,37 @@
+groups:
+  - name: finance-planner
+    rules:
+      - alert: FinancePlannerTargetDown
+        expr: up{job="finance-planner-connector"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: Finance Planner connector is unreachable
+      - alert: FinancePlannerHighErrorRate
+        expr: sum(rate(finance_planner_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(finance_planner_http_requests_total[5m])), 1) > 0.05
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: HTTP 5xx rate exceeds 5 percent
+      - alert: FinancePlannerRateLimited
+        expr: sum(rate(finance_planner_http_requests_total{status="429"}[10m])) > 0.2
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: Sustained rate limiting detected
+      - alert: FinancePlannerProviderFailures
+        expr: increase(finance_planner_provider_sync_failures_total[15m]) > 3
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: Repeated bank provider synchronization failures
+      - alert: FinancePlannerConsentExpiry
+        expr: increase(finance_planner_bank_consent_expired_total[1h]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: One or more bank consents expired
+      - alert: FinancePlannerRetentionFailure
+        expr: increase(finance_planner_retention_failures_total[1h]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: Operational retention cleanup failed
