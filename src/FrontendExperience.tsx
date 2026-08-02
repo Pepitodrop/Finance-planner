@@ -140,7 +140,7 @@ export function FrontendExperience() {
   }, [])
 
   return <>
-    <span className="sr-only">Finance Planner Finanzübersicht</span>
+    <span className="sr-only">Finance Planner Anwendung</span>
     {announcement && <div className="save-announcement" role="status" aria-live="polite">{announcement}</div>}
   </>
 }

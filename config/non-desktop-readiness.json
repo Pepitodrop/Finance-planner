@@ -35,7 +35,7 @@
       "gates": [
         { "id": "model-governance", "weight": 20, "evidence": [{ "path": "ai/model-lock.json", "contains": ["revision", "license"] }, { "path": "scripts/verify-ai-model-lock.mjs", "contains": ["productionEligible"] }] },
         { "id": "deterministic-boundary", "weight": 20, "evidence": [{ "path": "server/src/budget-router.js", "contains": ["deterministicSummary", "SAFE_AI_EXPLANATIONS"] }, { "path": "server/src/ai-router.js", "contains": ["consent"] }] },
-        { "id": "quality-evaluation", "weight": 20, "evidence": [{ "path": "scripts/verify-ai-quality-gates.mjs", "contains": ["precision", "abstention"] }, { "path": "scripts/verify-budget-learning-quality.mjs", "contains": ["privacyRedactionRate", "feedbackAdaptationRate"] }] },
+        { "id": "quality-evaluation", "weight": 20, "evidence": [{ "path": "scripts/verify-ai-quality-gates.mjs", "contains": ["supportedClaimPrecision", "abstentionRateOnUnsupportedCases"] }, { "path": "scripts/verify-budget-learning-quality.mjs", "contains": ["privacyRedactionRate", "feedbackAdaptationRate"] }] },
         { "id": "runtime-canaries", "weight": 20, "evidence": [{ "path": ".github/workflows/runtime-canaries.yml", "contains": ["Hugging Face", "runtime evidence"] }, { "path": "scripts/verify-personal-launch.mjs", "contains": ["maximumHostedErrorRate", "p95LatencyMs"] }] },
         { "id": "privacy-fallback", "weight": 20, "evidence": [{ "path": "server/test/budget-router.test.js", "contains": ["free-form", "deterministic"] }, { "path": "server/src/operational-metrics.js", "contains": ["sourceClass", "finance_planner_ai_responses_total"] }] }
       ],

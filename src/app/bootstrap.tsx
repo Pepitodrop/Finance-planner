@@ -35,18 +35,17 @@ import '../reference-dashboard.css'
 import '../reference-dashboard-fidelity.css'
 import '../transactions-reference.css'
 
-// Keep production-readiness controls and automatic analysis mounted together.
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>
       <WebMobileHardening />
       <FrontendExperience />
+      <NavigationAccessibility />
       <MobileProductionRuntime />
       <MobileRuntime />
       <MobileConnectivityStatus />
       <MobileEnhancements />
       <MobileExperience />
-      <NavigationAccessibility />
       <AuthGate>{(user) => <VaultGate key={user.id} userId={user.id}><><App userId={user.id} userName={user.name} /><CloudSyncStatus /><AutomaticTransactionAnalysis /></></VaultGate>}</AuthGate>
     </ErrorBoundary>
   </React.StrictMode>,
@@ -54,8 +53,27 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
+    let refreshing = false
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (refreshing) return
+      refreshing = true
+      window.location.reload()
+    })
+
     navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((registration) => {
+      const announceUpdate = (worker: ServiceWorker | null) => {
+        if (!worker || !navigator.serviceWorker.controller) return
+        window.dispatchEvent(new CustomEvent('finance-planner:update-available', { detail: { registration } }))
+      }
+      announceUpdate(registration.waiting)
+      registration.addEventListener('updatefound', () => {
+        const worker = registration.installing
+        worker?.addEventListener('statechange', () => {
+          if (worker.state === 'installed') announceUpdate(worker)
+        })
+      })
       void registration.update()
+      window.setInterval(() => void registration.update(), 60 * 60 * 1000)
     }).catch((error: unknown) => {
       console.warn('Service worker registration failed', error)
     })

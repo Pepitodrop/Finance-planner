@@ -1,0 +1,105 @@
+name: Security analysis
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '41 3 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: security-analysis-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codeql:
+    name: CodeQL JavaScript analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-extended
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install frontend dependencies
+        run: npm install --no-fund --no-audit --silent
+      - name: Install backend dependencies
+        working-directory: server
+        run: npm install --no-fund --no-audit --silent
+      - name: Build analyzable production bundle
+        run: npm run build
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:javascript-typescript
+
+  dependency-security:
+    name: Dependency security audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install frontend production dependencies
+        run: npm ci --omit=dev --ignore-scripts --no-fund --no-audit --silent
+      - name: Install backend production dependencies
+        working-directory: server
+        run: npm ci --omit=dev --ignore-scripts --no-fund --no-audit --silent
+      - name: Audit frontend production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Audit backend production dependencies
+        working-directory: server
+        run: npm audit --omit=dev --audit-level=high
+      - name: Reject prohibited direct dependency licenses
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises'
+          const prohibited = new Set(['AGPL-1.0-only', 'AGPL-1.0-or-later', 'SSPL-1.0'])
+          for (const file of ['package.json', 'server/package.json']) {
+            const manifest = JSON.parse(await readFile(file, 'utf8'))
+            for (const section of ['dependencies', 'optionalDependencies']) {
+              for (const name of Object.keys(manifest[section] ?? {})) {
+                const packageManifest = JSON.parse(await readFile(`${file === 'package.json' ? '' : 'server/'}node_modules/${name}/package.json`, 'utf8'))
+                const licenses = Array.isArray(packageManifest.licenses)
+                  ? packageManifest.licenses.map((entry) => typeof entry === 'string' ? entry : entry.type)
+                  : [packageManifest.license].filter(Boolean)
+                if (licenses.some((license) => prohibited.has(license))) {
+                  throw new Error(`${name} uses prohibited license ${licenses.join(', ')}`)
+                }
+              }
+            }
+          }
+          NODE
+
+  secret-baseline:
+    name: Repository secret baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reject private keys and recognized production credential formats
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -nE -- '-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----' -- ':!package-lock.json' ':!server/package-lock.json'; then
+            echo 'Private key material is forbidden in the repository.' >&2
+            exit 1
+          fi
+          if git grep -nE -- '(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{70,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{20,}|sk_live_[A-Za-z0-9]{20,}|rk_live_[A-Za-z0-9]{20,})' -- ':!package-lock.json' ':!server/package-lock.json'; then
+            echo 'A recognized production credential format was detected.' >&2
+            exit 1
+          fi
