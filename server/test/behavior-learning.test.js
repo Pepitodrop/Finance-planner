@@ -54,7 +54,7 @@ test('learns calibrated patterns, ranges and amount-weighted recurring share', (
   assert.ok(result.predictions.expenseRangeCents.high >= result.predictions.nextMonthExpenseCents)
   assert.ok(result.patterns.recurringExpenseShare > 0.8)
   assert.equal(result.quality.method, 'recency-weighted-robust-forecast-v3-calibrated')
-  assert.equal(result.quality.calibration.policyVersion, 'intelligence-calibration-v3')
+  assert.equal(result.quality.calibration.policyVersion, 'intelligence-calibration-v4')
 })
 
 test('flags a robust spending anomaly even when forecast calibration abstains', () => {
