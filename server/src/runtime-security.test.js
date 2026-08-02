@@ -34,6 +34,7 @@ test('classifyError returns stable public error responses', () => {
     message: 'JSON required.',
   })
   assert.equal(classifyError(new Error('Invalid session.')).status, 401)
+  assert.equal(classifyError(new Error('Session revoked.')).status, 401)
   assert.equal(classifyError(new Error('Request body too large.')).status, 413)
 })
 
@@ -50,10 +51,20 @@ test('classifyError hides unexpected exception details behind a 500 response', (
   })
 })
 
-test('public production configuration rejects local auth and insecure origins', () => {
-  const publicProduction = { NODE_ENV: 'production', PUBLIC_DEPLOYMENT: 'true' }
+test('public production configuration requires HTTPS, PostgreSQL, trusted proxy and metrics authentication', () => {
+  const publicProduction = {
+    NODE_ENV: 'production',
+    PUBLIC_DEPLOYMENT: 'true',
+    AUTH_MODE: 'google',
+    CONNECTOR_STORE_DRIVER: 'postgres',
+    TRUST_PROXY: 'true',
+    METRICS_TOKEN: 'production-metrics-token-with-more-than-32-characters',
+  }
   assert.throws(() => validateProductionConfig({ ...publicProduction, AUTH_MODE: 'local' }, 'https://app.example'), /AUTH_MODE/)
   assert.throws(() => validateProductionConfig(publicProduction, 'http://app.example'), /HTTPS/)
+  assert.throws(() => validateProductionConfig({ ...publicProduction, CONNECTOR_STORE_DRIVER: 'file' }, 'https://app.example'), /postgres/)
+  assert.throws(() => validateProductionConfig({ ...publicProduction, TRUST_PROXY: 'false' }, 'https://app.example'), /TRUST_PROXY/)
+  assert.throws(() => validateProductionConfig({ ...publicProduction, METRICS_TOKEN: 'too-short' }, 'https://app.example'), /METRICS_TOKEN/)
   assert.doesNotThrow(() => validateProductionConfig(publicProduction, 'https://app.example'))
   assert.doesNotThrow(() => validateProductionConfig({ NODE_ENV: 'development', PUBLIC_DEPLOYMENT: 'true', AUTH_MODE: 'local' }, 'http://localhost:5173'))
 })

@@ -55,8 +55,9 @@ export class SlidingWindowRateLimiter {
 export function classifyError(error) {
   if (error instanceof HttpError) return { status: error.status, code: error.code, message: error.message }
   const message = error instanceof Error ? error.message : 'Unexpected server error.'
-  if (/Authentication required|Invalid session|Session expired/i.test(message)) return { status: 401, code: 'unauthorized', message: 'Authentication required.' }
+  if (/Authentication required|Invalid session|Session expired|Session revoked/i.test(message)) return { status: 401, code: 'unauthorized', message: 'Authentication required.' }
   if (/Request body too large/i.test(message)) return { status: 413, code: 'payload_too_large', message }
+  if (/Content-Type must be application\/json/i.test(message)) return { status: 415, code: 'unsupported_media_type', message }
   if (/Unexpected end|JSON|body/i.test(message)) return { status: 400, code: 'invalid_request', message: 'Invalid JSON request body.' }
   return { status: 500, code: 'internal_error', message: 'Internal server error.' }
 }
@@ -67,4 +68,7 @@ export function validateProductionConfig(env, origin) {
   }
   if (env.NODE_ENV !== 'production' || env.PUBLIC_DEPLOYMENT !== 'true') return
   if (!origin.startsWith('https://')) throw new Error('APP_ORIGIN must use HTTPS for public production deployments.')
+  if (String(env.CONNECTOR_STORE_DRIVER || '').toLowerCase() !== 'postgres') throw new Error('Public production deployments require CONNECTOR_STORE_DRIVER=postgres.')
+  if (env.TRUST_PROXY !== 'true') throw new Error('Public production deployments require TRUST_PROXY=true behind the bundled reverse proxy.')
+  if (String(env.METRICS_TOKEN || '').length < 32) throw new Error('Public production deployments require a METRICS_TOKEN with at least 32 characters.')
 }

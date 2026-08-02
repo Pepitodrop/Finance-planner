@@ -9,18 +9,26 @@ function safeSignatureEqual(actual, expected) {
 }
 
 export function createSession(userId, secret, ttlSeconds = 3600) {
-  const payload = Buffer.from(JSON.stringify({ sub: userId, exp: Math.floor(Date.now() / 1000) + ttlSeconds })).toString('base64url')
+  const issuedAt = Math.floor(Date.now() / 1000)
+  const payload = Buffer.from(JSON.stringify({ sub: userId, iat: issuedAt, exp: issuedAt + ttlSeconds })).toString('base64url')
   return `${payload}.${sign(payload, secret)}`
 }
 
-export function verifySession(token, secret) {
+export function verifySessionClaims(token, secret) {
   const [payload, signature] = String(token ?? '').split('.')
   if (!payload || !signature) throw new Error('Authentication required.')
   const expected = sign(payload, secret)
   if (!safeSignatureEqual(signature, expected)) throw new Error('Invalid session.')
   const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
-  if (!decoded.sub || decoded.exp < Math.floor(Date.now() / 1000)) throw new Error('Session expired.')
-  return decoded.sub
+  const now = Math.floor(Date.now() / 1000)
+  if (!decoded.sub || decoded.exp < now) throw new Error('Session expired.')
+  const issuedAt = Number(decoded.iat || 0)
+  if (!Number.isSafeInteger(issuedAt) || issuedAt < 0 || issuedAt > now + 60) throw new Error('Invalid session.')
+  return { sub: String(decoded.sub), iat: issuedAt, exp: Number(decoded.exp) }
+}
+
+export function verifySession(token, secret) {
+  return verifySessionClaims(token, secret).sub
 }
 
 export function bearerToken(request) {

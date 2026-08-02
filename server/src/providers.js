@@ -7,6 +7,8 @@ const DEFAULT_TIMEOUT_MS = 15_000
 const DEFAULT_RETRIES = 2
 const DEFAULT_SYNC_DAYS = 31
 const DEFAULT_OVERLAP_DAYS = 3
+const GOCARDLESS_CONSENT_DAYS = 90
+const CONSENT_EXPIRY_SAFETY_MS = 5 * 60_000
 const MAX_PAYPAL_PAGES = 100
 const MAX_RETRY_DELAY_MS = 30_000
 
@@ -30,6 +32,40 @@ export function syncWindow(lastSyncedAt, now = new Date(), fallbackDays = DEFAUL
   const safePrevious = Number.isFinite(previous.getTime()) && previous <= end ? previous : fallback
   const start = new Date(Math.max(fallback.getTime(), safePrevious.getTime() - overlapDays * 86_400_000))
   return { start, end, dateFrom: isoDate(start), dateTo: isoDate(end) }
+}
+
+export function gocardlessConsentExpiresAt(credential) {
+  const source = credential?.connectedAt || credential?.createdAt || credential?.consentGrantedAt
+  const issuedAt = Date.parse(source)
+  if (!Number.isFinite(issuedAt)) return null
+  const days = Number(credential?.accessValidForDays || GOCARDLESS_CONSENT_DAYS)
+  if (!Number.isInteger(days) || days < 1 || days > 180) throw new Error('GoCardless consent duration is invalid.')
+  return new Date(issuedAt + days * 86_400_000).toISOString()
+}
+
+export function validateProviderReconciliation({ accounts, transactions, reconciliation }) {
+  if (!Array.isArray(accounts) || !Array.isArray(transactions) || !reconciliation || typeof reconciliation !== 'object') {
+    throw new Error('Provider reconciliation payload is incomplete.')
+  }
+  if (reconciliation.accountCount !== undefined && reconciliation.accountCount !== accounts.length) {
+    throw new Error('Provider reconciliation account count does not match normalized accounts.')
+  }
+  if (reconciliation.transactionCount !== transactions.length) {
+    throw new Error('Provider reconciliation transaction count does not match normalized transactions.')
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(reconciliation.dateFrom || '')) || !/^\d{4}-\d{2}-\d{2}$/.test(String(reconciliation.dateTo || ''))) {
+    throw new Error('Provider reconciliation date window is invalid.')
+  }
+  if (reconciliation.dateFrom > reconciliation.dateTo) throw new Error('Provider reconciliation date window is reversed.')
+  const ids = new Set()
+  for (const transaction of transactions) {
+    const externalId = String(transaction?.externalId || '')
+    if (!externalId || ids.has(externalId)) throw new Error('Provider reconciliation contains a duplicate or empty transaction identifier.')
+    ids.add(externalId)
+    if (!Number.isSafeInteger(transaction.amountCents)) throw new Error('Provider reconciliation contains an unsafe transaction amount.')
+    if (transaction.currency !== 'EUR') throw new Error('Provider reconciliation contains a non-EUR transaction.')
+  }
+  return true
 }
 
 export async function jsonFetch(url, options = {}, policy = {}) {
@@ -118,22 +154,39 @@ export async function startGoCardless({ env, state, redirectUri, country = 'DE' 
   if (!institutionId) throw new Error('No GoCardless institution is available for this country.')
   const agreement = await jsonFetch(`${GC_BASE}/agreements/enduser/`, {
     method: 'POST', headers: { Authorization: `Bearer ${token.access}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ institution_id: institutionId, max_historical_days: 90, access_valid_for_days: 90, access_scope: ['balances', 'details', 'transactions'] }),
+    body: JSON.stringify({ institution_id: institutionId, max_historical_days: 90, access_valid_for_days: GOCARDLESS_CONSENT_DAYS, access_scope: ['balances', 'details', 'transactions'] }),
   }, policy)
   const requisition = await jsonFetch(`${GC_BASE}/requisitions/`, {
     method: 'POST', headers: { Authorization: `Bearer ${token.access}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ redirect: redirectUri, institution_id: institutionId, agreement: agreement.id, reference: state, user_language: 'DE' }),
   }, policy)
-  return { redirectUrl: requisition.link, credential: { requisitionId: requisition.id, token, institutionId } }
+  return {
+    redirectUrl: requisition.link,
+    credential: {
+      requisitionId: requisition.id,
+      agreementId: agreement.id,
+      token,
+      institutionId,
+      accessValidForDays: GOCARDLESS_CONSENT_DAYS,
+    },
+  }
 }
 
 export async function syncGoCardless(credential, env) {
   const completedAt = new Date()
+  const consentExpiresAt = gocardlessConsentExpiresAt(credential)
+  if (consentExpiresAt && Date.parse(consentExpiresAt) <= completedAt.getTime() + CONSENT_EXPIRY_SAFETY_MS) {
+    throw new Error(`GoCardless consent expired at ${consentExpiresAt}; reconnect the bank account.`)
+  }
+
   let token = credential.token
   if (!tokenIsUsable(token, completedAt.getTime())) token = await gocardlessToken(env)
   const policy = providerPolicy(env)
   const requisition = await jsonFetch(`${GC_BASE}/requisitions/${credential.requisitionId}/`, { headers: { Authorization: `Bearer ${token.access}` } }, policy)
-  if (requisition.status !== 'LN') throw new Error(`GoCardless consent is not ready: ${requisition.status || 'unknown'}`)
+  if (requisition.status !== 'LN') {
+    if (['EX', 'RJ', 'SU'].includes(String(requisition.status || ''))) throw new Error(`GoCardless consent expired or was revoked: ${requisition.status}`)
+    throw new Error(`GoCardless consent is not ready: ${requisition.status || 'unknown'}`)
+  }
   const window = syncWindow(credential.lastSyncedAt, completedAt, 90)
   const accounts = []
   const transactions = []
@@ -162,7 +215,15 @@ export async function syncGoCardless(credential, env) {
       }
     }
   }
-  return { accounts, transactions, credential: { ...credential, token, lastSyncedAt: completedAt.toISOString() }, reconciliation: { accountCount: accounts.length, transactionCount: transactions.length, dateFrom: window.dateFrom, dateTo: window.dateTo, syncedAt: completedAt.toISOString() }, consentExpiresAt: undefined }
+  const reconciliation = { accountCount: accounts.length, transactionCount: transactions.length, dateFrom: window.dateFrom, dateTo: window.dateTo, syncedAt: completedAt.toISOString() }
+  validateProviderReconciliation({ accounts, transactions, reconciliation })
+  return {
+    accounts,
+    transactions,
+    credential: { ...credential, token, lastSyncedAt: completedAt.toISOString(), consentExpiresAt },
+    reconciliation,
+    consentExpiresAt,
+  }
 }
 
 async function paypalAccessToken(env) {
@@ -214,5 +275,8 @@ export async function syncPayPal(credential, env) {
     }
     page += 1
   } while (page <= totalPages)
-  return { accounts: [{ externalId: 'paypal-eur', name: 'PayPal EUR', type: 'cash', balanceCents, currency: 'EUR' }], transactions, credential: { ...credential, lastSyncedAt: completedAt.toISOString() }, reconciliation: { pageCount: totalPages, transactionCount: transactions.length, dateFrom: window.dateFrom, dateTo: window.dateTo, syncedAt: completedAt.toISOString() } }
+  const accounts = [{ externalId: 'paypal-eur', name: 'PayPal EUR', type: 'cash', balanceCents, currency: 'EUR' }]
+  const reconciliation = { pageCount: totalPages, transactionCount: transactions.length, dateFrom: window.dateFrom, dateTo: window.dateTo, syncedAt: completedAt.toISOString() }
+  validateProviderReconciliation({ accounts, transactions, reconciliation })
+  return { accounts, transactions, credential: { ...credential, lastSyncedAt: completedAt.toISOString() }, reconciliation }
 }

@@ -1,0 +1,129 @@
+name: Production browser acceptance
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  chromium:
+    name: Chromium production acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_DB: finance_planner_acceptance
+          POSTGRES_USER: finance_planner
+          POSTGRES_PASSWORD: acceptance-postgres-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U finance_planner -d finance_planner_acceptance"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      DATABASE_URL: postgresql://finance_planner:acceptance-postgres-password@127.0.0.1:5432/finance_planner_acceptance
+      SESSION_SECRET: acceptance-session-secret-with-more-than-32-characters
+      CONNECTOR_MASTER_KEY: acceptance-connector-key-with-more-than-32-characters
+      AUTH_MASTER_KEY: acceptance-auth-key-with-more-than-32-characters
+      METRICS_TOKEN: acceptance-metrics-token-with-more-than-32-characters
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install frontend dependencies
+        run: npm install --no-fund --no-audit --silent
+
+      - name: Install backend dependencies
+        working-directory: server
+        run: npm install --no-fund --no-audit --silent
+
+      - name: Build production web bundle
+        run: npm run build
+
+      - name: Start PostgreSQL-backed connector
+        env:
+          NODE_ENV: test
+          HOST: 127.0.0.1
+          PORT: 8788
+          APP_ORIGIN: http://127.0.0.1:4173
+          AUTH_MODE: local
+          PUBLIC_DEPLOYMENT: "false"
+          CONNECTOR_STORE_DRIVER: postgres
+          RELEASE_VERSION: acceptance
+          RELEASE_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          node server/src/server.js > connector-acceptance.log 2>&1 &
+          echo $! > connector-acceptance.pid
+          for attempt in {1..60}; do
+            if curl -fsS http://127.0.0.1:8788/health/ready >/dev/null; then
+              exit 0
+            fi
+            sleep 0.5
+          done
+          cat connector-acceptance.log
+          exit 1
+
+      - name: Start production preview
+        shell: bash
+        run: |
+          npm run preview -- --host 127.0.0.1 --port 4173 > web-acceptance.log 2>&1 &
+          echo $! > web-acceptance.pid
+          for attempt in {1..60}; do
+            if curl -fsS http://127.0.0.1:4173/ >/dev/null; then
+              exit 0
+            fi
+            sleep 0.5
+          done
+          cat web-acceptance.log
+          exit 1
+
+      - name: Run desktop, mobile, offline and accessibility acceptance
+        env:
+          ACCEPTANCE_APP_URL: http://127.0.0.1:4173
+          ACCEPTANCE_ARTIFACT_PATH: artifacts/browser-production-acceptance.json
+        run: node scripts/run-browser-production-acceptance.mjs
+
+      - name: Verify authenticated operational metrics
+        shell: bash
+        run: |
+          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8788/metrics)" = "401"
+          curl -fsS -H "Authorization: Bearer $METRICS_TOKEN" http://127.0.0.1:8788/metrics > artifacts/operational-metrics.prom
+          grep -q 'finance_planner_http_requests_total' artifacts/operational-metrics.prom
+          grep -q "commit=\"${GITHUB_SHA}\"" artifacts/operational-metrics.prom
+          ! grep -Eqi 'password|credential|iban|transaction description|production acceptance coffee' artifacts/operational-metrics.prom
+
+      - name: Upload acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-browser-acceptance
+          path: |
+            artifacts/browser-production-acceptance.json
+            artifacts/operational-metrics.prom
+            connector-acceptance.log
+            web-acceptance.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Stop acceptance services
+        if: always()
+        shell: bash
+        run: |
+          test ! -f web-acceptance.pid || kill "$(cat web-acceptance.pid)" 2>/dev/null || true
+          test ! -f connector-acceptance.pid || kill "$(cat connector-acceptance.pid)" 2>/dev/null || true

@@ -10,6 +10,7 @@ import { MobileEnhancements } from '../MobileEnhancements'
 import { MobileExperience } from '../MobileExperience'
 import { MobileProductionRuntime } from '../MobileProductionRuntime'
 import { MobileRuntime } from '../MobileRuntime'
+import { NavigationAccessibility } from '../NavigationAccessibility'
 import { VaultGate } from '../VaultGate'
 import { WebMobileHardening } from '../WebMobileHardening'
 import { CloudSyncStatus } from '../features/sync/CloudSyncStatus'
@@ -27,9 +28,11 @@ import '../mobile-experience.css'
 import '../web-mobile-hardening.css'
 import '../frontend-experience.css'
 import '../automatic-analysis.css'
+import '../production-readiness.css'
 import '../auth.css'
 import '../features/sync/cloud-sync.css'
 
+// Keep production-readiness controls and automatic analysis mounted together.
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>
@@ -40,7 +43,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <MobileConnectivityStatus />
       <MobileEnhancements />
       <MobileExperience />
-      <AuthGate>{(user) => <VaultGate key={user.id} userId={user.id}><><App /><CloudSyncStatus /><AutomaticTransactionAnalysis /></></VaultGate>}</AuthGate>
+      <NavigationAccessibility />
+      <AuthGate>{(user) => <VaultGate key={user.id} userId={user.id}><><App userId={user.id} /><CloudSyncStatus /><AutomaticTransactionAnalysis /></></VaultGate>}</AuthGate>
     </ErrorBoundary>
   </React.StrictMode>,
 )
