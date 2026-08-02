@@ -5,11 +5,15 @@ This workflow is intentionally destructive. It deletes every Finance Planner app
 The command cannot run accidentally:
 
 - a PostgreSQL custom-format backup is mandatory;
-- `pg_restore --list` must validate the backup before deletion starts;
+- `pg_restore --list` must validate the archive;
+- the archive is restored into a temporary database before deletion starts;
+- the restored migration history and critical application tables must be present;
+- the temporary restore database is removed after verification;
 - `RESET_CONFIRM` must exactly equal `RESET_ALL_FINANCE_PLANNER_DATA`;
 - `DATABASE_URL`, `CONNECTOR_MASTER_KEY` and `AUTH_MASTER_KEY` are required;
 - the expected `auth_store` and `user_finance_state` tables must exist;
-- truncation and demo seeding run in one database transaction.
+- truncation and demo seeding run in one database transaction;
+- the inserted finance vault is decrypted and validated before success is reported.
 
 ## Preview the seed
 
@@ -39,7 +43,7 @@ export DEMO_USER_NAME="Finance Planner Demo"
 npm run database:reset-demo
 ```
 
-`pg_dump` and `pg_restore` must be installed on the host and compatible with the PostgreSQL server version. The generated backup is set to mode `0600`.
+`pg_dump` and `pg_restore` must be installed on the host and compatible with the PostgreSQL server version. The database role must be allowed to create and drop the temporary restore database. The generated backup is set to mode `0600`.
 
 Restart the deployment only after the command prints a successful JSON summary.
 
@@ -80,6 +84,17 @@ docker compose exec -T postgres psql \
 ```
 
 The finance and authentication payloads remain application-encrypted. Transaction descriptions and profile data must not appear as plaintext in PostgreSQL.
+
+## Automated validation
+
+The backend test suite creates an isolated PostgreSQL database, applies all migrations, inserts pre-existing encrypted records, executes the real backup/restore/reset/seed path, and verifies:
+
+- the backup is non-empty and restorable;
+- `schema_migrations` survives;
+- old users and finance records are removed;
+- exactly one demo user remains;
+- the auth store and finance vault decrypt correctly;
+- the seeded account, transaction, goal and automatic-analysis counts are valid.
 
 ## Recovery
 
