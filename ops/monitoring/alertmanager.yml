@@ -1,0 +1,11 @@
+route:
+  receiver: default
+  group_by: [alertname]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+# Replace or extend this receiver in the deployment secret/config layer with
+# PagerDuty, Opsgenie, email, Slack or a protected webhook destination.
+receivers:
+  - name: default
