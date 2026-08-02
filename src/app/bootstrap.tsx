@@ -34,6 +34,7 @@ import '../features/sync/cloud-sync.css'
 import '../reference-dashboard.css'
 import '../reference-dashboard-fidelity.css'
 import '../transactions-reference.css'
+import '../remaining-pages-redesign.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
