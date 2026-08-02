@@ -46,7 +46,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <MobileEnhancements />
       <MobileExperience />
       <NavigationAccessibility />
-      <AuthGate>{(user) => <VaultGate key={user.id} userId={user.id}><><App userId={user.id} /><CloudSyncStatus /><AutomaticTransactionAnalysis /></></VaultGate>}</AuthGate>
+      <AuthGate>{(user) => <VaultGate key={user.id} userId={user.id}><><App userId={user.id} userName={user.name} /><CloudSyncStatus /><AutomaticTransactionAnalysis /></></VaultGate>}</AuthGate>
     </ErrorBoundary>
   </React.StrictMode>,
 )
