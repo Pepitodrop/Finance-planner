@@ -25,13 +25,10 @@ jobs:
           POSTGRES_DB: finance_planner_acceptance
           POSTGRES_USER: finance_planner
           POSTGRES_PASSWORD: acceptance-postgres-password
-        ports:
-          - 5432:5432
+        ports: [5432:5432]
         options: >-
           --health-cmd "pg_isready -U finance_planner -d finance_planner_acceptance"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 15
+          --health-interval 5s --health-timeout 5s --health-retries 15
     env:
       DATABASE_URL: postgresql://finance_planner:acceptance-postgres-password@127.0.0.1:5432/finance_planner_acceptance
       SESSION_SECRET: acceptance-session-secret-with-more-than-32-characters
@@ -40,21 +37,15 @@ jobs:
       METRICS_TOKEN: acceptance-metrics-token-with-more-than-32-characters
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
+        with: { node-version: 22 }
       - name: Install frontend dependencies
         run: npm install --no-fund --no-audit --silent
-
       - name: Install backend dependencies
         working-directory: server
         run: npm install --no-fund --no-audit --silent
-
       - name: Build production web bundle
         run: npm run build
-
       - name: Start PostgreSQL-backed connector
         env:
           NODE_ENV: test
@@ -71,34 +62,27 @@ jobs:
           node server/src/server.js > connector-acceptance.log 2>&1 &
           echo $! > connector-acceptance.pid
           for attempt in {1..60}; do
-            if curl -fsS http://127.0.0.1:8788/health/ready >/dev/null; then
-              exit 0
-            fi
+            if curl -fsS http://127.0.0.1:8788/health/ready >/dev/null; then exit 0; fi
             sleep 0.5
           done
           cat connector-acceptance.log
           exit 1
-
       - name: Start production preview
         shell: bash
         run: |
           npm run preview -- --host 127.0.0.1 --port 4173 > web-acceptance.log 2>&1 &
           echo $! > web-acceptance.pid
           for attempt in {1..60}; do
-            if curl -fsS http://127.0.0.1:4173/ >/dev/null; then
-              exit 0
-            fi
+            if curl -fsS http://127.0.0.1:4173/ >/dev/null; then exit 0; fi
             sleep 0.5
           done
           cat web-acceptance.log
           exit 1
-
       - name: Run desktop, mobile, offline and accessibility acceptance
         env:
           ACCEPTANCE_APP_URL: http://127.0.0.1:4173
           ACCEPTANCE_ARTIFACT_PATH: artifacts/browser-production-acceptance.json
         run: node scripts/run-browser-production-acceptance.mjs
-
       - name: Verify authenticated operational metrics
         shell: bash
         run: |
@@ -107,7 +91,11 @@ jobs:
           grep -q 'finance_planner_http_requests_total' artifacts/operational-metrics.prom
           grep -q "commit=\"${GITHUB_SHA}\"" artifacts/operational-metrics.prom
           ! grep -Eqi 'password|credential|iban|transaction description|production acceptance coffee' artifacts/operational-metrics.prom
-
+      - name: Enforce backend resilience baseline
+        env:
+          ACCEPTANCE_CONNECTOR_URL: http://127.0.0.1:8788
+          BACKEND_RESILIENCE_ARTIFACT: artifacts/backend-resilience.json
+        run: node scripts/backend-resilience-acceptance.mjs
       - name: Enforce sustained-load baseline
         env:
           LOAD_WEB_URL: http://127.0.0.1:4173/
@@ -119,7 +107,6 @@ jobs:
           LOAD_MIN_WEB_RPS: 40
           LOAD_ARTIFACT_PATH: artifacts/production-load-acceptance.json
         run: node scripts/production-load-acceptance.mjs
-
       - name: Upload acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -127,13 +114,13 @@ jobs:
           name: production-browser-acceptance
           path: |
             artifacts/browser-production-acceptance.json
+            artifacts/backend-resilience.json
             artifacts/operational-metrics.prom
             artifacts/production-load-acceptance.json
             connector-acceptance.log
             web-acceptance.log
           if-no-files-found: warn
           retention-days: 30
-
       - name: Stop acceptance services
         if: always()
         shell: bash
