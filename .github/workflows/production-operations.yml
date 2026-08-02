@@ -33,6 +33,9 @@ jobs:
       RESTORE_DATABASE_URL: postgresql://finance:finance-password@127.0.0.1:5432/finance_restore
       BACKUP_DIR: artifacts/backups
       BACKUP_ENCRYPTION_KEY_FILE: artifacts/backup.key
+      POSTGRES_PASSWORD: validation-postgres-password
+      SESSION_SECRET: validation-session-secret-with-more-than-32-characters
+      CONNECTOR_MASTER_KEY: validation-connector-key-with-more-than-32-characters
     steps:
       - uses: actions/checkout@v4
       - name: Validate monitoring configuration
