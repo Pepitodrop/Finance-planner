@@ -37,8 +37,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate monitoring configuration
         run: |
-          docker run --rm -v "$PWD/ops/monitoring:/etc/prometheus:ro" prom/prometheus:v3.5.0 promtool check config /etc/prometheus/prometheus.yml
-          docker run --rm -v "$PWD/ops/monitoring:/etc/prometheus:ro" prom/prometheus:v3.5.0 promtool check rules /etc/prometheus/alerts.yml
+          docker run --rm --entrypoint=/bin/promtool -v "$PWD/ops/monitoring:/etc/prometheus:ro" prom/prometheus:v3.5.0 check config /etc/prometheus/prometheus.yml
+          docker run --rm --entrypoint=/bin/promtool -v "$PWD/ops/monitoring:/etc/prometheus:ro" prom/prometheus:v3.5.0 check rules /etc/prometheus/alerts.yml
           docker compose -f docker-compose.yml -f docker-compose.monitoring.yml config >/dev/null
       - name: Seed disposable production-shaped data
         run: |
