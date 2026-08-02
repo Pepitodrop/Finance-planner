@@ -36,6 +36,7 @@ jobs:
       POSTGRES_PASSWORD: validation-postgres-password
       SESSION_SECRET: validation-session-secret-with-more-than-32-characters
       CONNECTOR_MASTER_KEY: validation-connector-key-with-more-than-32-characters
+      PGPASSWORD: finance-password
     steps:
       - uses: actions/checkout@v4
       - name: Validate monitoring configuration
@@ -52,7 +53,7 @@ jobs:
           docker compose -f compose.yaml -f docker-compose.monitoring.yml config >/dev/null
       - name: Seed disposable production-shaped data
         run: |
-          createdb "$RESTORE_DATABASE_URL"
+          createdb --host=127.0.0.1 --port=5432 --username=finance finance_restore
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'create table acceptance_probe(id bigint primary key, encrypted_payload text not null);'
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "insert into acceptance_probe values (1, 'ciphertext-only');"
           mkdir -p artifacts
