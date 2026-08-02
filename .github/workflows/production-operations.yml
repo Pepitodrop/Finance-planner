@@ -59,11 +59,18 @@ jobs:
           mkdir -p artifacts
           openssl rand -hex 32 > "$BACKUP_ENCRYPTION_KEY_FILE"
       - name: Create encrypted backup
-        run: bash ops/backup/postgres-backup.sh
+        run: |
+          docker run --rm --network host \
+            -v "$PWD:/workspace" -w /workspace \
+            -e DATABASE_URL -e BACKUP_DIR -e BACKUP_ENCRYPTION_KEY_FILE \
+            postgres:17-bookworm bash ops/backup/postgres-backup.sh
       - name: Restore and verify backup
         run: |
           export BACKUP_FILE="$(find "$BACKUP_DIR" -name '*.enc' -type f | head -n1)"
-          bash ops/backup/restore-drill.sh
+          docker run --rm --network host \
+            -v "$PWD:/workspace" -w /workspace \
+            -e BACKUP_FILE -e BACKUP_ENCRYPTION_KEY_FILE -e RESTORE_DATABASE_URL \
+            postgres:17-bookworm bash ops/backup/restore-drill.sh
           test "$(psql "$RESTORE_DATABASE_URL" -Atc 'select count(*) from acceptance_probe')" = "1"
       - uses: actions/upload-artifact@v4
         if: always()
