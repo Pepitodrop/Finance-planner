@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: finance-planner-connector
+    metrics_path: /metrics
+    authorization:
+      credentials_file: /run/secrets/metrics_token
+    static_configs:
+      - targets: ['connector:8787']
+  - job_name: prometheus
+    static_configs:
+      - targets: ['prometheus:9090']
