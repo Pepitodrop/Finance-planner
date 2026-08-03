@@ -4,13 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "start": "node src/server.js",
+    "start": "node src/entrypoint.js",
     "test": "node --test",
     "test:ai-evaluation": "node --test test/ai-evaluation.test.js",
     "migrate": "node src/migrate.js",
     "migrate:rollback": "node src/migrate-rollback.js",
     "database:reset-demo": "node scripts/reset-and-seed-demo.mjs",
-    "database:reset-demo:dry-run": "node scripts/reset-and-seed-demo.mjs --dry-run"
+    "database:reset-demo:dry-run": "node scripts/reset-and-seed-demo.mjs --dry-run",
+    "test-account:enroll": "node scripts/create-test-enrollment.mjs"
   },
   "dependencies": {
     "@simplewebauthn/server": "^13.1.2",
