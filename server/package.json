@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "start": "node src/entrypoint.js",
+    "start": "node src/server.js",
     "test": "node --test",
     "test:ai-evaluation": "node --test test/ai-evaluation.test.js",
     "migrate": "node src/migrate.js",
