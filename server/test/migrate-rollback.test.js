@@ -118,7 +118,7 @@ test('rollback stops at the target version without touching older migrations', {
   })
 })
 
-test('rollback refuses to proceed when a target version has no down-migration', { skip: !databaseUrl }, async () => {
+test('rollback validates the complete plan before changing the database', { skip: !databaseUrl }, async () => {
   await withScratchMigrations(async ({ scratchDir, scratchDownDir }) => {
     const pool = createDatabase(databaseUrl, { max: 2 })
     try {
@@ -127,8 +127,8 @@ test('rollback refuses to proceed when a target version has no down-migration', 
       await rm(join(scratchDownDir, '901_scratch_a.sql'))
 
       await assert.rejects(() => rollbackDatabase(pool, 900, scratchDownDir), /No down-migration found for version 901/)
-      assert.equal(await tableExists(pool, 'finance_planner_test_rollback_scratch_b'), false, 'version 902 rolls back before the missing 901 down-migration is reached')
-      assert.equal(await tableExists(pool, 'finance_planner_test_rollback_scratch_a'), true, 'a refused rollback must not partially apply the failing version')
+      assert.equal(await tableExists(pool, 'finance_planner_test_rollback_scratch_b'), true, 'no newer migration may be rolled back when the complete plan is invalid')
+      assert.equal(await tableExists(pool, 'finance_planner_test_rollback_scratch_a'), true, 'a refused rollback must make no destructive changes')
     } finally {
       await cleanupScratchState(pool)
       await pool.end()
