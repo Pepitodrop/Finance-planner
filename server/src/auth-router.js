@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { OAuth2Client } from 'google-auth-library'
 import {
   generateAuthenticationOptions,
@@ -13,6 +13,7 @@ import { createSession, verifySession } from './security.js'
 const b64 = (value) => Buffer.from(value).toString('base64url')
 const unb64 = (value) => new Uint8Array(Buffer.from(value, 'base64url'))
 const DEFAULT_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
+const enrollmentKey = (token) => `test-enrollment:${createHash('sha256').update(String(token), 'utf8').digest('hex')}`
 
 function parseCookies(request) {
   return Object.fromEntries(String(request.headers.cookie || '').split(';').map((part) => part.trim().split('=').map(decodeURIComponent)).filter((entry) => entry.length === 2))
@@ -49,7 +50,7 @@ function configuredSessionTtl(env) {
 function removeUserFromAuthStore(data, userId) {
   delete data.users[userId]
   for (const key of Object.keys(data.challenges)) {
-    if (key.endsWith(`:${userId}`)) delete data.challenges[key]
+    if (key.endsWith(`:${userId}`) || data.challenges[key]?.userId === userId) delete data.challenges[key]
   }
 }
 
@@ -112,6 +113,55 @@ export async function createAuthRouter({ env, origin, sessionSecret, send, verif
         recordsDeleted: deleted.deleted,
       }, { 'Set-Cookie': cookie('fp_session', '', origin, 0) })
       return true
+    }
+
+    if (url.pathname.startsWith('/api/auth/test-enrollment/')) {
+      await store.load()
+
+      if (request.method === 'GET' && url.pathname === '/api/auth/test-enrollment/options') {
+        const token = String(url.searchParams.get('token') || '')
+        const record = store.data.challenges[enrollmentKey(token)]
+        const user = record && store.data.users[record.userId]
+        if (!token || !record || record.expiresAt < Date.now() || !user) throw new Error('Enrollment link is invalid or expired.')
+        const options = await generateRegistrationOptions({
+          rpName,
+          rpID: rpId,
+          userID: new TextEncoder().encode(user.id),
+          userName: user.email,
+          attestationType: 'none',
+          authenticatorSelection: { authenticatorAttachment: 'platform', residentKey: 'required', userVerification: 'required' },
+          excludeCredentials: (user.passkeys || []).map((credential) => ({ id: credential.id, transports: credential.transports })),
+        })
+        await store.mutate((data) => { data.challenges[enrollmentKey(token)].challenge = options.challenge })
+        send(response, 200, options)
+        return true
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/auth/test-enrollment/verify') {
+        const input = await jsonBody(request)
+        const token = String(input.token || '')
+        const record = store.data.challenges[enrollmentKey(token)]
+        const user = record && store.data.users[record.userId]
+        if (!token || !record || record.expiresAt < Date.now() || !record.challenge || !user) throw new Error('Enrollment link is invalid or expired.')
+        const verification = await verifyRegistrationResponse({
+          response: input.credential,
+          expectedChallenge: record.challenge,
+          expectedOrigin: origin,
+          expectedRPID: rpId,
+          requireUserVerification: true,
+        })
+        if (!verification.verified || !verification.registrationInfo) throw new Error('Passkey enrollment failed.')
+        const { credential, credentialDeviceType, credentialBackedUp } = verification.registrationInfo
+        await store.mutate((data) => {
+          const target = data.users[user.id]
+          target.passkeys ||= []
+          target.passkeys.push({ id: credential.id, publicKey: b64(credential.publicKey), counter: credential.counter, transports: credential.transports, deviceType: credentialDeviceType, backedUp: credentialBackedUp })
+          delete data.challenges[enrollmentKey(token)]
+        })
+        const session = createSession(user.id, sessionSecret, sessionTtlSeconds)
+        send(response, 200, { enrolled: true, user: { id: user.id, email: user.email, name: user.name } }, { 'Set-Cookie': cookie('fp_session', session, origin, sessionTtlSeconds) })
+        return true
+      }
     }
 
     if (request.method === 'GET' && url.pathname === '/api/auth/google/start') {
@@ -179,9 +229,6 @@ export async function createAuthRouter({ env, origin, sessionSecret, send, verif
     if (request.method === 'POST' && url.pathname === '/api/auth/passkeys/authenticate/options') {
       const { email } = await jsonBody(request)
       const user = store.findByEmail(String(email || ''))
-      // No `allowCredentials`/stored challenge for an unknown email or a user with no
-      // passkeys yet -- still returns 200 with real options so the response can't be
-      // used to enumerate which emails have an account (matches WebAuthn best practice).
       const options = await generateAuthenticationOptions({
         rpID: rpId,
         userVerification: 'required',
