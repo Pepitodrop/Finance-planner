@@ -14,7 +14,7 @@
     "signedLinuxRelease": { "status": "pending", "evidence": [] },
     "signedWindowsRelease": { "status": "pending", "evidence": [] },
     "signedMacosRelease": { "status": "pending", "evidence": [] },
-    "distributedRateLimiting": { "status": "pending", "evidence": [] },
+    "distributedRateLimiting": { "status": "partial", "evidence": ["server/src/distributed-rate-limiter.js", "server/src/distributed-rate-limiter.test.js", "server/src/server.js"] },
     "productionObservability": { "status": "partial", "evidence": ["docs/PRODUCTION.md"] },
     "independentSecurityReview": { "status": "pending", "evidence": [] },
     "independentPrivacyReview": { "status": "pending", "evidence": [] }

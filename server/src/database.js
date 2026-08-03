@@ -8,6 +8,7 @@ import { RetentionManager } from './retention.js'
 
 const { Pool } = pg
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations')
+const downMigrationsDir = join(migrationsDir, 'down')
 const advisoryLockId = 741_926_001
 let activeDatabasePool = null
 
@@ -26,21 +27,48 @@ export function createDatabase(url, options = {}) {
   })
 }
 
-export async function migrateDatabase(pool) {
+export async function migrateDatabase(pool, dir = migrationsDir) {
   const client = await pool.connect()
   try {
     await client.query('SELECT pg_advisory_lock($1)', [advisoryLockId])
     await client.query('CREATE TABLE IF NOT EXISTS schema_migrations (version bigint PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())')
     const applied = new Set((await client.query('SELECT version FROM schema_migrations')).rows.map((row) => Number(row.version)))
-    const files = (await readdir(migrationsDir)).filter((name) => /^\d+_.*\.sql$/.test(name)).sort()
+    const files = (await readdir(dir)).filter((name) => /^\d+_.*\.sql$/.test(name)).sort()
     for (const file of files) {
       const version = Number(file.split('_', 1)[0])
       if (!Number.isSafeInteger(version)) throw new Error(`Invalid migration filename: ${file}`)
       if (applied.has(version)) continue
-      await client.query(await readFile(join(migrationsDir, file), 'utf8'))
+      await client.query(await readFile(join(dir, file), 'utf8'))
       const recorded = await client.query('SELECT 1 FROM schema_migrations WHERE version = $1', [version])
       if (!recorded.rowCount) throw new Error(`Migration ${file} did not record version ${version}.`)
     }
+  } finally {
+    await client.query('SELECT pg_advisory_unlock($1)', [advisoryLockId]).catch(() => {})
+    client.release()
+  }
+}
+
+// Rolls back every applied migration newer than targetVersion, newest first, using the
+// matching file in migrations/down/. Refuses a partial rollback: if any version being
+// undone has no down-migration, nothing further is attempted (already-rolled-back
+// versions stay rolled back — this is a data-loss recovery path, not a general-purpose
+// undo, so operators are expected to restore from backup if a down-migration is missing).
+export async function rollbackDatabase(pool, targetVersion, downDir = downMigrationsDir) {
+  if (!Number.isSafeInteger(targetVersion) || targetVersion < 0) throw new Error(`Invalid rollback target version: ${targetVersion}`)
+  const client = await pool.connect()
+  try {
+    await client.query('SELECT pg_advisory_lock($1)', [advisoryLockId])
+    const applied = (await client.query('SELECT version FROM schema_migrations ORDER BY version DESC')).rows.map((row) => Number(row.version))
+    const toRollBack = applied.filter((version) => version > targetVersion)
+    const downFiles = (await readdir(downDir)).filter((name) => /^\d+_.*\.sql$/.test(name))
+    for (const version of toRollBack) {
+      const file = downFiles.find((name) => Number(name.split('_', 1)[0]) === version)
+      if (!file) throw new Error(`No down-migration found for version ${version}; refusing partial rollback.`)
+      await client.query(await readFile(join(downDir, file), 'utf8'))
+      const stillRecorded = await client.query('SELECT 1 FROM schema_migrations WHERE version = $1', [version])
+      if (stillRecorded.rowCount) throw new Error(`Down-migration ${file} did not remove version ${version} from schema_migrations.`)
+    }
+    return toRollBack
   } finally {
     await client.query('SELECT pg_advisory_unlock($1)', [advisoryLockId]).catch(() => {})
     client.release()

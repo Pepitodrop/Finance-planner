@@ -203,6 +203,26 @@ jobs:
         run: |
           docker build -f Dockerfile.web -t finance-planner-web:ci .
           docker build -f Dockerfile.server -t finance-planner-connector:ci .
+      # Pinned by commit SHA (v0.36.0, released after aquasecurity/trivy-action's
+      # March 2026 supply-chain compromise of all prior tags) rather than a mutable
+      # tag, since a security-scanning action is a high-value target for exactly
+      # this kind of attack.
+      - name: Scan web image for known vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: finance-planner-web:ci
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+      - name: Scan connector image for known vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: finance-planner-connector:ci
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
       - name: Validate Compose configuration
         env:
           SESSION_SECRET: ci-session-secret-with-at-least-32-characters

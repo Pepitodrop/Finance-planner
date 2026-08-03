@@ -147,6 +147,16 @@ For suspected credential, provider or host compromise:
 
 Keep previous web and connector images available. A rollback must not silently downgrade database or encrypted-payload formats. Verify the prior version against a restored copy of the current database before switching traffic. Record the rollback commit and re-run health, auth, cloud-sync and provider checks.
 
+**Application rollback (bad release, unchanged schema).** Redeploy the previous web/connector images. No database action needed.
+
+**Schema rollback (bad migration).** Every file in `server/migrations/` has a matching down-migration in `server/migrations/down/`. To undo migrations newer than a known-good version:
+
+```sh
+DATABASE_URL=... npm --prefix server run migrate:rollback -- <target-version>
+```
+
+This drops exactly the tables/columns the rolled-back migrations created and removes their `schema_migrations` rows, newest first; it refuses to proceed (leaving already-rolled-back versions rolled back) if any version being undone has no down-migration, rather than risk a partial, undefined schema state. This is a fast, targeted undo for a bad migration specifically — it does not replace restoring from backup as the primary disaster-recovery path (see §7), since a down-migration only reverses schema, not data written under the now-removed columns/tables.
+
 ## 11. Remaining external production gaps
 
 Repository-controlled non-desktop readiness is machine-checked, but these external gates still require independent evidence:

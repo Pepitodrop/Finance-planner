@@ -8,6 +8,7 @@
     "test": "node --test",
     "test:ai-evaluation": "node --test test/ai-evaluation.test.js",
     "migrate": "node src/migrate.js",
+    "migrate:rollback": "node src/migrate-rollback.js",
     "database:reset-demo": "node scripts/reset-and-seed-demo.mjs",
     "database:reset-demo:dry-run": "node scripts/reset-and-seed-demo.mjs --dry-run"
   },

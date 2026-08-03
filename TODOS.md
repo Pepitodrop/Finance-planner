@@ -44,6 +44,35 @@ destabilizing the test suite during a hardening pass.
 **Priority:** P3
 **Depends on:** None
 
+### Server-side full GDPR-style data export
+
+**What:** Account *deletion* is complete end-to-end (`server/src/account-deletion.js`,
+`DELETE /api/auth/account`), but data *export* is client-side-only: `src/backup.ts`
+exports whatever `AppState` is already loaded in the browser (finance data), not
+everything the server holds (e.g. session-revocation records, connector metadata).
+
+**Why:** Real privacy gap, but it's new feature surface (a new authenticated endpoint,
+a full server-side data inventory, tests) rather than a hardening fix to an existing
+mechanism — better scoped as its own follow-up than bundled into a hardening pass.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** None
+
+### Wire a real Alertmanager paging receiver
+
+**What:** `ops/monitoring/alertmanager.yml` ships only a stub `default` receiver — the
+alert rules in `ops/monitoring/alerts.yml` are real and will fire, but into nothing.
+
+**Why:** This genuinely needs an operator's real Slack/PagerDuty/webhook destination,
+which doesn't exist in this repository — there's nothing to "fix" here without
+fabricating a fake destination. Left for whoever owns the actual production deployment
+to wire up one secret/URL.
+
+**Effort:** S (for the operator, once they have a real destination)
+**Priority:** P1
+**Depends on:** an operator-provided paging destination (external)
+
 ## Completed
 
 ### Prevent user enumeration via the passkey authentication-options endpoint
@@ -102,4 +131,67 @@ in the same pass:
 skip-link string against `src/App.tsx` specifically; updated its evidence to point at
 `src/WebMobileHardening.tsx` (where the skip link now uniquely lives) and added
 `src/appAccessibility.test.tsx` as additional evidence for that gate.
+
+### Harden the production nginx config: add HSTS, drop dev-only CSP entries
+
+Fixed 2026-08-03. `deploy/nginx.conf` — the actual production edge server image, not used
+by local dev (`vite dev` has its own proxy config) — never sent `Strict-Transport-Security`
+even though `server.js` does, and hardcoded `http://localhost:*`/`ws://localhost:*` into
+the production CSP `connect-src` for no reason. Added the HSTS header (unconditional, since
+SECURITY.md already mandates HTTPS-only production deployments) and removed the localhost
+entries. Added a regression guard in `scripts/verify-mobile.mjs` asserting the header is
+present and `localhost` never appears in the file again.
+
+### Correct the stale `distributedRateLimiting` production-readiness gate
+
+Fixed 2026-08-03. `config/production-readiness-evidence.json` marked `distributedRateLimiting`
+as `pending` with no evidence, but `server/src/distributed-rate-limiter.js` already
+implements it (Postgres-backed sliding-window limiter) and `server/src/server.js` already
+enforces it in public production (`requireDistributed` throws if `CONNECTOR_STORE_DRIVER`
+isn't `postgres`), with a real passing test (`server/src/distributed-rate-limiter.test.js`).
+Updated the gate to `partial` (not `verified` — that status requires a named, accountable
+human `approvedBy`/`reviewedAt`, which no one has actually recorded; claiming it here would
+trade one inaccuracy for another) citing the implementation, its test, and the enforcement
+site as evidence. No code change — this was a documentation-accuracy fix, and leaving it
+`pending` was itself understating real, tested readiness.
+
+### Scan built Docker images for known vulnerabilities in CI
+
+Fixed 2026-08-03. `.github/workflows/ci.yml`'s `containers` job built and compose-validated
+`Dockerfile.web`/`Dockerfile.server` but never scanned the resulting images — base-image
+CVEs could ship undetected between dependabot's monthly image-tag bumps. Added
+`aquasecurity/trivy-action`, pinned by commit SHA (not a mutable tag) to the `v0.36.0`
+release, scanning both images and failing the job on HIGH/CRITICAL findings.
+**Pinned by SHA specifically because this action itself was compromised in a March 2026
+supply-chain attack that affected every tag from `0.0.1` through `0.34.2`** — using any tag
+in that range, or trusting a floating tag going forward, would have introduced exactly the
+kind of vulnerability this step exists to catch. Only verifiable by an actual CI run (no
+Docker/Trivy available in this sandbox); the workflow YAML was validated for correctness
+with `js-yaml`.
+
+### Make schema migrations reversible
+
+Fixed 2026-08-03. `server/migrations/*.sql` were forward-only; the only rollback story was
+"restore a database backup" (`docs/PRODUCTION.md` §10), with no in-place undo for a bad
+migration specifically. Added a matching down-migration in `server/migrations/down/` for
+every existing forward migration, a `rollbackDatabase(pool, targetVersion)` function in
+`server/src/database.js` (same advisory-lock pattern as the existing forward `migrateDatabase`;
+refuses a partial rollback if any version being undone has no down-migration file, rather
+than risk an undefined schema state), and a CLI entry point
+(`npm --prefix server run migrate:rollback -- <target-version>`, `server/src/migrate-rollback.js`).
+
+Tests (`server/test/migrate-rollback.test.js`): one static, always-running check that every
+forward migration has a matching down-migration file (catches drift as new migrations are
+added, no database required); three Postgres-dependent tests (skipped without
+`TEST_DATABASE_URL`/`DATABASE_URL`, same convention as the existing Postgres test suite)
+that round-trip forward→rollback→forward, confirm a rollback stops exactly at its target
+without touching older versions, and confirm the fail-closed behavior on a missing
+down-migration. These deliberately exercise the mechanism against synthetic, temp-directory
+migrations with uniquely-named scratch tables rather than the real schema — other test files
+run concurrently against the same test database and depend on the real tables existing, so
+rolling back the real schema from within a test would risk dropping tables out from under
+them. Updated `docs/PRODUCTION.md` §10 to document the new rollback command alongside the
+existing backup-restore path (rollback is a faster, targeted undo for a bad migration; it
+doesn't replace backups as the primary disaster-recovery mechanism, since a down-migration
+reverses schema, not data already written under the removed columns/tables).
 
