@@ -129,7 +129,7 @@ export async function createAuthRouter({ env, origin, sessionSecret, send, verif
           userID: new TextEncoder().encode(user.id),
           userName: user.email,
           attestationType: 'none',
-          authenticatorSelection: { authenticatorAttachment: 'platform', residentKey: 'required', userVerification: 'required' },
+          authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
           excludeCredentials: (user.passkeys || []).map((credential) => ({ id: credential.id, transports: credential.transports })),
         })
         await store.mutate((data) => { data.challenges[enrollmentKey(token)].challenge = options.challenge })
@@ -201,7 +201,7 @@ export async function createAuthRouter({ env, origin, sessionSecret, send, verif
         userID: new TextEncoder().encode(user.id),
         userName: user.email,
         attestationType: 'none',
-        authenticatorSelection: { authenticatorAttachment: 'platform', residentKey: 'required', userVerification: 'required' },
+        authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
         excludeCredentials: (user.passkeys || []).map((credential) => ({ id: credential.id, transports: credential.transports })),
       })
       await store.mutate((data) => { data.challenges[`register:${user.id}`] = { value: options.challenge, expiresAt: Date.now() + 300_000 } })
