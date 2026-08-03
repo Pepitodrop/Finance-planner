@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { AuthStore } from './auth-store.js'
 import { createDatabase, migrateDatabase } from './database.js'
 
-const enrollmentKey = (token) => `test-enrollment:${createHash('sha256').update(String(token), 'utf8').digest('hex')}`
+export const enrollmentKey = (token) => `test-enrollment:${createHash('sha256').update(String(token), 'utf8').digest('hex')}`
 
 export async function createEnrollmentStore(env = process.env) {
   const pool = createDatabase(env.DATABASE_URL)
