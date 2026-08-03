@@ -16,4 +16,5 @@ console.log(JSON.stringify({
   userId: result.userId,
   expiresAt: new Date(result.expiresAt).toISOString(),
   enrollmentUrlFile: outputPath,
+  note: 'Read the URL file from the server terminal and delete it after enrollment.',
 }, null, 2))
