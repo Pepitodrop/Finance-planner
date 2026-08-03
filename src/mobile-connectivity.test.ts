@@ -17,7 +17,7 @@ describe('classifyConnectivity', () => {
 })
 
 describe('probeSameOrigin', () => {
-  it('uses the same-origin liveness endpoint with credentialed no-store semantics', async () => {
+  it('uses the same-origin backend liveness endpoint with credentialed no-store semantics', async () => {
     const fetcher = vi.fn(async () => new Response('{"status":"ok"}', {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -36,8 +36,8 @@ describe('probeSameOrigin', () => {
     })
   })
 
-  it('does not report degraded merely because bank-provider readiness is incomplete', async () => {
-    const fetcher = vi.fn(async () => new Response('{"status":"ok","service":"finance-planner-connector"}', {
+  it('does not report degraded merely because bank providers are not configured', async () => {
+    const fetcher = vi.fn(async () => new Response('{"status":"ok"}', {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })) as unknown as typeof fetch
