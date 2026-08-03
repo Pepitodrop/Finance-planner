@@ -60,6 +60,12 @@ assert.doesNotMatch(nginx, /proxy_set_header Origin \$scheme:\/\/\$host/)
 assert.match(nginx, /location \/api\//)
 assert.match(nginx, /proxy_pass http:\/\/connector:8787;/)
 
+// Regression: the production nginx config previously had no HSTS header even though
+// server.js sends one, and its CSP connect-src hardcoded http://localhost:*/ws://localhost:*
+// (a dev-only convenience) into every production response.
+assert.match(nginx, /Strict-Transport-Security "max-age=\d+; includeSubDomains"/)
+assert.doesNotMatch(nginx, /localhost/, 'production nginx.conf must not reference localhost')
+
 for (const path of ['/api/', '/connectors/', '/oauth/']) {
   assert.ok(serviceWorker.includes(path), `service worker must exclude sensitive path ${path}`)
 }

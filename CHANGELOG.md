@@ -11,11 +11,18 @@ All notable changes to this project are documented in this file.
 - Fixed a moderate-severity dependency vulnerability (GHSA-w5hq-g745-h8pq, CVSS 7.5,
   missing buffer bounds check in `uuid` <11.1.1) reachable through the backend's
   `google-auth-library` Google-login dependency by upgrading it to v10.
+- The production nginx config now sends `Strict-Transport-Security` and no longer allows
+  `http://localhost:*`/`ws://localhost:*` in its Content-Security-Policy.
+- CI now scans both built Docker images for HIGH/CRITICAL known vulnerabilities before
+  they can ship, using a supply-chain-safety-conscious pinned commit SHA rather than a tag.
 
 ### Added
 - Automated accessibility testing (`jsdom` + `axe-core` + React Testing Library) covering
   the composed app shell, the transaction dialog, and primary navigation. Zero WCAG
   2.1/2.2 A/AA violations found on the audited surfaces.
+- Every database migration now has a matching down-migration; a bad migration can be
+  rolled back to a specific version with `npm --prefix server run migrate:rollback -- <version>`
+  instead of only being recoverable by restoring a database backup.
 
 ### Fixed
 - Removed a duplicate skip-to-content link (`App.tsx` and `WebMobileHardening.tsx` each
