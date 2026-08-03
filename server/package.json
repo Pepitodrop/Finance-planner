@@ -10,7 +10,8 @@
     "migrate": "node src/migrate.js",
     "migrate:rollback": "node src/migrate-rollback.js",
     "database:reset-demo": "node scripts/reset-and-seed-demo.mjs",
-    "database:reset-demo:dry-run": "node scripts/reset-and-seed-demo.mjs --dry-run"
+    "database:reset-demo:dry-run": "node scripts/reset-and-seed-demo.mjs --dry-run",
+    "test-account:enroll": "node scripts/create-test-enrollment.mjs"
   },
   "dependencies": {
     "@simplewebauthn/server": "^13.1.2",

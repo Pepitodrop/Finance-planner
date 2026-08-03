@@ -17,8 +17,8 @@ describe('classifyConnectivity', () => {
 })
 
 describe('probeSameOrigin', () => {
-  it('uses the same-origin backend readiness endpoint with credentialed no-store semantics', async () => {
-    const fetcher = vi.fn(async () => new Response('{"status":"ready"}', {
+  it('uses the same-origin backend liveness endpoint with credentialed no-store semantics', async () => {
+    const fetcher = vi.fn(async () => new Response('{"status":"ok"}', {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })) as unknown as typeof fetch
@@ -27,7 +27,7 @@ describe('probeSameOrigin', () => {
     expect(fetcher).toHaveBeenCalledOnce()
 
     const [url, options] = (fetcher as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
-    expect(String(url)).toContain('https://planner.example/health/ready')
+    expect(String(url)).toContain('https://planner.example/health/live')
     expect(options).toMatchObject({
       cache: 'no-store',
       credentials: 'same-origin',
@@ -36,17 +36,17 @@ describe('probeSameOrigin', () => {
     })
   })
 
-  it('reports degraded when static assets could be reachable but backend readiness fails', async () => {
-    const fetcher = vi.fn(async () => new Response('{"status":"not_ready"}', {
-      status: 503,
+  it('does not report degraded merely because bank providers are not configured', async () => {
+    const fetcher = vi.fn(async () => new Response('{"status":"ok"}', {
+      status: 200,
       headers: { 'Content-Type': 'application/json' },
     })) as unknown as typeof fetch
 
     const probeSucceeded = await probeSameOrigin(fetcher, 'https://planner.example')
-    expect(classifyConnectivity({ navigatorOnline: true, probeSucceeded })).toBe('degraded')
+    expect(classifyConnectivity({ navigatorOnline: true, probeSucceeded })).toBe('online')
   })
 
-  it('fails closed on an invalid readiness payload', async () => {
+  it('fails closed on an invalid liveness payload', async () => {
     const fetcher = vi.fn(async () => new Response('<html>frontend fallback</html>', { status: 200 })) as unknown as typeof fetch
     await expect(probeSameOrigin(fetcher, 'https://planner.example')).resolves.toBe(false)
   })

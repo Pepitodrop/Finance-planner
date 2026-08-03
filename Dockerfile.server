@@ -20,6 +20,7 @@ RUN npm install --omit=dev --no-fund --no-audit \
              /usr/local/bin/yarn \
              /usr/local/bin/yarnpkg
 COPY server/src ./src
+COPY server/scripts ./scripts
 COPY server/migrations ./migrations
 COPY --from=build /app/build/transaction-rules ./build/transaction-rules
 RUN mkdir -p /app/data && chown -R node:node /app
@@ -27,6 +28,6 @@ USER node
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=8787 COBOL_TRANSACTION_ENGINE=/app/build/transaction-rules CONNECTOR_STORE_PATH=/app/data/connectors.enc.json AUTH_STORE_PATH=/app/data/auth.enc.json
 EXPOSE 8787
 STOPSIGNAL SIGTERM
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD node -e "fetch('http://127.0.0.1:8787/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD node -e "fetch('http://127.0.0.1:8787/health/live').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "src/server.js"]
