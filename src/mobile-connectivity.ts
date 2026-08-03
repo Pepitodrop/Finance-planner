@@ -20,7 +20,7 @@ export async function probeSameOrigin(
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
-    const url = new URL('/health/ready', origin)
+    const url = new URL('/health/live', origin)
     url.searchParams.set('connectivity-check', String(Date.now()))
     const response = await fetcher(url, {
       method: 'GET',
@@ -31,7 +31,7 @@ export async function probeSameOrigin(
     })
     if (!response.ok) return false
     const payload = await response.json().catch(() => null) as { status?: unknown } | null
-    return payload?.status === 'ready'
+    return payload?.status === 'ok'
   } catch {
     return false
   } finally {
