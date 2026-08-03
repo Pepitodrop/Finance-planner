@@ -11,6 +11,7 @@ import { MobileExperience } from '../MobileExperience'
 import { MobileProductionRuntime } from '../MobileProductionRuntime'
 import { MobileRuntime } from '../MobileRuntime'
 import { NavigationAccessibility } from '../NavigationAccessibility'
+import { TestEnrollmentPage } from '../TestEnrollmentPage'
 import { VaultGate } from '../VaultGate'
 import { WebMobileHardening } from '../WebMobileHardening'
 import { CloudSyncStatus } from '../features/sync/CloudSyncStatus'
@@ -37,18 +38,22 @@ import '../transactions-reference.css'
 import '../remaining-pages-redesign.css'
 import '../reference-page-compositions.css'
 
+const enrollmentRoute = window.location.pathname === '/test-enrollment'
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <WebMobileHardening />
-      <FrontendExperience />
-      <NavigationAccessibility />
-      <MobileProductionRuntime />
-      <MobileRuntime />
-      <MobileConnectivityStatus />
-      <MobileEnhancements />
-      <MobileExperience />
-      <AuthGate>{(user) => <VaultGate key={user.id} userId={user.id}><><App userId={user.id} userName={user.name} /><CloudSyncStatus /><AutomaticTransactionAnalysis /></></VaultGate>}</AuthGate>
+      {enrollmentRoute ? <TestEnrollmentPage /> : <>
+        <WebMobileHardening />
+        <FrontendExperience />
+        <NavigationAccessibility />
+        <MobileProductionRuntime />
+        <MobileRuntime />
+        <MobileConnectivityStatus />
+        <MobileEnhancements />
+        <MobileExperience />
+        <AuthGate>{(user) => <VaultGate key={user.id} userId={user.id}><><App userId={user.id} userName={user.name} /><CloudSyncStatus /><AutomaticTransactionAnalysis /></></VaultGate>}</AuthGate>
+      </>}
     </ErrorBoundary>
   </React.StrictMode>,
 )
