@@ -16,6 +16,8 @@ function cookie(value, origin, maxAge = 30 * 24 * 60 * 60) {
 }
 
 async function jsonBody(request) {
+  const contentType = String(request.headers['content-type'] || '').split(';')[0].trim().toLowerCase()
+  if (contentType && contentType !== 'application/json') throw new Error('Content-Type must be application/json.')
   const chunks = []
   let size = 0
   for await (const chunk of request) {
@@ -61,7 +63,7 @@ export async function createTestEnrollment({ env = process.env, email, name = 'F
       for (const key of Object.keys(data.challenges)) {
         if (key.startsWith('test-enrollment:') && data.challenges[key]?.userId === user.id) delete data.challenges[key]
       }
-      data.challenges[enrollmentKey(token)] = { userId: user.id, expiresAt, used: false }
+      data.challenges[enrollmentKey(token)] = { userId: user.id, expiresAt }
     })
     return { token, userId: user.id, email: normalizedEmail, expiresAt }
   } finally {
@@ -69,24 +71,19 @@ export async function createTestEnrollment({ env = process.env, email, name = 'F
   }
 }
 
-export async function createTestEnrollmentHandler({ env = process.env, origin, sessionSecret, onEnrolled = () => {} }) {
+export async function createTestEnrollmentHandler({ env = process.env, origin, sessionSecret, send }) {
   const rpId = env.WEBAUTHN_RP_ID || new URL(origin).hostname
   const rpName = env.WEBAUTHN_RP_NAME || 'Finance Planner'
 
   return async function handleTestEnrollment(request, response, url) {
     if (!url.pathname.startsWith('/api/auth/test-enrollment/')) return false
-    const send = (status, payload, headers = {}) => {
-      response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers })
-      response.end(JSON.stringify(payload))
-    }
-
     const { pool, store } = await createEnrollmentStore(env)
     try {
       if (request.method === 'GET' && url.pathname === '/api/auth/test-enrollment/options') {
         const token = String(url.searchParams.get('token') || '')
         const record = store.data.challenges[enrollmentKey(token)]
         const user = record && store.data.users[record.userId]
-        if (!token || !record || record.used || record.expiresAt < Date.now() || !user) throw new Error('Enrollment link is invalid or expired.')
+        if (!token || !record || record.expiresAt < Date.now() || !user) throw new Error('Enrollment link is invalid or expired.')
         const options = await generateRegistrationOptions({
           rpName,
           rpID: rpId,
@@ -97,7 +94,7 @@ export async function createTestEnrollmentHandler({ env = process.env, origin, s
           excludeCredentials: (user.passkeys || []).map((credential) => ({ id: credential.id, transports: credential.transports })),
         })
         await store.mutate((data) => { data.challenges[enrollmentKey(token)].challenge = options.challenge })
-        send(200, options)
+        send(response, 200, options)
         return true
       }
 
@@ -106,7 +103,7 @@ export async function createTestEnrollmentHandler({ env = process.env, origin, s
         const token = String(input.token || '')
         const record = store.data.challenges[enrollmentKey(token)]
         const user = record && store.data.users[record.userId]
-        if (!token || !record || record.used || record.expiresAt < Date.now() || !record.challenge || !user) throw new Error('Enrollment link is invalid or expired.')
+        if (!token || !record || record.expiresAt < Date.now() || !record.challenge || !user) throw new Error('Enrollment link is invalid or expired.')
         const verification = await verifyRegistrationResponse({
           response: input.credential,
           expectedChallenge: record.challenge,
@@ -123,12 +120,11 @@ export async function createTestEnrollmentHandler({ env = process.env, origin, s
           delete data.challenges[enrollmentKey(token)]
         })
         const session = createSession(user.id, sessionSecret, 30 * 24 * 60 * 60)
-        send(200, { enrolled: true, user: { id: user.id, email: user.email, name: user.name } }, { 'Set-Cookie': cookie(session, origin) })
-        await onEnrolled()
+        send(response, 200, { enrolled: true, user: { id: user.id, email: user.email, name: user.name } }, { 'Set-Cookie': cookie(session, origin) })
         return true
       }
 
-      send(404, { error: 'Not found.' })
+      send(response, 404, { error: { code: 'not_found', message: 'Not found.' } })
       return true
     } finally {
       await pool.end()
