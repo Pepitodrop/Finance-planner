@@ -49,10 +49,9 @@ export async function migrateDatabase(pool, dir = migrationsDir) {
 }
 
 // Rolls back every applied migration newer than targetVersion, newest first, using the
-// matching file in migrations/down/. Refuses a partial rollback: if any version being
-// undone has no down-migration, nothing further is attempted (already-rolled-back
-// versions stay rolled back — this is a data-loss recovery path, not a general-purpose
-// undo, so operators are expected to restore from backup if a down-migration is missing).
+// matching file in migrations/down/. The complete rollback plan is validated before the
+// first destructive statement, so a missing or duplicate down-migration cannot cause a
+// partially executed rollback. Each checked-in down-migration is itself transactional.
 export async function rollbackDatabase(pool, targetVersion, downDir = downMigrationsDir) {
   if (!Number.isSafeInteger(targetVersion) || targetVersion < 0) throw new Error(`Invalid rollback target version: ${targetVersion}`)
   const client = await pool.connect()
@@ -61,9 +60,19 @@ export async function rollbackDatabase(pool, targetVersion, downDir = downMigrat
     const applied = (await client.query('SELECT version FROM schema_migrations ORDER BY version DESC')).rows.map((row) => Number(row.version))
     const toRollBack = applied.filter((version) => version > targetVersion)
     const downFiles = (await readdir(downDir)).filter((name) => /^\d+_.*\.sql$/.test(name))
-    for (const version of toRollBack) {
-      const file = downFiles.find((name) => Number(name.split('_', 1)[0]) === version)
-      if (!file) throw new Error(`No down-migration found for version ${version}; refusing partial rollback.`)
+    const filesByVersion = new Map()
+    for (const file of downFiles) {
+      const version = Number(file.split('_', 1)[0])
+      if (!Number.isSafeInteger(version)) throw new Error(`Invalid down-migration filename: ${file}`)
+      if (filesByVersion.has(version)) throw new Error(`Multiple down-migrations found for version ${version}; refusing rollback.`)
+      filesByVersion.set(version, file)
+    }
+    const rollbackPlan = toRollBack.map((version) => {
+      const file = filesByVersion.get(version)
+      if (!file) throw new Error(`No down-migration found for version ${version}; refusing rollback before making changes.`)
+      return { version, file }
+    })
+    for (const { version, file } of rollbackPlan) {
       await client.query(await readFile(join(downDir, file), 'utf8'))
       const stillRecorded = await client.query('SELECT 1 FROM schema_migrations WHERE version = $1', [version])
       if (stillRecorded.rowCount) throw new Error(`Down-migration ${file} did not remove version ${version} from schema_migrations.`)
