@@ -24,6 +24,7 @@ import { ConnectionsPanel } from './ConnectionsPanel'
 import { DataTools } from './DataTools'
 import { initialState } from './data'
 import { FinanceAssistant } from './FinanceAssistant'
+import { MerchantLogo } from './MerchantLogo'
 import { ReceiptReview } from './ReceiptReview'
 import { SavingsGoals } from './SavingsGoals'
 import { TransactionsPage } from './TransactionsPage'
@@ -37,6 +38,7 @@ type Tab = 'dashboard' | 'transactions' | 'goals' | 'recurring' | 'connections' 
 interface AppProps { userId: string; userName?: string }
 
 const CATEGORY_COLORS = ['#5878ff', '#5fe0a0', '#ff9f5b', '#ff8b96', '#7dd3fc', '#c084fc', '#f4d35e', '#4dd0c4']
+const ACCOUNT_TYPE_LABELS: Record<string, string> = { checking: 'Girokonto', savings: 'Sparkonto', cash: 'Bargeld', investment: 'Depot' }
 
 function App({ userId, userName }: AppProps) {
   const [state, setState] = useState<AppState>(() => loadState())
@@ -67,7 +69,7 @@ function App({ userId, userName }: AppProps) {
   )
   const net = totals.incomeCents - totals.expenseCents
   const monthLabel = new Intl.DateTimeFormat('de-DE', { month: 'long' }).format(new Date())
-  const greetingName = userName?.trim().split(/\s+/)[0] || 'there'
+  const greetingName = userName?.trim().split(/\s+/)[0] || 'Finance'
 
   const openNewTransaction = () => {
     setEditing(null)
@@ -174,7 +176,7 @@ function App({ userId, userName }: AppProps) {
     <aside className="sidebar">
       <div className="brand">
         <div className="brand-mark"><Landmark size={22}/></div>
-        <div><strong>Finance Planner</strong><span>Offline-first + AI</span></div>
+        <div><strong>Finance Planner</strong><span>Privat. Leistungsstark. Deins.</span></div>
       </div>
       <nav aria-label="Hauptnavigation">
         {navButton('dashboard', <WalletCards size={19}/>, 'Übersicht')}
@@ -197,11 +199,11 @@ function App({ userId, userName }: AppProps) {
       <header className={`topbar ${tab === 'dashboard' ? 'dashboard-topbar' : ''} ${tab === 'transactions' ? 'transactions-topbar' : ''}`}>
         <div>
           {tab === 'dashboard' ? <>
-            <h1>Good evening, {greetingName} <span aria-hidden="true">👋</span></h1>
-            <p className="dashboard-subtitle">Here&apos;s what&apos;s happening with your finances today.</p>
+            <h1>Guten Abend, {greetingName} <span aria-hidden="true">👋</span></h1>
+            <p className="dashboard-subtitle">Das passiert heute mit deinen Finanzen.</p>
           </> : tab === 'transactions' ? <>
-            <h1>Transactions</h1>
-            <p className="dashboard-subtitle">Track, manage and review all your transactions.</p>
+            <h1>Transaktionen</h1>
+            <p className="dashboard-subtitle">Durchsuche, verwalte und prüfe alle Buchungen.</p>
           </> : <>
             <p className="eyebrow">Persönliche Finanzen</p>
             <h1>{titles[tab]}</h1>
@@ -260,7 +262,7 @@ function App({ userId, userName }: AppProps) {
             <div className="account-list">
               {state.accounts.map((account) => <div className="account-row" key={account.id}>
                 <div className="account-icon"><WalletCards size={19}/></div>
-                <div><strong>{account.name}</strong><span>{account.type}</span></div>
+                <div><strong>{account.name}</strong><span>{ACCOUNT_TYPE_LABELS[account.type] ?? account.type}</span></div>
                 <b>{formatMoney(account.balanceCents)}</b>
               </div>)}
             </div>
@@ -288,9 +290,7 @@ function App({ userId, userName }: AppProps) {
             <div className="recent-transaction-list">
               {recentTransactions.length > 0 ? recentTransactions.map((transaction) => (
                 <button type="button" className="recent-transaction-row" key={transaction.id} onClick={() => openEditTransaction(transaction)}>
-                  <span className={transaction.type === 'income' ? 'recent-icon income' : 'recent-icon expense'}>
-                    {transaction.type === 'income' ? <ArrowUpRight size={17}/> : <ArrowDownRight size={17}/>} 
-                  </span>
+                  <MerchantLogo description={transaction.description} type={transaction.type}/>
                   <span className="recent-copy"><strong>{transaction.description}</strong><small>{transaction.category} · {new Date(transaction.date).toLocaleDateString('de-DE')}</small></span>
                   <b className={transaction.type === 'income' ? 'positive-text' : 'negative-text'}>
                     {transaction.type === 'income' ? '+' : '-'}{formatMoney(transaction.amountCents)}
@@ -309,17 +309,17 @@ function App({ userId, userName }: AppProps) {
         onDelete={deleteTransaction}
       />}
       {tab === 'goals' && <SavingsGoals state={state} onChange={setState}/>} 
-      {tab === 'recurring' && <section className="panel table-panel">
+      {tab === 'recurring' && <section className="panel table-panel recurring-series-panel">
         <div className="panel-header">
-          <div><p className="eyebrow">Automatisch erkannt</p><h2>Verträge & feste Zahlungen</h2></div>
+          <div><p className="eyebrow">Automatisch gruppiert</p><h2>Verträge & feste Zahlungen</h2></div>
           <span className="pill"><CalendarClock size={14}/> {formatMoney(recurring.reduce((sum, item) => sum + item.amountCents, 0))} / Monat</span>
         </div>
         <div className="transaction-list">
-          {recurring.map((transaction) => <div className="transaction-row" key={transaction.id}>
-            <div className="transaction-icon expense"><Repeat2 size={18}/></div>
-            <div><strong>{transaction.description}</strong><span>{transaction.category} · regelmäßig</span></div>
-            <b className="negative-text">-{formatMoney(transaction.amountCents)}</b>
-          </div>)}
+          {recurring.length > 0 ? recurring.map((series) => <div className="transaction-row recurring-series-row" key={series.id}>
+            <MerchantLogo description={series.description} type={series.type}/>
+            <div><strong>{series.description}</strong><span>{series.category} · {series.occurrenceCount} Buchungen · zuletzt {new Date(series.lastDate).toLocaleDateString('de-DE')}</span></div>
+            <b className={series.type === 'income' ? 'positive-text' : 'negative-text'}>{series.type === 'income' ? '+' : '-'}{formatMoney(series.amountCents)} / Monat</b>
+          </div>) : <p className="recent-empty">Noch keine wiederkehrenden Serien erkannt.</p>}
         </div>
       </section>}
       {tab === 'connections' && <ConnectionsPanel state={state} onApply={setState}/>} 
