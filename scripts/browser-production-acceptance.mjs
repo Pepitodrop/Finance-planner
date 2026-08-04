@@ -330,6 +330,10 @@ async function captureTransactionsEvidence(client, sessionId, width, height) {
       tableVisible: visible(document.querySelector('.transactions-desktop-table table')),
       listVisible: visible(document.querySelector('.transactions-mobile-list')),
       transactionRows: document.querySelectorAll('.transactions-desktop-table tbody tr').length,
+      desktopActionsWithinViewport: ${mobile} || [...document.querySelectorAll('.transactions-desktop-table .transactions-row-actions button')].every((button) => {
+        const rect = button.getBoundingClientRect()
+        return visible(button) && rect.left >= 0 && rect.right <= innerWidth
+      }),
       summaryVisible: visible(document.querySelector('.transactions-summary')),
       mobileNavigationVisible: !${mobile} || visible(navigation),
     }
@@ -349,6 +353,7 @@ async function captureTransactionsEvidence(client, sessionId, width, height) {
   assert.equal(assertions.tableVisible, !mobile && width >= 1024)
   assert.equal(assertions.listVisible, mobile || width < 1024)
   assert.ok(assertions.transactionRows > 0)
+  assert.equal(assertions.desktopActionsWithinViewport, true)
   assert.equal(assertions.mobileNavigationVisible, true)
 
   await mkdir(ARTIFACT_DIR, { recursive: true })

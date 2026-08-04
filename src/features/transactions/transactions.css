@@ -542,10 +542,10 @@ table {
     width: 14%;
   }
   .transactions-desktop-table th:nth-child(5) {
-    width: 6rem;
+    width: 5.5rem;
   }
   .transactions-desktop-table th:nth-child(6) {
-    width: 4.5rem;
+    width: 4rem;
   }
   .transactions-desktop-table th,
   .transactions-desktop-table td {
@@ -555,7 +555,7 @@ table {
     gap: 0;
   }
   .transactions-row-actions button {
-    width: 2.1rem;
+    width: 1.7rem;
   }
 }
 @media (max-width: 1023px) {
