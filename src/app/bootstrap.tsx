@@ -39,6 +39,7 @@ import '../remaining-pages-redesign.css'
 import '../reference-page-compositions.css'
 import '../glossy-finance.css'
 import './app-shell.css'
+import '../features/dashboard/dashboard.css'
 
 const enrollmentRoute = window.location.pathname === '/test-enrollment'
 

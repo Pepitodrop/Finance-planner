@@ -76,7 +76,7 @@ describe('primary application shell accessibility', () => {
     const user = userEvent.setup()
     render(<Shell />)
 
-    const trigger = screen.getByRole('button', { name: /Manuelle Buchung/ })
+    const trigger = screen.getByRole('button', { name: 'Add transaction' })
     await user.click(trigger)
 
     const dialog = await screen.findByRole('dialog')
