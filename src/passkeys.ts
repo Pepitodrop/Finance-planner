@@ -6,6 +6,7 @@ export interface PasskeyAccount {
 }
 
 type JsonObject = Record<string, unknown>
+const KNOWN_ACCOUNTS_KEY = 'finance-planner-known-accounts-v1'
 
 function decodeBase64Url(value: string): ArrayBuffer {
   const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
@@ -40,20 +41,11 @@ function credentialToJson(credential: PublicKeyCredential): JsonObject {
 }
 
 function creationOptions(input: PublicKeyCredentialCreationOptionsJSON): PublicKeyCredentialCreationOptions {
-  return {
-    ...input,
-    challenge: decodeBase64Url(input.challenge),
-    user: { ...input.user, id: decodeBase64Url(input.user.id) },
-    excludeCredentials: input.excludeCredentials?.map((credential) => ({ ...credential, id: decodeBase64Url(credential.id) })),
-  }
+  return { ...input, challenge: decodeBase64Url(input.challenge), user: { ...input.user, id: decodeBase64Url(input.user.id) }, excludeCredentials: input.excludeCredentials?.map((credential) => ({ ...credential, id: decodeBase64Url(credential.id) })) }
 }
 
 function requestOptions(input: PublicKeyCredentialRequestOptionsJSON): PublicKeyCredentialRequestOptions {
-  return {
-    ...input,
-    challenge: decodeBase64Url(input.challenge),
-    allowCredentials: input.allowCredentials?.map((credential) => ({ ...credential, id: decodeBase64Url(credential.id) })),
-  }
+  return { ...input, challenge: decodeBase64Url(input.challenge), allowCredentials: input.allowCredentials?.map((credential) => ({ ...credential, id: decodeBase64Url(credential.id) })) }
 }
 
 export function passkeysSupported(): boolean {
@@ -65,24 +57,36 @@ export async function enrollPasskey(label?: string): Promise<void> {
   const options = await request<PublicKeyCredentialCreationOptionsJSON>('/api/auth/passkeys/register/options', { method: 'POST', body: JSON.stringify({ label }) })
   const credential = await navigator.credentials.create({ publicKey: creationOptions(options) })
   if (!(credential instanceof PublicKeyCredential)) throw new Error('Passkey-Einrichtung wurde abgebrochen.')
-  await request('/api/auth/passkeys/register/verify', { method: 'POST', body: JSON.stringify({ credential: credentialToJson(credential), label }) })
+  await request('/api/auth/passkeys/register/verify', { method: 'POST', body: JSON.stringify(credentialToJson(credential)) })
 }
 
-export async function authenticateWithPasskey(email?: string): Promise<PasskeyAccount> {
+export async function authenticateWithPasskey(email?: string): Promise<void> {
   if (!passkeysSupported()) throw new Error('Passkeys werden auf diesem Gerät oder in diesem Kontext nicht unterstützt.')
   const options = await request<PublicKeyCredentialRequestOptionsJSON>('/api/auth/passkeys/authenticate/options', { method: 'POST', body: JSON.stringify({ email }) })
   const credential = await navigator.credentials.get({ publicKey: requestOptions(options), mediation: email ? 'required' : 'optional' })
   if (!(credential instanceof PublicKeyCredential)) throw new Error('Passkey-Anmeldung wurde abgebrochen.')
-  return request<PasskeyAccount>('/api/auth/passkeys/authenticate/verify', { method: 'POST', body: JSON.stringify({ credential: credentialToJson(credential) }) })
+  await request('/api/auth/passkeys/authenticate/verify', { method: 'POST', body: JSON.stringify(credentialToJson(credential)) })
 }
 
-export async function listKnownAccounts(): Promise<PasskeyAccount[]> {
-  const result = await request<{ accounts?: PasskeyAccount[] }>('/api/auth/accounts')
-  return Array.isArray(result.accounts) ? result.accounts : []
+export function rememberAccount(account: PasskeyAccount): void {
+  const accounts = listKnownAccounts().filter((candidate) => candidate.id !== account.id)
+  localStorage.setItem(KNOWN_ACCOUNTS_KEY, JSON.stringify([{ ...account, lastUsedAt: new Date().toISOString() }, ...accounts].slice(0, 8)))
 }
 
-export async function switchAccount(accountId: string): Promise<PasskeyAccount> {
-  return request<PasskeyAccount>('/api/auth/accounts/switch', { method: 'POST', body: JSON.stringify({ accountId }) })
+export function listKnownAccounts(): PasskeyAccount[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(KNOWN_ACCOUNTS_KEY) || '[]')
+    return Array.isArray(parsed) ? parsed.filter((account) => account && typeof account.id === 'string' && typeof account.email === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+export async function switchAccount(accountId: string): Promise<void> {
+  const account = listKnownAccounts().find((candidate) => candidate.id === accountId)
+  if (!account) throw new Error('Das gespeicherte Konto wurde nicht gefunden.')
+  await authenticateWithPasskey(account.email)
+  rememberAccount(account)
 }
 
 interface PublicKeyCredentialDescriptorJSON extends Omit<PublicKeyCredentialDescriptor, 'id'> { id: string }
