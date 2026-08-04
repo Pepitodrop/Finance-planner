@@ -1,7 +1,18 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
-import { AlertTriangle, ArrowLeft, ArrowRight, BrainCircuit, Building2, CheckCircle2, CreditCard, FileUp, Landmark, RefreshCw, RotateCcw, Search, ShieldCheck, Unplug, WalletCards, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ArrowRight, BrainCircuit, Building2, CheckCircle2, CreditCard, FileUp, Landmark, MailCheck, RefreshCw, RotateCcw, Search, ShieldCheck, Unplug, WalletCards, X } from 'lucide-react'
 import { applySyncPreview, buildSyncPreview, consentDaysRemaining, disconnectConnector, selectSyncPreviewAccounts, startConnector, synchronizeConnections, type ConnectorAccountType, type ConnectorConnection, type ConnectorProvider, type SyncPreview } from './connectors'
+import {
+  disconnectGoogleSubscriptions,
+  getGoogleSubscriptionCapability,
+  normalizeGoogleSubscriptions,
+  reconcileGoogleSubscriptions,
+  startGoogleSubscriptionConnection,
+  syncGoogleSubscriptions,
+  type GoogleSubscriptionCapability,
+  type GoogleSubscriptionConnection,
+} from './googleSubscriptions'
 import { commonInstitutions, institutionById, searchInstitutions, type InstitutionKind } from './institutions'
+import { normalizeManualCreditCard } from './manualCreditCard'
 import { applyStatementImport, buildStatementPreview, parseStatement, type StatementPreview } from './statementImport'
 import type { Account, AppState } from './types'
 
@@ -24,14 +35,37 @@ const accountTypeOptions: Array<{ id: ConnectorAccountType; label: string }> = [
   { id: 'investment', label: 'Depot' },
 ]
 
-function cents(value: string): number {
-  const parsed = Number(value.replace(',', '.'))
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return Math.round(parsed * 100)
+const intervalLabels: Record<string, string> = {
+  weekly: 'wöchentlich',
+  monthly: 'monatlich',
+  quarterly: 'vierteljährlich',
+  yearly: 'jährlich',
+}
+
+function cents(value: string, field: string, optional = false): number {
+  const normalized = value.trim().replace(',', '.')
+  if (!normalized && optional) return 0
+  if (!/^\d{1,9}(?:\.\d{1,2})?$/.test(normalized)) throw new Error(`${field} muss ein gültiger positiver Euro-Betrag mit höchstens zwei Nachkommastellen sein.`)
+  const parsed = Number(normalized)
+  const result = Math.round(parsed * 100)
+  if (!Number.isSafeInteger(result) || result < 0 || result > 100_000_000_000) throw new Error(`${field} liegt außerhalb des unterstützten Bereichs.`)
+  return result
+}
+
+function googleCapabilityMessage(capability: GoogleSubscriptionCapability | null): string {
+  if (!capability) return 'Google-Funktion wird geprüft …'
+  if (capability.ready) return capability.source === 'gmail'
+    ? 'Bereit für Gmail-Belegimport mit Leseberechtigung.'
+    : 'Bereit für den konfigurierten normalisierten Datenendpunkt.'
+  if (capability.reason === 'disabled') return 'Der Google-Abonnementimport ist serverseitig deaktiviert.'
+  if (capability.reason === 'missing_oauth_configuration') return 'Google OAuth ist für diese Funktion noch nicht konfiguriert.'
+  if (capability.reason === 'missing_data_source') return 'Der benutzerdefinierte Google-Datenendpunkt fehlt.'
+  return 'Die Google-Abonnementfunktion ist derzeit nicht verfügbar.'
 }
 
 export function ConnectionsPanel({ state, onApply }: ConnectionsPanelProps) {
   const [busy, setBusy] = useState(false)
+  const [googleBusy, setGoogleBusy] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [connections, setConnections] = useState<ConnectorConnection[]>([])
@@ -48,6 +82,9 @@ export function ConnectionsPanel({ state, onApply }: ConnectionsPanelProps) {
   const [manualName, setManualName] = useState('')
   const [manualBalance, setManualBalance] = useState('')
   const [manualLimit, setManualLimit] = useState('')
+  const [manualPending, setManualPending] = useState('')
+  const [googleCapability, setGoogleCapability] = useState<GoogleSubscriptionCapability | null>(null)
+  const [googleConnection, setGoogleConnection] = useState<GoogleSubscriptionConnection | null>(null)
 
   const selectedInstitution = selectedInstitutionId ? institutionById(selectedInstitutionId) : undefined
   const filteredInstitutions = useMemo(() => searchInstitutions(searchTerm, commonInstitutions, category === 'popular' ? { popularOnly: true } : { kinds: [category] }), [searchTerm, category])
@@ -64,23 +101,57 @@ export function ConnectionsPanel({ state, onApply }: ConnectionsPanelProps) {
   const averageQuality = selectedPreviews.length ? Math.round(summary.qualityTotal / selectedPreviews.length) : 0
   const qualityWarnings = [...new Set(selectedPreviews.flatMap((preview) => preview.quality.warnings))]
   const discoveredAccounts = previews.flatMap((preview) => preview.accountsToCreate)
+  const googleSubscriptions = (state.subscriptions || []).filter((subscription) => subscription.source === 'google')
+
+  const synchronizeGoogle = async () => {
+    setGoogleBusy(true)
+    setError('')
+    try {
+      const result = await syncGoogleSubscriptions()
+      setGoogleConnection(result)
+      setGoogleCapability((current) => current ? { ...current, connected: result.connected, lastSyncAt: result.lastSyncAt } : current)
+      if (!result.connected) {
+        setMessage('Google ist noch nicht für den Abonnementimport verbunden.')
+        return
+      }
+      const imported = normalizeGoogleSubscriptions(result.subscriptions, result.lastSyncAt)
+      const next = reconcileGoogleSubscriptions(state, imported)
+      onApply(next)
+      const omitted = imported.length - (next.subscriptions || []).filter((subscription) => subscription.source === 'google').length
+      setMessage(`${imported.length} Google-Belegdatensätze geprüft und ${(next.subscriptions || []).filter((subscription) => subscription.source === 'google').length} Abonnements übernommen.${omitted > 0 ? ` ${omitted} Dublette(n) zu Bankbuchungen wurden nicht doppelt angelegt.` : ''}`)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Google-Abonnements konnten nicht synchronisiert werden.')
+    } finally {
+      setGoogleBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    void getGoogleSubscriptionCapability()
+      .then((capability) => setGoogleCapability(capability))
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Google-Funktionsstatus konnte nicht geladen werden.'))
+  }, [])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const provider = params.get('provider')
     const callbackError = params.get('error_description') || params.get('error')
-    const callbackCompleted = params.has('code') || params.has('state')
+    const callbackCompleted = params.has('code') || params.has('state') || params.get('connected') === '1'
     if (!provider && !callbackError && !callbackCompleted) return
 
     const cleanUrl = new URL(window.location.href)
-    for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'institution']) cleanUrl.searchParams.delete(key)
+    for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'institution', 'connected']) cleanUrl.searchParams.delete(key)
     window.history.replaceState({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`)
 
     if (callbackError) {
       setError(`Die Verbindung wurde nicht abgeschlossen: ${callbackError}`)
       return
     }
-
+    if (provider === 'google-subscriptions') {
+      setMessage('Google hat die Leseberechtigung bestätigt. Passende Abo-Belege werden jetzt geprüft.')
+      void synchronizeGoogle()
+      return
+    }
     setMessage('Anbieter bestätigt. Die Verbindung wird geprüft und die verfügbaren Konten werden geladen.')
     void synchronize()
   }, [])
@@ -133,6 +204,36 @@ export function ConnectionsPanel({ state, onApply }: ConnectionsPanelProps) {
     }
   }
 
+  const connectGoogle = async () => {
+    if (!googleCapability?.ready) return
+    setGoogleBusy(true)
+    setError('')
+    try {
+      await startGoogleSubscriptionConnection(window.location.href)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Google-Verbindung konnte nicht gestartet werden.')
+      setGoogleBusy(false)
+    }
+  }
+
+  const disconnectGoogle = async () => {
+    if (!window.confirm('Google-Abonnementzugriff wirklich trennen und die Google-Berechtigung widerrufen?')) return
+    const deleteImportedData = window.confirm('Sollen auch bereits importierte Google-Abonnements entfernt werden? Manuelle Verträge bleiben erhalten.')
+    setGoogleBusy(true)
+    setError('')
+    try {
+      const result = await disconnectGoogleSubscriptions(deleteImportedData)
+      setGoogleConnection(null)
+      setGoogleCapability((current) => current ? { ...current, connected: false, lastSyncAt: undefined } : current)
+      if (deleteImportedData) onApply({ ...state, subscriptions: (state.subscriptions || []).filter((subscription) => subscription.source !== 'google') })
+      setMessage(`Google wurde getrennt.${result.revoked ? ' Die Google-Berechtigung wurde widerrufen.' : ''}${deleteImportedData ? ` ${result.deletedSubscriptionCount} importierte Datensätze wurden entfernt.` : ' Importierte Abonnements bleiben erhalten.'}`)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Google-Verbindung konnte nicht getrennt werden.')
+    } finally {
+      setGoogleBusy(false)
+    }
+  }
+
   const openSetup = () => {
     setSetupStep(1)
     setSearchTerm('')
@@ -142,6 +243,7 @@ export function ConnectionsPanel({ state, onApply }: ConnectionsPanelProps) {
     setManualName('')
     setManualBalance('')
     setManualLimit('')
+    setManualPending('')
     setSetupOpen(true)
   }
 
@@ -155,18 +257,43 @@ export function ConnectionsPanel({ state, onApply }: ConnectionsPanelProps) {
     setSetupStep(institution.accountTypeRequired ? 2 : 3)
   }
 
-  const addManualAccount = () => {
-    if (!selectedInstitution) return
-    const name = manualName.trim() || selectedInstitution.name
-    const balance = cents(manualBalance)
-    const limit = cents(manualLimit)
-    const id = `manual:${typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Date.now()}`
-    const account: Account = accountType === 'credit-card'
-      ? { id, name, type: 'credit-card', balanceCents: -balance, currency: 'EUR', creditCard: { amountOwedCents: balance, creditLimitCents: limit || undefined, availableCreditCents: limit ? Math.max(0, limit - balance) : undefined, pendingAmountCents: 0 } }
-      : { id, name, type: accountType, balanceCents: balance, currency: 'EUR' }
-    onApply({ ...state, accounts: [...state.accounts, account] })
-    setSetupOpen(false)
-    setMessage(`${name} wurde als manuelles Konto angelegt.`)
+  const addManualAccount = async () => {
+    if (!selectedInstitution || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const name = manualName.trim() || selectedInstitution.name
+      const balance = cents(manualBalance, accountType === 'credit-card' ? 'Der offene Betrag' : 'Der Kontostand')
+      const id = `manual:${typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Date.now()}`
+      let account: Account
+      if (accountType === 'credit-card') {
+        const limit = cents(manualLimit, 'Das Kreditlimit', true)
+        const pending = cents(manualPending, 'Der vorgemerkte Betrag', true)
+        const normalized = await normalizeManualCreditCard({ providerBalanceCents: balance, creditLimitCents: limit, pendingAmountCents: pending })
+        account = {
+          id,
+          name,
+          type: 'credit-card',
+          balanceCents: normalized.ledgerBalanceCents,
+          currency: 'EUR',
+          creditCard: {
+            amountOwedCents: normalized.amountOwedCents,
+            creditLimitCents: limit || undefined,
+            availableCreditCents: normalized.availableCreditCents,
+            pendingAmountCents: normalized.pendingAmountCents,
+          },
+        }
+      } else {
+        account = { id, name, type: accountType, balanceCents: balance, currency: 'EUR' }
+      }
+      onApply({ ...state, accounts: [...state.accounts, account] })
+      setSetupOpen(false)
+      setMessage(`${name} wurde als manuelles Konto angelegt.${accountType === 'credit-card' ? ' Saldo und Kreditrahmen wurden vom COBOL-Banking-Kern berechnet.' : ''}`)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Das manuelle Konto konnte nicht angelegt werden.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   const toggleAccount = (accountId: string) => setSelectedAccountIds((current) => {
@@ -198,6 +325,18 @@ export function ConnectionsPanel({ state, onApply }: ConnectionsPanelProps) {
       {connections.length === 0 ? <div className="connection-empty-state"><div className="goal-hero-icon"><Building2 size={24}/></div><strong>Starte mit deinem Hauptkonto</strong><span>Die Einrichtung dauert normalerweise weniger als zwei Minuten.</span><button className="secondary" onClick={openSetup}>Erstes Konto verbinden <ArrowRight size={16}/></button></div> : <div className="connection-health-list">{connections.map((connection) => { const days = consentDaysRemaining(connection); const needsAttention = connection.status === 'error' || (days !== null && days <= 7); return <div className="account-row connection-row" key={connection.id}><div className="account-icon">{needsAttention ? <AlertTriangle size={19}/> : <CheckCircle2 size={19}/>}</div><div><strong>{connection.displayName}</strong><span>{connection.status === 'error' ? connection.error || 'Verbindung benötigt Aufmerksamkeit' : connection.lastSyncAt ? `Zuletzt aktualisiert: ${new Date(connection.lastSyncAt).toLocaleString('de-DE')}` : 'Sicher verbunden'}{days !== null ? ` · Zustimmung ${days < 0 ? 'abgelaufen' : `noch ${days} Tage gültig`}` : ''}</span></div><div className="connection-row-actions">{needsAttention && <button className="secondary" onClick={() => connect(connection.provider)}>Erneut verbinden</button>}<button className="secondary" disabled={busy} onClick={() => disconnect(connection.provider)}><Unplug size={16}/> Trennen</button></div></div> })}</div>}
     </section>
 
+    <section className="panel connection-overview" aria-labelledby="google-subscriptions-title">
+      <div className="panel-header"><div><p className="eyebrow">Verträge aus Google-Belegen</p><h2 id="google-subscriptions-title">Google-Abonnements</h2></div><MailCheck size={23}/></div>
+      <p className="muted">{googleCapabilityMessage(googleCapability)}</p>
+      {googleCapability?.limitations?.length ? <div className="privacy-box"><ShieldCheck size={17}/><span>{googleCapability.limitations.join(' ')}</span></div> : null}
+      {googleSubscriptions.length > 0 && <div className="connection-health-list">{googleSubscriptions.map((subscription) => <div className="account-row connection-row" key={subscription.id}><div className="account-icon"><MailCheck size={18}/></div><div><strong>{subscription.product}</strong><span>{subscription.provider} · {(subscription.amountCents / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })} · {intervalLabels[subscription.billingInterval] || subscription.billingInterval} · {subscription.status}</span></div></div>)}</div>}
+      <div className="modal-actions bank-modal-actions">
+        {googleCapability?.connected || googleConnection?.connected
+          ? <><button className="secondary" disabled={googleBusy} onClick={() => void synchronizeGoogle()}><RefreshCw size={16}/>{googleBusy ? 'Prüfe Belege …' : 'Google-Abos aktualisieren'}</button><button className="secondary" disabled={googleBusy} onClick={() => void disconnectGoogle()}><Unplug size={16}/> Google trennen</button></>
+          : <button className="primary" disabled={googleBusy || !googleCapability?.ready} onClick={() => void connectGoogle()}><MailCheck size={17}/>{googleBusy ? 'Weiterleitung wird vorbereitet …' : 'Google-Belege verbinden'}</button>}
+      </div>
+    </section>
+
     <section className="panel statement-import"><div><p className="eyebrow">Ohne Bankverbindung</p><h2>Kontoauszug importieren</h2><p className="muted">CSV sowie CAMT.052, CAMT.053 und CAMT.054 werden unterstützt. Vor dem Import siehst du immer eine Vorschau.</p></div><label className="secondary file-button"><FileUp size={17}/>Datei auswählen<input type="file" accept=".csv,.xml,.camt,text/csv,application/xml,text/xml" onChange={readStatement}/></label></section>
 
     {statementPreview && <section className="panel sync-preview"><div className="panel-header"><div><p className="eyebrow">Auszugsvorschau</p><h2>{statementPreview.account.name}</h2></div><CheckCircle2 size={24}/></div><div className="stats-grid compact"><article className="stat-card"><span>Buchungen</span><strong>{statementPreview.transactions.length}</strong></article><article className="stat-card"><span>Duplikate</span><strong>{statementPreview.duplicates}</strong></article><article className="stat-card"><span>Fehlerhafte Zeilen</span><strong>{statementPreview.rejected}</strong></article><article className="stat-card"><span>Format</span><strong>{statementPreview.format.toUpperCase()}</strong></article></div><button className="primary" disabled={!statementPreview.transactions.length} onClick={importStatement}>Geprüfte Buchungen importieren</button></section>}
@@ -214,7 +353,7 @@ export function ConnectionsPanel({ state, onApply }: ConnectionsPanelProps) {
 
         {setupStep === 2 && selectedInstitution && <><div className="provider-confirmation"><span className="bank-picker-icon"><Building2 size={26}/></span><div><strong>{selectedInstitution.name}</strong><span>Wähle den Kontotyp, den du verbinden oder manuell anlegen möchtest.</span></div></div><div className="bank-picker-list">{accountTypeOptions.map((option) => <button className="bank-picker-item" key={option.id} onClick={() => { setAccountType(option.id); setSetupStep(3) }}><span className="bank-picker-icon">{option.id === 'credit-card' ? <CreditCard size={21}/> : <WalletCards size={21}/>}</span><span><strong>{option.label}</strong><small>Nur dieser Kontotyp wird für die Einrichtung vorausgewählt.</small></span><ArrowRight size={18}/></button>)}</div><div className="modal-actions"><button className="secondary" onClick={() => setSetupStep(1)}><ArrowLeft size={16}/> Zurück</button></div></>}
 
-        {setupStep === 3 && selectedInstitution && selectedInstitution.provider === 'manual' && <><div className="provider-confirmation"><span className="bank-picker-icon"><CreditCard size={26}/></span><div><strong>{selectedInstitution.name}</strong><span>Die Daten bleiben im Finance-Planner-Konto und werden nicht extern synchronisiert.</span></div></div><label className="field"><span>Name</span><input value={manualName} onChange={(event) => setManualName(event.target.value)} placeholder={accountType === 'credit-card' ? 'Meine Visa' : 'Mein Konto'}/></label><label className="field"><span>{accountType === 'credit-card' ? 'Offener Betrag' : 'Kontostand'} in Euro</span><input inputMode="decimal" value={manualBalance} onChange={(event) => setManualBalance(event.target.value)} placeholder="0,00"/></label>{accountType === 'credit-card' && <label className="field"><span>Kreditlimit in Euro (optional)</span><input inputMode="decimal" value={manualLimit} onChange={(event) => setManualLimit(event.target.value)} placeholder="0,00"/></label>}<div className="modal-actions bank-modal-actions"><button className="secondary" onClick={() => setSetupStep(selectedInstitution.accountTypeRequired ? 2 : 1)}><ArrowLeft size={16}/> Zurück</button><button className="primary" onClick={addManualAccount}>Konto anlegen <CheckCircle2 size={16}/></button></div></>}
+        {setupStep === 3 && selectedInstitution && selectedInstitution.provider === 'manual' && <><div className="provider-confirmation"><span className="bank-picker-icon"><CreditCard size={26}/></span><div><strong>{selectedInstitution.name}</strong><span>Die Daten bleiben im Finance-Planner-Konto und werden nicht extern synchronisiert.</span></div></div><label className="field"><span>Name</span><input value={manualName} onChange={(event) => setManualName(event.target.value)} placeholder={accountType === 'credit-card' ? 'Meine Visa' : 'Mein Konto'}/></label><label className="field"><span>{accountType === 'credit-card' ? 'Offener Betrag' : 'Kontostand'} in Euro</span><input inputMode="decimal" value={manualBalance} onChange={(event) => setManualBalance(event.target.value)} placeholder="0,00"/></label>{accountType === 'credit-card' && <><label className="field"><span>Kreditlimit in Euro (optional)</span><input inputMode="decimal" value={manualLimit} onChange={(event) => setManualLimit(event.target.value)} placeholder="0,00"/></label><label className="field"><span>Vorgemerkter Betrag in Euro (optional)</span><input inputMode="decimal" value={manualPending} onChange={(event) => setManualPending(event.target.value)} placeholder="0,00"/></label><div className="privacy-box"><ShieldCheck size={17}/><span>Offener Betrag, Verbindlichkeit und verfügbarer Kreditrahmen werden authentifiziert auf dem Server durch den GnuCOBOL-Banking-Kern berechnet. Bei einem Fehler wird keine lokale Ersatzberechnung gespeichert.</span></div></>}<div className="modal-actions bank-modal-actions"><button className="secondary" disabled={busy} onClick={() => setSetupStep(selectedInstitution.accountTypeRequired ? 2 : 1)}><ArrowLeft size={16}/> Zurück</button><button className="primary" disabled={busy} onClick={() => void addManualAccount()}>{busy ? 'Wird geprüft …' : 'Konto anlegen'} <CheckCircle2 size={16}/></button></div></>}
 
         {setupStep === 3 && selectedInstitution && selectedInstitution.provider !== 'manual' && <><div className="provider-confirmation"><span className="bank-picker-icon">{selectedInstitution.provider === 'paypal' ? <CreditCard size={26}/> : <Building2 size={26}/>}</span><div><strong>{selectedInstitution.name}</strong><span>{selectedInstitution.provider === 'paypal' ? 'Die Anmeldung findet bei PayPal statt. Danach kehrst du automatisch zurück.' : 'Die Anmeldung und Zustimmung finden bei deiner Bank oder dem offiziellen PSD2-Anbieter statt.'}</span></div></div><ol className="connection-steps"><li><span>1</span><div><strong>Sichere Weiterleitung</strong><small>Finance Planner sammelt keine Bank-PIN oder PayPal-Zugangsdaten.</small></div></li><li><span>2</span><div><strong>Zugriff bestätigen</strong><small>Du bestimmst beim Anbieter, welche Daten freigegeben werden.</small></div></li><li><span>3</span><div><strong>Konten auswählen</strong><small>Nach der Rückkehr entscheidest du, welche gefundenen Konten importiert werden.</small></div></li></ol><div className="privacy-box"><ShieldCheck size={18}/><span>Tokens bleiben verschlüsselt auf dem Server. Finance Planner kann keine Überweisungen ausführen.</span></div><div className="modal-actions bank-modal-actions"><button className="secondary" disabled={busy} onClick={() => setSetupStep(selectedInstitution.accountTypeRequired ? 2 : 1)}><ArrowLeft size={16}/> Zurück</button><button className="primary" disabled={busy} onClick={() => connect(selectedInstitution.provider as ConnectorProvider)}>{busy ? 'Weiterleitung wird vorbereitet …' : selectedInstitution.provider === 'paypal' ? 'Sicher zu PayPal' : 'Sicher zur Bank'} <ArrowRight size={16}/></button></div></>}
       </section>
