@@ -47,6 +47,14 @@ test('provider banking operations never fall back to JavaScript', async () => {
     () => core.normalizeProviderAmount('-12.34'),
     () => core.validateProviderConsent('gocardless', 'LN'),
     () => core.validateReadOnlyScope('reporting,transactions'),
+    () => core.validateProviderReconciliation({
+      accountCount: 1,
+      reconciledAccountCount: 1,
+      transactionCount: 1,
+      uniqueTransactionCount: 1,
+      dateFrom: '2026-07-01',
+      dateTo: '2026-08-01',
+    }),
   ]) {
     await assert.rejects(
       operation(),
@@ -73,7 +81,7 @@ test('an available but failing banking executable is never hidden by fallback lo
 
 const compiledBinary = process.env.COBOL_BANKING_BINARY
 
-test('compiled GnuCOBOL banking core owns provider normalization and read-only policy', { skip: !compiledBinary }, async () => {
+test('compiled GnuCOBOL banking core owns provider normalization, scope and reconciliation policy', { skip: !compiledBinary }, async () => {
   const core = new CobolBankingCore({ binary: compiledBinary, required: true })
   assert.equal(await core.normalizeAccountType('Girokonto'), 'checking')
   assert.equal(await core.normalizeProviderAccountType('CARD'), 'credit-card')
@@ -82,6 +90,38 @@ test('compiled GnuCOBOL banking core owns provider normalization and read-only p
   assert.equal(await core.validateProviderConsent('gocardless', 'EX'), 'expired')
   assert.equal(await core.validateReadOnlyScope('balances,details,transactions'), true)
   await assert.rejects(core.validateReadOnlyScope('transactions,payment-initiation'))
+  assert.equal(await core.validateProviderReconciliation({
+    accountCount: 2,
+    reconciledAccountCount: 2,
+    transactionCount: 4,
+    uniqueTransactionCount: 4,
+    dateFrom: '2026-07-01',
+    dateTo: '2026-08-01',
+  }), true)
+  await assert.rejects(core.validateProviderReconciliation({
+    accountCount: 2,
+    reconciledAccountCount: 1,
+    transactionCount: 4,
+    uniqueTransactionCount: 4,
+    dateFrom: '2026-07-01',
+    dateTo: '2026-08-01',
+  }))
+  await assert.rejects(core.validateProviderReconciliation({
+    accountCount: 2,
+    reconciledAccountCount: 2,
+    transactionCount: 4,
+    uniqueTransactionCount: 3,
+    dateFrom: '2026-07-01',
+    dateTo: '2026-08-01',
+  }))
+  await assert.rejects(core.validateProviderReconciliation({
+    accountCount: 2,
+    reconciledAccountCount: 2,
+    transactionCount: 4,
+    uniqueTransactionCount: 4,
+    dateFrom: '2026-09-01',
+    dateTo: '2026-08-01',
+  }))
   assert.deepEqual(await core.normalizeCreditCard({
     providerBalanceCents: -125_50,
     creditLimitCents: 500_00,
