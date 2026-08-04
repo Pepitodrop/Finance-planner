@@ -4,7 +4,6 @@ import axe from 'axe-core'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import App from './App'
 import { FrontendExperience } from './FrontendExperience'
-import { NavigationAccessibility } from './NavigationAccessibility'
 import { WebMobileHardening } from './WebMobileHardening'
 import { initialState } from './data'
 import { configureAuthenticatedStorage, setUnlockedState } from './storage'
@@ -15,7 +14,6 @@ function Shell() {
   return <>
     <WebMobileHardening />
     <FrontendExperience />
-    <NavigationAccessibility />
     <App userId={TEST_USER_ID} userName="Test User" />
   </>
 }
@@ -63,15 +61,15 @@ describe('primary application shell accessibility', () => {
     const user = userEvent.setup()
     render(<Shell />)
 
-    const nav = screen.getByRole('navigation', { name: 'Hauptnavigation' })
+    const nav = screen.getByRole('navigation', { name: 'Primary navigation' })
     expect(within(nav).getAllByRole('button', { current: 'page' })).toHaveLength(1)
-    expect(within(nav).getByRole('button', { name: /Übersicht/ })).toHaveAttribute('aria-current', 'page')
+    expect(within(nav).getByRole('button', { name: 'Dashboard' })).toHaveAttribute('aria-current', 'page')
 
-    await user.click(within(nav).getByRole('button', { name: /Transaktionen/ }))
+    await user.click(within(nav).getByRole('button', { name: 'Transactions' }))
 
     const current = within(nav).getAllByRole('button').filter((button) => button.getAttribute('aria-current') === 'page')
     expect(current).toHaveLength(1)
-    expect(current[0]).toHaveTextContent('Transaktionen')
+    expect(current[0]).toHaveTextContent('Transactions')
   })
 
   it('traps focus in the transaction dialog, supports Escape-to-close, and restores focus to the trigger', async () => {
