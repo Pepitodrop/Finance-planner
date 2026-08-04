@@ -32,7 +32,7 @@ describe('production deployment contract', () => {
   it('forwards documented authentication, passkey and provider settings into the connector', () => {
     const compose = read('compose.yaml')
     const requiredMappings = [
-      'AUTH_MODE: ${AUTH_MODE:?',
+      'AUTH_MODE: ${AUTH_MODE:-google}',
       'GOOGLE_SUBSCRIPTIONS_ENABLED: ${GOOGLE_SUBSCRIPTIONS_ENABLED:-false}',
       'GOOGLE_SUBSCRIPTIONS_SCOPES: ${GOOGLE_SUBSCRIPTIONS_SCOPES:-openid email profile}',
       'GOOGLE_SUBSCRIPTIONS_DATA_SOURCE: ${GOOGLE_SUBSCRIPTIONS_DATA_SOURCE:-}',
@@ -44,6 +44,7 @@ describe('production deployment contract', () => {
     ]
 
     for (const mapping of requiredMappings) expect(compose).toContain(mapping)
+    expect(compose).not.toContain('AUTH_MODE: ${AUTH_MODE:-local}')
   })
 
   it('does not present an invalid local-auth production template', () => {
@@ -54,5 +55,15 @@ describe('production deployment contract', () => {
     expect(example).toContain('APP_ORIGIN=https://')
     expect(example).toContain('PAYPAL_ENVIRONMENT=sandbox')
     expect(example).not.toMatch(/^AUTH_MODE=local$/m)
+  })
+
+  it('revalidates the application shell while caching hashed assets immutably', () => {
+    const nginx = read('deploy/nginx.conf')
+
+    expect(nginx).toContain('location = /index.html')
+    expect(nginx).toContain('Cache-Control "no-cache, no-store, must-revalidate"')
+    expect(nginx).toContain('Cache-Control "public, immutable"')
+    expect(nginx).toContain('Cross-Origin-Opener-Policy same-origin')
+    expect(nginx).toContain('Cross-Origin-Resource-Policy same-origin')
   })
 })
