@@ -345,7 +345,7 @@ export function TransactionsPage({
             onChange={(event) =>
               setFilters({ ...filters, query: event.target.value })
             }
-            placeholder="Search transactions"
+            placeholder="Search"
           />
         </label>
         <button
@@ -453,8 +453,11 @@ export function TransactionsPage({
               <thead>
                 <tr>
                   <th>Date</th>
-                  <th>Description</th>
-                  <th>Category</th>
+                  <th>
+                    <span className="transactions-table-label--wide">Description</span>
+                    <span className="transactions-table-label--compact">Transaction</span>
+                  </th>
+                  <th className="transactions-category-column">Category</th>
                   <th>Account</th>
                   <th className="align-right">Amount</th>
                   <th>
@@ -483,14 +486,21 @@ export function TransactionsPage({
                           <span>
                             <strong>{transaction.description}</strong>
                             <small>
-                              {transaction.recurring
-                                ? "Recurring payment"
-                                : typeLabel(transaction)}
+                              <span className="transactions-description-type">
+                                {transaction.recurring
+                                  ? "Recurring payment"
+                                  : typeLabel(transaction)}
+                              </span>
+                              <span className="transactions-compact-category">
+                                {type === "transfer"
+                                  ? "Transfer"
+                                  : transaction.category}
+                              </span>
                             </small>
                           </span>
                         </div>
                       </td>
-                      <td>
+                      <td className="transactions-category-column">
                         <span className="transactions-category">
                           {type === "transfer"
                             ? "Transfer"
@@ -550,13 +560,15 @@ export function TransactionsPage({
                       · {account?.name ?? "Unknown account"}
                     </span>
                   </div>
-                  <span
-                    className={`transactions-amount transactions-amount--${type}`}
-                  >
-                    <span className="sr-only">{typeLabel(transaction)}: </span>
-                    {signedMoney(transaction)}
-                  </span>
-                  <TransactionActions transaction={transaction} onEdit={onEdit} onDelete={onDelete}/>
+                  <div className="transactions-mobile-trailing">
+                    <span
+                      className={`transactions-amount transactions-amount--${type}`}
+                    >
+                      <span className="sr-only">{typeLabel(transaction)}: </span>
+                      {signedMoney(transaction)}
+                    </span>
+                    <TransactionActions transaction={transaction} onEdit={onEdit} onDelete={onDelete}/>
+                  </div>
                 </li>
               );
             })}

@@ -2,7 +2,8 @@
   display: grid;
   gap: var(--fp-space-5);
   min-width: 0;
-  padding-bottom: var(--fp-mobile-fixed-bottom);
+  padding-bottom: calc(var(--fp-mobile-fixed-bottom) + var(--fp-space-6));
+  scroll-padding-bottom: calc(var(--fp-mobile-fixed-bottom) + var(--fp-space-6));
   color: var(--fp-color-text-primary);
 }
 .transactions-page-header {
@@ -254,6 +255,10 @@ table {
   color: var(--fp-color-text-muted);
   font-size: 0.72rem;
 }
+.transactions-table-label--compact,
+.transactions-compact-category {
+  display: none;
+}
 .transactions-account > svg {
   flex: 0 0 auto;
   width: 2rem;
@@ -359,6 +364,13 @@ table {
 }
 .transactions-mobile-list {
   display: none;
+}
+.transactions-mobile-trailing {
+  display: grid;
+  justify-items: end;
+  align-content: center;
+  gap: var(--fp-space-2);
+  min-width: 0;
 }
 .transactions-empty {
   padding: 3rem var(--fp-space-4);
@@ -550,7 +562,7 @@ table {
     min-width: 48rem;
   }
 }
-@media (min-width: 1024px) and (max-width: 1100px) {
+@media (min-width: 1024px) and (max-width: 1199px) {
   .transactions-desktop-table table {
     min-width: 0;
   }
@@ -558,16 +570,16 @@ table {
     width: 5rem;
   }
   .transactions-desktop-table th:nth-child(2) {
-    width: 24%;
+    width: 34%;
   }
-  .transactions-desktop-table th:nth-child(3) {
-    width: 11%;
+  .transactions-desktop-table .transactions-category-column {
+    display: none;
   }
   .transactions-desktop-table th:nth-child(4) {
-    width: 14%;
+    width: 25%;
   }
   .transactions-desktop-table th:nth-child(5) {
-    width: 5.5rem;
+    width: 7.25rem;
   }
   .transactions-desktop-table th:nth-child(6) {
     width: 3.5rem;
@@ -581,6 +593,17 @@ table {
   }
   .transactions-row-actions button {
     width: 2.75rem;
+  }
+  .transactions-table-label--wide,
+  .transactions-description-type {
+    display: none;
+  }
+  .transactions-table-label--compact,
+  .transactions-compact-category {
+    display: inline;
+  }
+  .transactions-desktop-table th {
+    white-space: nowrap;
   }
 }
 @media (max-width: 1023px) {
@@ -598,11 +621,14 @@ table {
   }
   .transactions-mobile-list li {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-columns: auto minmax(0, 1fr) minmax(6.5rem, auto);
     align-items: center;
     gap: 0.75rem;
     padding: var(--fp-space-4);
     border-bottom: 1px solid var(--fp-color-divider);
+  }
+  .transactions-mobile-list li:last-child {
+    scroll-margin-bottom: calc(var(--fp-mobile-fixed-bottom) + var(--fp-space-6));
   }
   .transactions-mobile-copy {
     display: grid;
@@ -622,6 +648,9 @@ table {
     font-size: 0.96rem;
     overflow-wrap: normal;
   }
+  .transactions-mobile-trailing {
+    align-self: stretch;
+  }
   .transactions-filter-trigger--desktop {
     display: none;
   }
@@ -638,6 +667,8 @@ table {
 @media (max-width: 768px) {
   .transactions-feature {
     gap: var(--fp-space-4);
+    padding-bottom: calc(var(--fp-mobile-fixed-bottom) + var(--fp-space-7));
+    scroll-padding-bottom: calc(var(--fp-mobile-fixed-bottom) + var(--fp-space-7));
   }
   .transactions-page-header {
     align-items: center;
@@ -682,23 +713,12 @@ table {
     padding-inline: 0;
   }
   .transactions-mobile-list li {
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) minmax(6.5rem, auto);
     padding-inline: 0;
-  }
-  .transactions-mobile-list .transactions-row-actions {
-    grid-column: 3;
-    grid-row: 1/3;
-    align-self: center;
   }
   .transactions-mobile-list .transactions-row-actions button {
     border: 1px solid var(--fp-color-border);
     background: var(--fp-color-surface-interactive);
-  }
-  .transactions-mobile-list .transactions-amount {
-    grid-column: 3;
-    grid-row: 1;
-    align-self: start;
-    margin-right: 5.75rem;
   }
   .transactions-summary dl div {
     padding-inline: 0.4rem;
@@ -723,17 +743,7 @@ table {
 }
 @media (max-width: 390px) {
   .transactions-mobile-list li {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-  .transactions-mobile-list .transactions-amount {
-    grid-column: 2;
-    grid-row: auto;
-    justify-self: start;
-    margin: 0;
-  }
-  .transactions-mobile-list .transactions-row-actions {
-    grid-column: 3;
-    grid-row: 2/4;
+    grid-template-columns: auto minmax(0, 1fr) minmax(5.5rem, auto);
   }
   .transactions-icon {
     width: 2.6rem;

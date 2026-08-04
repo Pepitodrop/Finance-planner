@@ -28,11 +28,19 @@ describe('TransactionsPage', () => {
   })
 
   it('renders a semantic desktop table and semantic mobile list without bulk controls', () => {
-    setup()
+    const { container } = setup()
     expect(screen.getByRole('table', { name: 'Filtered transactions' })).toBeInTheDocument()
     expect(screen.getByRole('list', { name: 'Filtered transactions' })).toBeInTheDocument()
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
-    expect(screen.getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual(['Date', 'Description', 'Category', 'Account', 'Amount', 'Actions'])
+    expect(screen.getAllByRole('columnheader')).toHaveLength(6)
+    expect(container.querySelector('.transactions-table-label--compact')).toHaveTextContent('Transaction')
+    expect(container.querySelectorAll('.transactions-compact-category')).toHaveLength(transactions.length)
+    expect(container.querySelectorAll('.transactions-mobile-trailing')).toHaveLength(transactions.length)
+  })
+
+  it('keeps an accessible search name with a narrow-friendly placeholder', () => {
+    setup()
+    expect(screen.getByRole('searchbox', { name: 'Search transactions' })).toHaveAttribute('placeholder', 'Search')
   })
 
   it('filters search results and resets to the complete current-month scope', () => {

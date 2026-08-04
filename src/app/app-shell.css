@@ -233,6 +233,7 @@
 
   .app-main-content {
     padding-bottom: calc(var(--fp-mobile-fixed-bottom) + var(--fp-space-6));
+    scroll-padding-bottom: calc(var(--fp-mobile-fixed-bottom) + var(--fp-space-6));
     overflow-x: clip;
   }
 
@@ -251,7 +252,7 @@
       calc(var(--fp-space-2) + var(--fp-safe-bottom))
       max(var(--fp-space-2), var(--fp-safe-left));
     border-top: var(--fp-border);
-    background: color-mix(in srgb, var(--fp-color-navigation) 96%, transparent);
+    background: var(--fp-color-navigation);
     box-shadow: 0 -0.75rem 2rem rgb(0 3 14 / 26%);
   }
 

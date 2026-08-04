@@ -125,6 +125,7 @@ jobs:
             artifacts/transactions-390x844.png
             artifacts/transactions-360x800.png
             artifacts/transactions-filters-390x844.png
+            artifacts/transactions-final-row-390x844.png
             artifacts/backend-resilience.json
             artifacts/operational-metrics.prom
             artifacts/production-load-acceptance.json

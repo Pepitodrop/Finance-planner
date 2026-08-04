@@ -317,7 +317,7 @@ async function captureTransactionsEvidence(client, sessionId, width, height) {
     const root = document.querySelector('[data-transactions-ready=true]')
     const current = [...document.querySelectorAll('nav [aria-current="page"]')].filter(visible)
     const add = [...document.querySelectorAll('button')].find((button) => button.textContent?.includes('Add transaction') && visible(button))
-    const search = document.querySelector('input[placeholder="Search transactions"]')
+    const search = document.querySelector('input[aria-label="Search transactions"], .transactions-search input')
     const filters = [...document.querySelectorAll('.transactions-filter-trigger')].find(visible)
     const navigation = document.querySelector('.app-mobile-navigation')
     return {
@@ -330,10 +330,31 @@ async function captureTransactionsEvidence(client, sessionId, width, height) {
       tableVisible: visible(document.querySelector('.transactions-desktop-table table')),
       listVisible: visible(document.querySelector('.transactions-mobile-list')),
       transactionRows: document.querySelectorAll('.transactions-desktop-table tbody tr').length,
+      compactHeaderSingleLine: ${mobile} || width >= 1200 || [...document.querySelectorAll('.transactions-desktop-table th')].every((cell) => cell.getBoundingClientRect().height <= 46),
+      compactMetadataVisible: ${mobile} || width >= 1200 || [...document.querySelectorAll('.transactions-desktop-table .transactions-compact-category')].some(visible),
+      amountCellsWithinViewport: ${mobile} || [...document.querySelectorAll('.transactions-desktop-table .transactions-amount')].every((cell) => {
+        const rect = cell.getBoundingClientRect()
+        return visible(cell) && rect.left >= 0 && rect.right <= innerWidth
+      }),
       desktopActionsWithinViewport: ${mobile} || [...document.querySelectorAll('.transactions-desktop-table .transactions-row-actions button')].every((button) => {
         const rect = button.getBoundingClientRect()
         return visible(button) && rect.left >= 0 && rect.right <= innerWidth
       }),
+      mobileRowsConsistent: !${mobile} || [...document.querySelectorAll('.transactions-mobile-list li')].every((row) => {
+        const trailing = row.querySelector('.transactions-mobile-trailing')
+        const amount = trailing?.querySelector('.transactions-amount')
+        const action = trailing?.querySelector('.transactions-row-actions button')
+        const rowRect = row.getBoundingClientRect()
+        const trailingRect = trailing?.getBoundingClientRect()
+        return visible(trailing) && visible(amount) && visible(action) && trailingRect.left >= rowRect.left && trailingRect.right <= rowRect.right + 1
+      }),
+      searchPlaceholder: search?.getAttribute('placeholder'),
+      searchControlFits: Boolean(search && search.getBoundingClientRect().right <= innerWidth && search.getBoundingClientRect().left >= 0),
+      navigationOpaque: !${mobile} || (() => {
+        const color = getComputedStyle(navigation).backgroundColor
+        const alpha = color.match(/rgba?\\([^)]*?(?:,|\\s\\/)\\s*([0-9.]+)\\s*\\)$/)?.[1]
+        return alpha === undefined || Number(alpha) >= 0.99
+      })(),
       summaryVisible: visible(document.querySelector('.transactions-summary')),
       mobileNavigationVisible: !${mobile} || visible(navigation),
     }
@@ -353,11 +374,59 @@ async function captureTransactionsEvidence(client, sessionId, width, height) {
   assert.equal(assertions.tableVisible, !mobile && width >= 1024)
   assert.equal(assertions.listVisible, mobile || width < 1024)
   assert.ok(assertions.transactionRows > 0)
+  assert.equal(assertions.compactHeaderSingleLine, true)
+  assert.equal(assertions.compactMetadataVisible, true)
+  assert.equal(assertions.amountCellsWithinViewport, true)
   assert.equal(assertions.desktopActionsWithinViewport, true)
+  assert.equal(assertions.mobileRowsConsistent, true)
+  assert.equal(assertions.searchPlaceholder, 'Search')
+  assert.equal(assertions.searchControlFits, true)
+  assert.equal(assertions.navigationOpaque, true)
   assert.equal(assertions.mobileNavigationVisible, true)
 
   await mkdir(ARTIFACT_DIR, { recursive: true })
   const path = join(ARTIFACT_DIR, `transactions-${width}x${height}.png`)
+  const screenshot = await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false }, sessionId)
+  await writeFile(path, screenshot.data, 'base64')
+  return { path, ...assertions }
+}
+
+async function captureTransactionFinalRowEvidence(client, sessionId) {
+  const width = 390
+  const height = 844
+  await client.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: true, screenWidth: width, screenHeight: height }, sessionId)
+  await clickButton(client, sessionId, 'Transactions')
+  await waitFor(client, sessionId, `Boolean(document.querySelector('[data-transactions-ready=true] .transactions-mobile-list li:last-child'))`, 'final mobile transaction')
+  await evaluate(client, sessionId, `document.querySelector('.transactions-mobile-list li:last-child')?.scrollIntoView({ block: 'end' })`)
+  await waitFor(client, sessionId, `(async () => {
+    await document.fonts.ready
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    const row = document.querySelector('.transactions-mobile-list li:last-child')?.getBoundingClientRect()
+    const nav = document.querySelector('.app-mobile-navigation')?.getBoundingClientRect()
+    return Boolean(row && nav && row.bottom <= nav.top)
+  })()`, 'final transaction above mobile navigation')
+  const assertions = await evaluate(client, sessionId, `(() => {
+    const row = document.querySelector('.transactions-mobile-list li:last-child')
+    const action = row?.querySelector('.transactions-row-actions button')
+    const pagination = document.querySelector('.transactions-pagination')
+    const navigation = document.querySelector('.app-mobile-navigation')
+    const rowRect = row?.getBoundingClientRect()
+    const actionRect = action?.getBoundingClientRect()
+    const navRect = navigation?.getBoundingClientRect()
+    return {
+      viewport: { width: innerWidth, height: innerHeight },
+      finalRowAboveNavigation: Boolean(rowRect && navRect && rowRect.bottom <= navRect.top),
+      finalActionVisible: Boolean(actionRect && navRect && actionRect.top >= 0 && actionRect.bottom <= navRect.top),
+      paginationReachable: Boolean(pagination && pagination.getBoundingClientRect().bottom <= document.documentElement.scrollHeight),
+      horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+    }
+  })()`)
+  assert.deepEqual(assertions.viewport, { width, height })
+  assert.equal(assertions.finalRowAboveNavigation, true)
+  assert.equal(assertions.finalActionVisible, true)
+  assert.equal(assertions.paginationReachable, true)
+  assert.equal(assertions.horizontalOverflow, false)
+  const path = join(ARTIFACT_DIR, `transactions-final-row-${width}x${height}.png`)
   const screenshot = await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false }, sessionId)
   await writeFile(path, screenshot.data, 'base64')
   return { path, ...assertions }
@@ -552,6 +621,7 @@ async function runAcceptance() {
       report.checks.transactionsScreenshots.push(await captureTransactionsEvidence(client, sessionId, width, height))
     }
     report.checks.transactionsFilterSheet = await captureTransactionFiltersEvidence(client, sessionId)
+    report.checks.transactionsFinalRow = await captureTransactionFinalRowEvidence(client, sessionId)
     await client.send('Emulation.setDeviceMetricsOverride', {
       width: 1440,
       height: 900,
