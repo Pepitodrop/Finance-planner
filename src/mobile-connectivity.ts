@@ -20,7 +20,7 @@ export async function probeSameOrigin(
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
-    const url = new URL('/health/live', origin)
+    const url = new URL('/healthz', origin)
     url.searchParams.set('connectivity-check', String(Date.now()))
     const response = await fetcher(url, {
       method: 'GET',

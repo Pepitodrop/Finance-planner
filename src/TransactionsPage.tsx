@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDownRight, ArrowUpRight, CalendarDays, ChevronLeft, ChevronRight, Filter, MoreHorizontal, Pencil, Search, Trash2, WalletCards } from 'lucide-react'
+import { CalendarDays, ChevronLeft, ChevronRight, Filter, MoreHorizontal, Pencil, Search, Trash2, WalletCards } from 'lucide-react'
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
 import { categoryBreakdown, formatMoney } from './finance'
+import { MerchantLogo } from './MerchantLogo'
 import type { Account, Transaction } from './types'
 
 interface TransactionsPageProps {
@@ -17,6 +18,7 @@ type DateFilter = 'all' | 'month' | '30days'
 const CATEGORY_COLORS = ['#7f42ff', '#5878ff', '#27b9ff', '#35d0cf', '#d247d7', '#ff9f43', '#54df91', '#ff6d88']
 const PAGE_SIZE = 10
 const isTransfer = (transaction: Transaction) => /transfer|umbuch|übertrag/i.test(`${transaction.category} ${transaction.description}`)
+const ACCOUNT_TYPE_LABELS: Record<string, string> = { checking: 'Girokonto', savings: 'Sparkonto', cash: 'Bargeld', investment: 'Depot' }
 
 export function TransactionsPage({ transactions, accounts, onEdit, onDelete }: TransactionsPageProps) {
   const [typeFilter, setTypeFilter] = useState<TransactionFilter>('all')
@@ -179,9 +181,9 @@ export function TransactionsPage({ transactions, accounts, onEdit, onDelete }: T
             return <div className="transactions-table-row" role="row" key={transaction.id}>
               <span role="cell"><input type="checkbox" aria-label={`${transaction.description} auswählen`} checked={selectedIds.has(transaction.id)} onChange={() => toggleSelected(transaction.id)}/></span>
               <span className="transaction-date" role="cell">{new Date(transaction.date).toLocaleDateString('de-DE', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
-              <span className="transaction-description-cell" role="cell"><span className={transaction.type === 'income' ? 'transaction-merchant-icon income' : 'transaction-merchant-icon expense'}>{transaction.type === 'income' ? <ArrowUpRight size={17}/> : <ArrowDownRight size={17}/>}</span><span><strong>{transaction.description}</strong><small>{transaction.recurring ? 'Wiederkehrende Zahlung' : isTransfer(transaction) ? 'Kontoumbuchung' : 'Einmalige Buchung'}</small></span></span>
+              <span className="transaction-description-cell" role="cell"><MerchantLogo description={transaction.description} type={transaction.type}/><span><strong>{transaction.description}</strong><small>{transaction.recurring ? 'Wiederkehrende Zahlung' : isTransfer(transaction) ? 'Kontoumbuchung' : 'Einmalige Buchung'}</small></span></span>
               <span role="cell"><span className={`transaction-category-chip ${transaction.type}`}>{isTransfer(transaction) ? 'Transfer' : transaction.category}</span></span>
-              <span className="transaction-account-cell" role="cell"><span className="transaction-account-icon"><WalletCards size={16}/></span><span><strong>{account?.name ?? 'Unbekanntes Konto'}</strong><small>{account?.type ?? '—'}</small></span></span>
+              <span className="transaction-account-cell" role="cell"><span className="transaction-account-icon"><WalletCards size={16}/></span><span><strong>{account?.name ?? 'Unbekanntes Konto'}</strong><small>{ACCOUNT_TYPE_LABELS[account?.type ?? ''] ?? account?.type ?? '—'}</small></span></span>
               <span className={transaction.type === 'income' ? 'transaction-amount income' : 'transaction-amount expense'} role="cell">{transaction.type === 'income' ? '+' : '-'}{formatMoney(transaction.amountCents)}</span>
               <span className="transaction-inline-actions" role="cell"><button type="button" aria-label={`${transaction.description} bearbeiten`} onClick={() => onEdit(transaction)}><Pencil size={15}/></button><button type="button" aria-label={`${transaction.description} löschen`} onClick={() => onDelete(transaction.id)}><Trash2 size={15}/></button><button type="button" aria-label={`Weitere Aktionen für ${transaction.description}`} onClick={() => onEdit(transaction)}><MoreHorizontal size={17}/></button></span>
             </div>
