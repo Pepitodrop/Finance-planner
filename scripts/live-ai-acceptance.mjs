@@ -143,9 +143,9 @@ try {
   evidence.verifiedAt = new Date().toISOString()
   await persist()
   console.log('Hosted financial and receipt inference acceptance passed.')
-} catch (error) {
+} catch {
   evidence.status = evidence.status === 'blocked_by_credentials' ? evidence.status : 'failed'
-  evidence.error = error instanceof Error ? error.message.slice(0, 500) : 'Hosted AI acceptance failed.'
+  evidence.error = 'Hosted AI acceptance failed. Inspect the workflow log for the classified failure without persisting provider data.'
   await persist()
   console.error(evidence.error)
   process.exit(1)
