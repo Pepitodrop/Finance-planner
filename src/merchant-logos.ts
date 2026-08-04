@@ -9,6 +9,7 @@ const LOGOS: Array<{ pattern: RegExp; logo: MerchantLogoDefinition }> = [
   { pattern: /\bnetflix\b/i, logo: { slug: 'netflix', color: 'E50914', label: 'Netflix' } },
   { pattern: /\bshell\b/i, logo: { slug: 'shell', color: 'FFD500', label: 'Shell' } },
   { pattern: /\brewe\b/i, logo: { slug: 'rewe', color: 'CC071E', label: 'REWE' } },
+  { pattern: /\bedeka\b/i, logo: { slug: 'edeka', color: '1B66B1', label: 'EDEKA' } },
   { pattern: /\bpaypal\b/i, logo: { slug: 'paypal', color: '003087', label: 'PayPal' } },
   { pattern: /\bamazon\b/i, logo: { slug: 'amazon', color: 'FF9900', label: 'Amazon' } },
   { pattern: /\bapple\b|\bitunes\b|\bapp store\b/i, logo: { slug: 'apple', color: 'F5F5F7', label: 'Apple' } },
