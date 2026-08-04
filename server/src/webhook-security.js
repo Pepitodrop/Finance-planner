@@ -60,6 +60,8 @@ export async function processWebhook({ request, provider, secret, store, handler
     throw new HttpError(400, 'invalid_json', 'Invalid JSON webhook payload.')
   }
 
+  // Lease-based webhook idempotency prevents duplicate side effects while
+  // preserving a safe retry path for failed or abandoned deliveries.
   const leaseToken = await store.claimWebhookEvent({
     provider,
     eventId: verified.eventId,
