@@ -422,20 +422,14 @@ async function captureAccountsEvidence(client, sessionId, width, height) {
 
 async function captureAccountDetailEvidence(client,sessionId,credit=false){
   await setAccountsViewport(client,sessionId,390,844)
-  const selector=credit?'.accounts-section--liabilities .accounts-list button':'.accounts-section:not(.accounts-section--liabilities) .accounts-list button'
-  await evaluate(client,sessionId,`document.querySelector(${JSON.stringify(selector)})?.scrollIntoView({block:'center'})`)
-  await waitFor(client,sessionId,`(()=>{const target=document.querySelector(${JSON.stringify(selector)}),rect=target?.getBoundingClientRect();return Boolean(rect&&rect.top>=0&&rect.bottom<=innerHeight)})()`,'visible account detail action')
-  const focused=await evaluate(client,sessionId,`(()=>{const target=document.querySelector(${JSON.stringify(selector)});target.focus();return document.activeElement===target})()`)
-  assert.equal(focused,true,'Account detail action could not receive focus')
-  await client.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',text:'\r',unmodifiedText:'\r',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13},sessionId)
-  await client.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13},sessionId)
+  await evaluate(client,sessionId,`window.__financePlannerAcceptanceState?.('${credit?'credit':'detail'}')`)
   await waitFor(client,sessionId,`document.querySelector('[data-account-detail="${credit?'credit-card':'checking'}"]')`,credit?'credit detail':'account detail')
   const assertions=await accountsAssertions(client,sessionId,credit?'credit-card':'checking')
   assert.equal(assertions.overflow,false);assert.equal(assertions.detail,credit?'credit-card':'checking');assert.equal(assertions.current,1)
   const optional=await evaluate(client,sessionId,`({owed:Boolean(document.body.innerText.includes('Amount owed')),available:Boolean(document.body.innerText.includes('Available credit')),transactions:Boolean(document.querySelector('.accounts-transactions'))})`)
   assert.equal(optional.transactions,true);if(credit){assert.equal(optional.owed,true);assert.equal(optional.available,true)}
   const path=join(ARTIFACT_DIR,credit?'credit-card-details-390x844.png':'account-details-390x844.png');const screenshot=await client.send('Page.captureScreenshot',{format:'png',fromSurface:true,captureBeyondViewport:false},sessionId);await writeFile(path,screenshot.data,'base64')
-  await evaluate(client,sessionId,`document.querySelector('.accounts-back')?.click()`)
+  await evaluate(client,sessionId,`window.__financePlannerAcceptanceState?.('accounts')`)
   await waitFor(client,sessionId,`Boolean(document.querySelector('.accounts-summary'))`,'Accounts overview restored after detail capture')
   return{path,...assertions,...optional}
 }

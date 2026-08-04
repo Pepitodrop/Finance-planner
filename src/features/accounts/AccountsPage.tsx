@@ -11,6 +11,7 @@ interface Props {
   onOpenConnections: () => void
   onViewTransactions: (accountId: string) => void
   referenceDate?: Date
+  initialSelectedAccountId?: string
 }
 
 const FILTERS: [AccountFilter, string][] = [['all','All'],['checking','Checking'],['savings','Savings'],['cash','Cash'],['investment','Investments'],['credit-card','Credit cards']]
@@ -38,9 +39,9 @@ function Metadata({ account }: { account: Account }) {
   return <dl className="accounts-metadata"><div><dt>Account type</dt><dd>{LABELS[account.type]}</dd></div><div><dt>Currency</dt><dd>{account.currency}</dd></div>{account.lastSyncedAt && <div><dt>Last synced</dt><dd>{new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short'}).format(new Date(account.lastSyncedAt))}</dd></div>}</dl>
 }
 
-export function AccountsPage({ accounts, transactions, onOpenConnections, onViewTransactions, referenceDate = new Date() }: Props) {
+export function AccountsPage({ accounts, transactions, onOpenConnections, onViewTransactions, referenceDate = new Date(), initialSelectedAccountId = '' }: Props) {
   const [filter, setFilter] = useState<AccountFilter>('all')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedAccountId || null)
   const selected = accounts.find((account) => account.id === selectedId)
   const summary = summarizeAccounts(accounts)
   const visible = filterAccounts(accounts, filter)

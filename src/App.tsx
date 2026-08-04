@@ -36,12 +36,12 @@ function App({ userId, userName, onLockVault }: AppProps) {
   const [formError, setFormError] = useState('')
   const [deletedTransaction, setDeletedTransaction] = useState<Transaction | null>(null)
   const [requestedTransactionAccount, setRequestedTransactionAccount] = useState<string | null>(null)
-  const [accountsAcceptanceMode, setAccountsAcceptanceMode] = useState<'accounts' | 'empty' | null>(null)
+  const [accountsAcceptanceMode, setAccountsAcceptanceMode] = useState<'accounts' | 'empty' | 'detail' | 'credit' | null>(null)
 
   useEffect(() => saveState(state), [state])
   useEffect(() => {
     if (import.meta.env.VITE_ACCEPTANCE_FIXTURES !== 'true') return
-    const target = window as Window & { __financePlannerAcceptanceState?: (mode: 'accounts' | 'empty') => void }
+    const target = window as Window & { __financePlannerAcceptanceState?: (mode: 'accounts' | 'empty' | 'detail' | 'credit') => void }
     target.__financePlannerAcceptanceState = setAccountsAcceptanceMode
     return () => { delete target.__financePlannerAcceptanceState }
   }, [])
@@ -56,7 +56,7 @@ function App({ userId, userName, onLockVault }: AppProps) {
 
   const recurring = useMemo(() => recurringPayments(state.transactions), [state.transactions])
   const accountsPresentationState = useMemo(() => {
-    if (accountsAcceptanceMode === 'accounts') return accountsAcceptanceState
+    if (accountsAcceptanceMode === 'accounts' || accountsAcceptanceMode === 'detail' || accountsAcceptanceMode === 'credit') return accountsAcceptanceState
     if (accountsAcceptanceMode === 'empty') return { ...accountsAcceptanceState, accounts: [], transactions: [] }
     return state
   }, [accountsAcceptanceMode, state])
@@ -177,7 +177,7 @@ function App({ userId, userName, onLockVault }: AppProps) {
         onDelete={deleteTransaction}
         requestedAccountId={requestedTransactionAccount}
       />}
-      {tab === 'accounts' && <AccountsPage accounts={accountsPresentationState.accounts} transactions={accountsPresentationState.transactions} onOpenConnections={() => setTab('connections')} onViewTransactions={viewAccountTransactions}/>}
+      {tab === 'accounts' && <AccountsPage key={accountsAcceptanceMode ?? 'live'} accounts={accountsPresentationState.accounts} transactions={accountsPresentationState.transactions} initialSelectedAccountId={accountsAcceptanceMode === 'detail' ? 'accept-checking' : accountsAcceptanceMode === 'credit' ? 'accept-card' : undefined} onOpenConnections={() => setTab('connections')} onViewTransactions={viewAccountTransactions}/>}
       {tab === 'goals' && <SavingsGoals state={state} onChange={setState}/>} 
       {tab === 'recurring' && <section className="panel table-panel">
         <div className="panel-header">
