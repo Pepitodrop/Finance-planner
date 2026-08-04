@@ -37,8 +37,16 @@
            ACCEPT WS-OPERATION FROM ARGUMENT-VALUE
            EVALUATE TRIM(WS-OPERATION)
               WHEN "normalize-account-type"
+                 IF WS-ARG-COUNT NOT = 2
+                    DISPLAY "ERROR|INVALID_ARGUMENTS"
+                    STOP RUN RETURNING 2
+                 END-IF
                  PERFORM NORMALIZE-ACCOUNT-TYPE
               WHEN "normalize-credit-card"
+                 IF WS-ARG-COUNT NOT = 4
+                    DISPLAY "ERROR|INVALID_ARGUMENTS"
+                    STOP RUN RETURNING 2
+                 END-IF
                  PERFORM NORMALIZE-CREDIT-CARD
               WHEN OTHER
                  DISPLAY "ERROR|UNKNOWN_OPERATION"
@@ -69,10 +77,6 @@
            DISPLAY "OK|" TRIM(WS-NORMALIZED-TYPE).
 
        NORMALIZE-CREDIT-CARD.
-           IF WS-ARG-COUNT < 5
-              DISPLAY "ERROR|INVALID_ARGUMENTS"
-              STOP RUN RETURNING 2
-           END-IF
            ACCEPT WS-TEXT-AMOUNT FROM ARGUMENT-VALUE
            ACCEPT WS-TEXT-LIMIT FROM ARGUMENT-VALUE
            ACCEPT WS-TEXT-PENDING FROM ARGUMENT-VALUE
