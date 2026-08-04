@@ -209,6 +209,16 @@ table {
 .transactions-desktop-table td:first-child {
   white-space: nowrap;
 }
+.transactions-desktop-table th:last-child,
+.transactions-desktop-table td:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  background: var(--fp-color-surface);
+}
+.transactions-desktop-table tbody tr:hover td:last-child {
+  background: var(--fp-color-surface-hover);
+}
 .transactions-desktop-table th {
   padding: 0.8rem var(--fp-space-3);
   border-block: 1px solid var(--fp-color-divider);
