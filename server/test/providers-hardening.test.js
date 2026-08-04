@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFile } from 'node:fs/promises'
-import { decimalToCents, jsonFetch, retryDelayMs, startPayPal, syncGoCardless, syncWindow } from '../src/providers.js'
+import { decimalToCents, jsonFetch, normalizeProviderAccountType, providerAccountTypeAlias, retryDelayMs, startPayPal, syncGoCardless, syncWindow } from '../src/providers.js'
 
 test('converts provider decimal strings to integer cents without floating-point rounding', () => {
   assert.equal(decimalToCents('12.34'), 1234)
@@ -10,6 +10,25 @@ test('converts provider decimal strings to integer cents without floating-point 
   assert.equal(decimalToCents('1.2'), 120)
   assert.throws(() => decimalToCents('1.234'))
   assert.throws(() => decimalToCents('NaN'))
+})
+
+test('maps provider account codes to conservative COBOL aliases', async () => {
+  assert.equal(providerAccountTypeAlias({ cashAccountType: 'CACC' }), 'checking')
+  assert.equal(providerAccountTypeAlias({ cashAccountType: 'SVGS' }), 'savings')
+  assert.equal(providerAccountTypeAlias({ cashAccountType: 'CARD' }), 'credit-card')
+  assert.equal(providerAccountTypeAlias({ cashAccountType: 'CASH' }), 'cash')
+  assert.equal(providerAccountTypeAlias({ cashAccountType: 'TRAS' }), 'investment')
+  assert.equal(providerAccountTypeAlias({ cashAccountType: 'unknown-provider-value' }), 'checking')
+
+  const calls = []
+  const fakeCore = {
+    async normalizeAccountType(value) {
+      calls.push(value)
+      return value
+    },
+  }
+  assert.equal(await normalizeProviderAccountType({ cashAccountType: 'SVGS' }, {}, fakeCore), 'savings')
+  assert.deepEqual(calls, ['savings'])
 })
 
 test('calculates bounded Retry-After delays for seconds and HTTP dates', () => {
@@ -103,4 +122,5 @@ test('bank connectors enforce consent, incremental, pagination and reconciliatio
   assert.match(source, /MAX_PAYPAL_PAGES/)
   assert.match(source, /pagination exceeds safety limit/)
   assert.match(source, /validateProviderReconciliation/)
+  assert.match(source, /normalizeProviderAccountType/)
 })
