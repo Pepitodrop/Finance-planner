@@ -220,16 +220,18 @@ function normalizeGmailReceipt(message) {
   if (amountCents === null || !billingInterval) return null
   const product = productFromReceipt(subject, snippet)
   const internalDate = Number(message?.internalDate)
-  return normalizeRecord({
-    externalId: `gmail:${message.id}`,
-    provider: 'Google Play (Gmail-Beleg)',
-    product,
-    amountCents,
-    currency: 'EUR',
-    billingInterval,
-    status: subscriptionStatusFromText(searchable),
+  return {
     receiptTimestamp: Number.isFinite(internalDate) ? internalDate : 0,
-  })
+    record: normalizeRecord({
+      externalId: `gmail:${message.id}`,
+      provider: 'Google Play (Gmail-Beleg)',
+      product,
+      amountCents,
+      currency: 'EUR',
+      billingInterval,
+      status: subscriptionStatusFromText(searchable),
+    }),
+  }
 }
 
 async function mapLimit(items, limit, mapper) {
@@ -273,11 +275,13 @@ async function syncGmailReceipts(credential, env) {
   })
   const receipts = messages.map(normalizeGmailReceipt).filter(Boolean)
   const unique = new Map()
-  for (const record of receipts) {
+  for (const candidate of receipts) {
+    const record = candidate.record
     const key = [record.product.toLocaleLowerCase('de-DE'), record.amountCents, record.billingInterval].join('|')
-    unique.set(key, record)
+    const existing = unique.get(key)
+    if (!existing || candidate.receiptTimestamp > existing.receiptTimestamp) unique.set(key, candidate)
   }
-  return { subscriptions: [...unique.values()], limitations: [...GMAIL_LIMITATIONS] }
+  return { subscriptions: [...unique.values()].map((candidate) => candidate.record), limitations: [...GMAIL_LIMITATIONS] }
 }
 
 export async function syncGoogleSubscriptionSource(credential, env = process.env) {
