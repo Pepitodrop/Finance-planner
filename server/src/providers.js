@@ -14,6 +14,17 @@ const CONSENT_EXPIRY_SAFETY_MS = 5 * 60_000
 const MAX_PAYPAL_PAGES = 100
 const MAX_RETRY_DELAY_MS = 30_000
 
+const READ_ONLY_CAPABILITIES = Object.freeze({
+  accountInformation: true,
+  balances: true,
+  transactions: true,
+  paymentInitiation: false,
+  transfers: false,
+  payouts: false,
+  orders: false,
+  mandates: false,
+})
+
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)) }
 function isoDate(value) { return new Date(value).toISOString().slice(0, 10) }
 
@@ -22,6 +33,15 @@ function createBankingCore(env) {
     binary: env.COBOL_BANKING_BINARY,
     required: env.COBOL_BANKING_REQUIRED === 'true',
   })
+}
+
+function paypalMode(env) {
+  const configured = String(env.PAYPAL_CONNECTION_MODE || '').trim().toLowerCase()
+  if (configured) {
+    if (!['owner', 'partner'].includes(configured)) throw new Error('PAYPAL_CONNECTION_MODE must be owner or partner.')
+    return configured
+  }
+  return env.PAYPAL_PARTNER_MERCHANT_ID ? 'partner' : 'owner'
 }
 
 export function providerAccountTypeAlias(account = {}) {
@@ -35,6 +55,8 @@ export function providerAccountTypeAlias(account = {}) {
 
 export async function normalizeProviderAccountType(account, env = {}, suppliedCore) {
   const core = suppliedCore || createBankingCore(env)
+  const code = String(account?.cashAccountType || account?.type || '')
+  if (typeof core.normalizeProviderAccountType === 'function') return core.normalizeProviderAccountType(code)
   return core.normalizeAccountType(providerAccountTypeAlias(account))
 }
 
@@ -172,6 +194,59 @@ function completedHealth({ completedAt, consentExpiresAt = null, accounts, trans
   return health
 }
 
+export class OpenBankingProvider {
+  constructor({ id, kind, env, core, capabilities = READ_ONLY_CAPABILITIES }) {
+    this.id = id
+    this.kind = kind
+    this.env = env
+    this.core = core || createBankingCore(env)
+    this.capabilities = Object.freeze({ ...READ_ONLY_CAPABILITIES, ...capabilities })
+    if (Object.values({
+      paymentInitiation: this.capabilities.paymentInitiation,
+      transfers: this.capabilities.transfers,
+      payouts: this.capabilities.payouts,
+      orders: this.capabilities.orders,
+      mandates: this.capabilities.mandates,
+    }).some(Boolean)) throw new Error(`${id} attempts to enable forbidden money movement.`)
+  }
+
+  isConfigured() { return false }
+  async start() { throw new Error(`${this.id} provider start is not implemented.`) }
+  async sync() { throw new Error(`${this.id} provider sync is not implemented.`) }
+
+  describe() {
+    return {
+      id: this.id,
+      kind: this.kind,
+      configured: this.isConfigured(),
+      capabilities: this.capabilities,
+    }
+  }
+}
+
+export class OpenBankingProviderRegistry {
+  constructor(providers = []) {
+    this.providers = new Map()
+    for (const provider of providers) this.register(provider)
+  }
+
+  register(provider) {
+    if (!(provider instanceof OpenBankingProvider)) throw new Error('Provider must implement OpenBankingProvider.')
+    if (this.providers.has(provider.id)) throw new Error(`Provider ${provider.id} is already registered.`)
+    this.providers.set(provider.id, provider)
+    return this
+  }
+
+  get(id) {
+    const provider = this.providers.get(id)
+    if (!provider) throw new Error(`Unknown open-banking provider: ${id}`)
+    return provider
+  }
+
+  list() { return [...this.providers.values()].map((provider) => provider.describe()) }
+  configured() { return this.list().filter((provider) => provider.configured) }
+}
+
 export async function gocardlessToken(env) {
   const token = await jsonFetch(`${GC_BASE}/token/new/`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -185,88 +260,94 @@ export async function gocardlessToken(env) {
   }
 }
 
-export async function startGoCardless({ env, state, redirectUri, country = 'DE' }) {
-  if (!env.GOCARDLESS_SECRET_ID || !env.GOCARDLESS_SECRET_KEY) throw new Error('GoCardless credentials are not configured.')
-  const token = await gocardlessToken(env)
-  const policy = providerPolicy(env)
-  const institutions = await jsonFetch(`${GC_BASE}/institutions/?country=${encodeURIComponent(country)}`, { headers: { Authorization: `Bearer ${token.access}` } }, policy)
-  const institutionId = env.GOCARDLESS_INSTITUTION_ID || institutions[0]?.id
-  if (!institutionId) throw new Error('No GoCardless institution is available for this country.')
-  const agreement = await jsonFetch(`${GC_BASE}/agreements/enduser/`, {
-    method: 'POST', headers: { Authorization: `Bearer ${token.access}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ institution_id: institutionId, max_historical_days: 90, access_valid_for_days: GOCARDLESS_CONSENT_DAYS, access_scope: ['balances', 'details', 'transactions'] }),
-  }, policy)
-  const requisition = await jsonFetch(`${GC_BASE}/requisitions/`, {
-    method: 'POST', headers: { Authorization: `Bearer ${token.access}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ redirect: redirectUri, institution_id: institutionId, agreement: agreement.id, reference: state, user_language: 'DE' }),
-  }, policy)
-  return {
-    redirectUrl: requisition.link,
-    credential: {
-      requisitionId: requisition.id,
-      agreementId: agreement.id,
-      token,
-      institutionId,
-      accessValidForDays: GOCARDLESS_CONSENT_DAYS,
-    },
-  }
-}
+class GoCardlessProvider extends OpenBankingProvider {
+  constructor(env, core) { super({ id: 'gocardless', kind: 'psd2-account-information', env, core }) }
+  isConfigured() { return Boolean(this.env.GOCARDLESS_SECRET_ID && this.env.GOCARDLESS_SECRET_KEY) }
 
-export async function syncGoCardless(credential, env, suppliedCore) {
-  const completedAt = new Date()
-  const bankingCore = suppliedCore || createBankingCore(env)
-  const consentExpiresAt = gocardlessConsentExpiresAt(credential)
-  if (consentExpiresAt && Date.parse(consentExpiresAt) <= completedAt.getTime() + CONSENT_EXPIRY_SAFETY_MS) {
-    throw new Error(`GoCardless consent expired at ${consentExpiresAt}; reconnect the bank account.`)
-  }
-
-  let token = credential.token
-  if (!tokenIsUsable(token, completedAt.getTime())) token = await gocardlessToken(env)
-  const policy = providerPolicy(env)
-  const requisition = await jsonFetch(`${GC_BASE}/requisitions/${credential.requisitionId}/`, { headers: { Authorization: `Bearer ${token.access}` } }, policy)
-  if (requisition.status !== 'LN') {
-    if (['EX', 'RJ', 'SU'].includes(String(requisition.status || ''))) throw new Error(`GoCardless consent expired or was revoked: ${requisition.status}`)
-    throw new Error(`GoCardless consent is not ready: ${requisition.status || 'unknown'}`)
-  }
-  const window = syncWindow(credential.lastSyncedAt, completedAt, 90)
-  const accounts = []
-  const transactions = []
-  const seen = new Set()
-  for (const accountId of requisition.accounts ?? []) {
-    const txUrl = new URL(`${GC_BASE}/accounts/${accountId}/transactions/`)
-    txUrl.searchParams.set('date_from', window.dateFrom)
-    txUrl.searchParams.set('date_to', window.dateTo)
-    const [details, balances, tx] = await Promise.all([
-      jsonFetch(`${GC_BASE}/accounts/${accountId}/details/`, { headers: { Authorization: `Bearer ${token.access}` } }, policy),
-      jsonFetch(`${GC_BASE}/accounts/${accountId}/balances/`, { headers: { Authorization: `Bearer ${token.access}` } }, policy),
-      jsonFetch(txUrl, { headers: { Authorization: `Bearer ${token.access}` } }, policy),
-    ])
-    const account = details.account ?? {}
-    const balance = balances.balances?.find((item) => item.balanceAmount?.currency === 'EUR')?.balanceAmount?.amount ?? '0'
-    const type = await normalizeProviderAccountType(account, env, bankingCore)
-    accounts.push({ externalId: accountId, name: account.name || account.product || account.iban || 'Bankkonto', type, balanceCents: decimalToCents(balance), currency: 'EUR' })
-    for (const [pending, rows] of [[false, tx.transactions?.booked ?? []], [true, tx.transactions?.pending ?? []]]) {
-      for (const item of rows) {
-        if (item.transactionAmount?.currency !== 'EUR') continue
-        const signedCents = decimalToCents(item.transactionAmount.amount)
-        await normalizeSignedAmount(signedCents, env)
-        const externalId = item.transactionId || `${accountId}:${item.bookingDate || item.valueDate}:${item.transactionAmount.amount}:${item.remittanceInformationUnstructured || ''}`
-        if (seen.has(externalId)) continue
-        seen.add(externalId)
-        transactions.push({ externalId, externalAccountId: accountId, description: item.creditorName || item.debtorName || item.remittanceInformationUnstructured || item.additionalInformation || 'Banktransaktion', amountCents: signedCents, currency: 'EUR', bookingDate: item.bookingDate || item.valueDate || window.dateTo, pending })
-      }
+  async start({ state, redirectUri, country = 'DE' }) {
+    if (!this.isConfigured()) throw new Error('GoCardless credentials are not configured.')
+    await this.core.validateReadOnlyScope('balances,details,transactions')
+    const token = await gocardlessToken(this.env)
+    const policy = providerPolicy(this.env)
+    const institutions = await jsonFetch(`${GC_BASE}/institutions/?country=${encodeURIComponent(country)}`, { headers: { Authorization: `Bearer ${token.access}` } }, policy)
+    const institutionId = this.env.GOCARDLESS_INSTITUTION_ID || institutions[0]?.id
+    if (!institutionId) throw new Error('No GoCardless institution is available for this country.')
+    const agreement = await jsonFetch(`${GC_BASE}/agreements/enduser/`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token.access}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ institution_id: institutionId, max_historical_days: 90, access_valid_for_days: GOCARDLESS_CONSENT_DAYS, access_scope: ['balances', 'details', 'transactions'] }),
+    }, policy)
+    const requisition = await jsonFetch(`${GC_BASE}/requisitions/`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token.access}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ redirect: redirectUri, institution_id: institutionId, agreement: agreement.id, reference: state, user_language: 'DE' }),
+    }, policy)
+    return {
+      redirectUrl: requisition.link,
+      credential: {
+        requisitionId: requisition.id,
+        agreementId: agreement.id,
+        token,
+        institutionId,
+        accessValidForDays: GOCARDLESS_CONSENT_DAYS,
+      },
     }
   }
-  const reconciliation = { accountCount: accounts.length, transactionCount: transactions.length, dateFrom: window.dateFrom, dateTo: window.dateTo, syncedAt: completedAt.toISOString() }
-  validateProviderReconciliation({ accounts, transactions, reconciliation })
-  const health = completedHealth({ completedAt, consentExpiresAt, accounts, transactions })
-  return {
-    accounts,
-    transactions,
-    credential: { ...credential, token, lastSyncedAt: completedAt.toISOString(), consentExpiresAt, health },
-    reconciliation: { ...reconciliation, health },
-    consentExpiresAt,
-    health,
+
+  async sync(credential) {
+    const completedAt = new Date()
+    const consentExpiresAt = gocardlessConsentExpiresAt(credential)
+    if (consentExpiresAt && Date.parse(consentExpiresAt) <= completedAt.getTime() + CONSENT_EXPIRY_SAFETY_MS) {
+      throw new Error(`GoCardless consent expired at ${consentExpiresAt}; reconnect the bank account.`)
+    }
+
+    let token = credential.token
+    if (!tokenIsUsable(token, completedAt.getTime())) token = await gocardlessToken(this.env)
+    const policy = providerPolicy(this.env)
+    const requisition = await jsonFetch(`${GC_BASE}/requisitions/${credential.requisitionId}/`, { headers: { Authorization: `Bearer ${token.access}` } }, policy)
+    const consentState = await this.core.validateProviderConsent('gocardless', requisition.status)
+    if (consentState === 'expired') throw new Error(`GoCardless consent expired or was revoked: ${requisition.status}`)
+    if (consentState !== 'ready') throw new Error(`GoCardless consent is not ready: ${requisition.status || 'unknown'}`)
+
+    const window = syncWindow(credential.lastSyncedAt, completedAt, 90)
+    const accounts = []
+    const transactions = []
+    const seen = new Set()
+    for (const accountId of requisition.accounts ?? []) {
+      const txUrl = new URL(`${GC_BASE}/accounts/${accountId}/transactions/`)
+      txUrl.searchParams.set('date_from', window.dateFrom)
+      txUrl.searchParams.set('date_to', window.dateTo)
+      const [details, balances, tx] = await Promise.all([
+        jsonFetch(`${GC_BASE}/accounts/${accountId}/details/`, { headers: { Authorization: `Bearer ${token.access}` } }, policy),
+        jsonFetch(`${GC_BASE}/accounts/${accountId}/balances/`, { headers: { Authorization: `Bearer ${token.access}` } }, policy),
+        jsonFetch(txUrl, { headers: { Authorization: `Bearer ${token.access}` } }, policy),
+      ])
+      const account = details.account ?? {}
+      const balance = balances.balances?.find((item) => item.balanceAmount?.currency === 'EUR')?.balanceAmount?.amount ?? '0'
+      const type = await normalizeProviderAccountType(account, this.env, this.core)
+      const balanceCents = await this.core.normalizeProviderAmount(balance)
+      accounts.push({ externalId: accountId, name: account.name || account.product || account.iban || 'Bankkonto', type, balanceCents, currency: 'EUR' })
+      for (const [pending, rows] of [[false, tx.transactions?.booked ?? []], [true, tx.transactions?.pending ?? []]]) {
+        for (const item of rows) {
+          if (item.transactionAmount?.currency !== 'EUR') continue
+          const signedCents = await this.core.normalizeProviderAmount(item.transactionAmount.amount)
+          await normalizeSignedAmount(signedCents, this.env)
+          const externalId = item.transactionId || `${accountId}:${item.bookingDate || item.valueDate}:${item.transactionAmount.amount}:${item.remittanceInformationUnstructured || ''}`
+          if (seen.has(externalId)) continue
+          seen.add(externalId)
+          transactions.push({ externalId, externalAccountId: accountId, description: item.creditorName || item.debtorName || item.remittanceInformationUnstructured || item.additionalInformation || 'Banktransaktion', amountCents: signedCents, currency: 'EUR', bookingDate: item.bookingDate || item.valueDate || window.dateTo, pending })
+        }
+      }
+    }
+    const reconciliation = { accountCount: accounts.length, transactionCount: transactions.length, dateFrom: window.dateFrom, dateTo: window.dateTo, syncedAt: completedAt.toISOString() }
+    validateProviderReconciliation({ accounts, transactions, reconciliation })
+    const health = completedHealth({ completedAt, consentExpiresAt, accounts, transactions })
+    return {
+      accounts,
+      transactions,
+      credential: { ...credential, token, lastSyncedAt: completedAt.toISOString(), consentExpiresAt, health },
+      reconciliation: { ...reconciliation, health },
+      consentExpiresAt,
+      health,
+    }
   }
 }
 
@@ -277,61 +358,115 @@ async function paypalAccessToken(env) {
   return { base, token }
 }
 
-export async function startPayPal({ env, state, redirectUri }) {
-  if (!env.PAYPAL_CLIENT_ID || !env.PAYPAL_CLIENT_SECRET) throw new Error('PayPal credentials are not configured.')
-  if (!env.PAYPAL_PARTNER_MERCHANT_ID) {
-    throw new Error('PayPal user authorization is unavailable because partner onboarding is not configured. Set PAYPAL_PARTNER_MERCHANT_ID before enabling this connector.')
+class PayPalProvider extends OpenBankingProvider {
+  constructor(env, core) { super({ id: 'paypal', kind: 'wallet-account-information', env, core }) }
+  mode() { return paypalMode(this.env) }
+  isConfigured() {
+    if (!this.env.PAYPAL_CLIENT_ID || !this.env.PAYPAL_CLIENT_SECRET) return false
+    return this.mode() === 'owner' || Boolean(this.env.PAYPAL_PARTNER_MERCHANT_ID)
   }
-  const base = env.PAYPAL_ENV === 'live' ? 'https://www.paypal.com' : 'https://www.sandbox.paypal.com'
-  const url = new URL(`${base}/bizsignup/partner/entry`)
-  url.searchParams.set('partnerId', env.PAYPAL_PARTNER_MERCHANT_ID)
-  url.searchParams.set('returnToPartnerUrl', redirectUri)
-  url.searchParams.set('partnerClientId', env.PAYPAL_CLIENT_ID)
-  url.searchParams.set('state', state)
-  return { redirectUrl: url.toString(), credential: { mode: 'partner', pending: true } }
+
+  async start({ state, redirectUri }) {
+    if (!this.env.PAYPAL_CLIENT_ID || !this.env.PAYPAL_CLIENT_SECRET) throw new Error('PayPal credentials are not configured.')
+    await this.core.validateReadOnlyScope('reporting,transactions')
+    const mode = this.mode()
+    if (mode === 'owner') {
+      const callback = new URL('/api/connectors/callback', new URL(redirectUri).origin)
+      callback.searchParams.set('provider', 'paypal')
+      callback.searchParams.set('state', state)
+      return { redirectUrl: callback.toString(), credential: { mode: 'owner', pending: true } }
+    }
+
+    if (!this.env.PAYPAL_PARTNER_MERCHANT_ID) {
+      throw new Error('PayPal user authorization is unavailable because partner onboarding is not configured. Set PAYPAL_PARTNER_MERCHANT_ID before enabling partner mode.')
+    }
+    const base = this.env.PAYPAL_ENV === 'live' ? 'https://www.paypal.com' : 'https://www.sandbox.paypal.com'
+    const url = new URL(`${base}/bizsignup/partner/entry`)
+    url.searchParams.set('partnerId', this.env.PAYPAL_PARTNER_MERCHANT_ID)
+    url.searchParams.set('returnToPartnerUrl', redirectUri)
+    url.searchParams.set('partnerClientId', this.env.PAYPAL_CLIENT_ID)
+    url.searchParams.set('state', state)
+    return { redirectUrl: url.toString(), credential: { mode: 'partner', pending: true } }
+  }
+
+  async sync(credential) {
+    const completedAt = new Date()
+    await this.core.validateReadOnlyScope('reporting,transactions')
+    const { base, token } = await paypalAccessToken(this.env)
+    const window = syncWindow(credential.lastSyncedAt, completedAt)
+    const transactions = []
+    const seen = new Set()
+    let balanceCents = 0
+    let page = 1
+    let totalPages = 1
+    do {
+      const url = new URL(`${base}/v1/reporting/transactions`)
+      url.searchParams.set('start_date', window.start.toISOString())
+      url.searchParams.set('end_date', window.end.toISOString())
+      url.searchParams.set('fields', 'all')
+      url.searchParams.set('page_size', '500')
+      url.searchParams.set('page', String(page))
+      const report = await jsonFetch(url, { headers: { Authorization: `Bearer ${token.access_token}` } }, providerPolicy(this.env))
+      totalPages = Math.max(1, Number(report.total_pages || 1))
+      if (!Number.isSafeInteger(totalPages) || totalPages > MAX_PAYPAL_PAGES) throw new Error(`PayPal report pagination exceeds safety limit: ${totalPages}`)
+      for (const row of report.transaction_details ?? []) {
+        const info = row.transaction_info ?? {}
+        if (info.transaction_amount?.currency_code !== 'EUR' || !info.transaction_id || seen.has(info.transaction_id)) continue
+        seen.add(info.transaction_id)
+        const signedCents = await this.core.normalizeProviderAmount(info.transaction_amount.value)
+        await normalizeSignedAmount(signedCents, this.env)
+        balanceCents += signedCents
+        transactions.push({ externalId: info.transaction_id, externalAccountId: 'paypal-eur', description: info.transaction_subject || info.transaction_note || info.transaction_event_code || 'PayPal', amountCents: signedCents, currency: 'EUR', bookingDate: String(info.transaction_initiation_date || '').slice(0, 10) || window.dateTo, pending: info.transaction_status === 'P' })
+      }
+      page += 1
+    } while (page <= totalPages)
+    const type = await this.core.normalizeProviderAccountType('CASH')
+    const accounts = [{ externalId: 'paypal-eur', name: 'PayPal EUR', type, balanceCents, currency: 'EUR' }]
+    const reconciliation = { pageCount: totalPages, transactionCount: transactions.length, dateFrom: window.dateFrom, dateTo: window.dateTo, syncedAt: completedAt.toISOString() }
+    validateProviderReconciliation({ accounts, transactions, reconciliation })
+    const health = completedHealth({ completedAt, accounts, transactions })
+    return {
+      accounts,
+      transactions,
+      credential: { ...credential, lastSyncedAt: completedAt.toISOString(), health },
+      reconciliation: { ...reconciliation, health },
+      health,
+    }
+  }
+}
+
+class UnavailableProvider extends OpenBankingProvider {
+  constructor(id, env, core, reason) {
+    super({ id, kind: 'unavailable', env, core, capabilities: { accountInformation: false, balances: false, transactions: false } })
+    this.reason = reason
+  }
+  async start() { throw new Error(this.reason) }
+  async sync() { throw new Error(this.reason) }
+  describe() { return { ...super.describe(), reason: this.reason } }
+}
+
+export function createOpenBankingProviderRegistry(env = {}, suppliedCore, additionalProviders = []) {
+  const core = suppliedCore || createBankingCore(env)
+  return new OpenBankingProviderRegistry([
+    new GoCardlessProvider(env, core),
+    new PayPalProvider(env, core),
+    new UnavailableProvider('finapi', env, core, 'finAPI adapter is not configured.'),
+    ...additionalProviders,
+  ])
+}
+
+export async function startGoCardless({ env, state, redirectUri, country = 'DE' }) {
+  return createOpenBankingProviderRegistry(env).get('gocardless').start({ state, redirectUri, country })
+}
+
+export async function syncGoCardless(credential, env, suppliedCore) {
+  return createOpenBankingProviderRegistry(env, suppliedCore).get('gocardless').sync(credential)
+}
+
+export async function startPayPal({ env, state, redirectUri }) {
+  return createOpenBankingProviderRegistry(env).get('paypal').start({ state, redirectUri })
 }
 
 export async function syncPayPal(credential, env, suppliedCore) {
-  const completedAt = new Date()
-  const bankingCore = suppliedCore || createBankingCore(env)
-  const { base, token } = await paypalAccessToken(env)
-  const window = syncWindow(credential.lastSyncedAt, completedAt)
-  const transactions = []
-  const seen = new Set()
-  let balanceCents = 0
-  let page = 1
-  let totalPages = 1
-  do {
-    const url = new URL(`${base}/v1/reporting/transactions`)
-    url.searchParams.set('start_date', window.start.toISOString())
-    url.searchParams.set('end_date', window.end.toISOString())
-    url.searchParams.set('fields', 'all')
-    url.searchParams.set('page_size', '500')
-    url.searchParams.set('page', String(page))
-    const report = await jsonFetch(url, { headers: { Authorization: `Bearer ${token.access_token}` } }, providerPolicy(env))
-    totalPages = Math.max(1, Number(report.total_pages || 1))
-    if (!Number.isSafeInteger(totalPages) || totalPages > MAX_PAYPAL_PAGES) throw new Error(`PayPal report pagination exceeds safety limit: ${totalPages}`)
-    for (const row of report.transaction_details ?? []) {
-      const info = row.transaction_info ?? {}
-      if (info.transaction_amount?.currency_code !== 'EUR' || !info.transaction_id || seen.has(info.transaction_id)) continue
-      seen.add(info.transaction_id)
-      const signedCents = decimalToCents(info.transaction_amount.value)
-      await normalizeSignedAmount(signedCents, env)
-      balanceCents += signedCents
-      transactions.push({ externalId: info.transaction_id, externalAccountId: 'paypal-eur', description: info.transaction_subject || info.transaction_note || info.transaction_event_code || 'PayPal', amountCents: signedCents, currency: 'EUR', bookingDate: String(info.transaction_initiation_date || '').slice(0, 10) || window.dateTo, pending: info.transaction_status === 'P' })
-    }
-    page += 1
-  } while (page <= totalPages)
-  const type = await normalizeProviderAccountType({ cashAccountType: 'CASH' }, env, bankingCore)
-  const accounts = [{ externalId: 'paypal-eur', name: 'PayPal EUR', type, balanceCents, currency: 'EUR' }]
-  const reconciliation = { pageCount: totalPages, transactionCount: transactions.length, dateFrom: window.dateFrom, dateTo: window.dateTo, syncedAt: completedAt.toISOString() }
-  validateProviderReconciliation({ accounts, transactions, reconciliation })
-  const health = completedHealth({ completedAt, accounts, transactions })
-  return {
-    accounts,
-    transactions,
-    credential: { ...credential, lastSyncedAt: completedAt.toISOString(), health },
-    reconciliation: { ...reconciliation, health },
-    health,
-  }
+  return createOpenBankingProviderRegistry(env, suppliedCore).get('paypal').sync(credential)
 }
