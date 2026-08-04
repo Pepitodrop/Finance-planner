@@ -21,6 +21,10 @@ function encodeBase64Url(value: ArrayBuffer): string {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
 }
 
+function accountStorage(): Storage | null {
+  try { return typeof globalThis.localStorage === 'undefined' ? null : globalThis.localStorage } catch { return null }
+}
+
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(url, { ...init, credentials: 'include', headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers } })
   const payload = await response.json().catch(() => ({})) as T & { error?: { message?: string } }
@@ -31,12 +35,8 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
 function credentialToJson(credential: PublicKeyCredential): JsonObject {
   const response = credential.response
   const base: JsonObject = { id: credential.id, rawId: encodeBase64Url(credential.rawId), type: credential.type, clientExtensionResults: credential.getClientExtensionResults() }
-  if (response instanceof AuthenticatorAttestationResponse) {
-    return { ...base, response: { clientDataJSON: encodeBase64Url(response.clientDataJSON), attestationObject: encodeBase64Url(response.attestationObject), transports: response.getTransports?.() || [] } }
-  }
-  if (response instanceof AuthenticatorAssertionResponse) {
-    return { ...base, response: { clientDataJSON: encodeBase64Url(response.clientDataJSON), authenticatorData: encodeBase64Url(response.authenticatorData), signature: encodeBase64Url(response.signature), userHandle: response.userHandle ? encodeBase64Url(response.userHandle) : null } }
-  }
+  if (response instanceof AuthenticatorAttestationResponse) return { ...base, response: { clientDataJSON: encodeBase64Url(response.clientDataJSON), attestationObject: encodeBase64Url(response.attestationObject), transports: response.getTransports?.() || [] } }
+  if (response instanceof AuthenticatorAssertionResponse) return { ...base, response: { clientDataJSON: encodeBase64Url(response.clientDataJSON), authenticatorData: encodeBase64Url(response.authenticatorData), signature: encodeBase64Url(response.signature), userHandle: response.userHandle ? encodeBase64Url(response.userHandle) : null } }
   throw new Error('Nicht unterstützte Passkey-Antwort.')
 }
 
@@ -69,13 +69,17 @@ export async function authenticateWithPasskey(email?: string): Promise<void> {
 }
 
 export function rememberAccount(account: PasskeyAccount): void {
+  const storage = accountStorage()
+  if (!storage) return
   const accounts = listKnownAccounts().filter((candidate) => candidate.id !== account.id)
-  localStorage.setItem(KNOWN_ACCOUNTS_KEY, JSON.stringify([{ ...account, lastUsedAt: new Date().toISOString() }, ...accounts].slice(0, 8)))
+  storage.setItem(KNOWN_ACCOUNTS_KEY, JSON.stringify([{ ...account, lastUsedAt: new Date().toISOString() }, ...accounts].slice(0, 8)))
 }
 
 export function listKnownAccounts(): PasskeyAccount[] {
+  const storage = accountStorage()
+  if (!storage) return []
   try {
-    const parsed = JSON.parse(localStorage.getItem(KNOWN_ACCOUNTS_KEY) || '[]')
+    const parsed = JSON.parse(storage.getItem(KNOWN_ACCOUNTS_KEY) || '[]')
     return Array.isArray(parsed) ? parsed.filter((account) => account && typeof account.id === 'string' && typeof account.email === 'string') : []
   } catch {
     return []
