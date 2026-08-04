@@ -54,7 +54,7 @@ test('authorization rejects insecure callback URLs', () => {
   assert.throws(() => createGoogleSubscriptionAuthorizationUrl({ env, state: 'state', redirectUri: 'http://example.test/callback' }), /HTTPS/)
 })
 
-test('Gmail source lists narrow receipt matches, reads metadata only and normalizes high-confidence subscriptions', async (t) => {
+test('Gmail source reads metadata only, rejects untrusted senders, and keeps the newest matching receipt', async (t) => {
   const originalFetch = globalThis.fetch
   t.after(() => { globalThis.fetch = originalFetch })
   const requests = []
@@ -62,11 +62,11 @@ test('Gmail source lists narrow receipt matches, reads metadata only and normali
     const parsed = new URL(url)
     requests.push({ url: parsed, options })
     if (parsed.pathname.endsWith('/messages')) {
-      return new Response(JSON.stringify({ messages: [{ id: 'message_1' }, { id: 'message_2' }] }), { status: 200 })
+      return new Response(JSON.stringify({ messages: [{ id: 'message_new' }, { id: 'message_old' }, { id: 'message_fake' }] }), { status: 200 })
     }
-    if (parsed.pathname.endsWith('/message_1')) {
+    if (parsed.pathname.endsWith('/message_new')) {
       return new Response(JSON.stringify({
-        id: 'message_1',
+        id: 'message_new',
         internalDate: '1785801600000',
         snippet: 'Your monthly renewal was charged EUR 1.99.',
         payload: { headers: [
@@ -75,8 +75,20 @@ test('Gmail source lists narrow receipt matches, reads metadata only and normali
         ] },
       }), { status: 200 })
     }
+    if (parsed.pathname.endsWith('/message_old')) {
+      return new Response(JSON.stringify({
+        id: 'message_old',
+        internalDate: '1754265600000',
+        snippet: 'Your monthly subscription was cancelled after a charge of EUR 1.99.',
+        payload: { headers: [
+          { name: 'From', value: 'Google Play <googleplay-noreply@google.com>' },
+          { name: 'Subject', value: 'Receipt for “Google One” subscription cancellation' },
+        ] },
+      }), { status: 200 })
+    }
     return new Response(JSON.stringify({
-      id: 'message_2',
+      id: 'message_fake',
+      internalDate: '1785888000000',
       snippet: 'Monthly renewal EUR 9.99.',
       payload: { headers: [
         { name: 'From', value: 'Attacker <billing@example.test>' },
@@ -97,7 +109,7 @@ test('Gmail source lists narrow receipt matches, reads metadata only and normali
   assert.equal(result.source, 'gmail')
   assert.equal(result.subscriptions.length, 1)
   assert.deepEqual(result.subscriptions[0], {
-    externalId: 'gmail:message_1',
+    externalId: 'gmail:message_new',
     provider: 'Google Play (Gmail-Beleg)',
     product: 'Google One',
     amountCents: 199,
@@ -110,7 +122,7 @@ test('Gmail source lists narrow receipt matches, reads metadata only and normali
   const listRequest = requests.find((entry) => entry.url.pathname.endsWith('/messages'))
   assert.match(listRequest.url.searchParams.get('q'), /googleplay-noreply/)
   assert.equal(listRequest.url.searchParams.get('maxResults'), '20')
-  const detailRequest = requests.find((entry) => entry.url.pathname.endsWith('/message_1'))
+  const detailRequest = requests.find((entry) => entry.url.pathname.endsWith('/message_new'))
   assert.equal(detailRequest.url.searchParams.get('format'), 'metadata')
   assert.deepEqual(detailRequest.url.searchParams.getAll('metadataHeaders'), ['Subject', 'From', 'Date'])
   assert.equal(requests.every((entry) => entry.options.headers.Authorization === 'Bearer token'), true)
