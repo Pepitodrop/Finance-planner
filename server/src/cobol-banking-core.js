@@ -7,8 +7,8 @@ const INTEGER = /^-?\d{1,16}$/
 const ACCOUNT_TYPES = new Set(['checking', 'savings', 'cash', 'investment', 'credit-card'])
 
 export class CobolBankingCoreError extends Error {
-  constructor(message, code = 'cobol_banking_error') {
-    super(message)
+  constructor(message, code = 'cobol_banking_error', options = undefined) {
+    super(message, options)
     this.name = 'CobolBankingCoreError'
     this.code = code
   }
@@ -49,7 +49,7 @@ export function normalizeAccountTypeFallback(value) {
 function parseResult(stdout) {
   const line = String(stdout || '').trim().split(/\r?\n/).at(-1) || ''
   const parts = line.split('|').map((part) => part.trim())
-  if (parts[0] !== 'OK') throw new CobolBankingCoreError(parts[1] || 'COBOL core rejected the operation.')
+  if (parts[0] !== 'OK') throw new CobolBankingCoreError(parts[1] || 'COBOL core rejected the operation.', 'cobol_rejected_operation')
   return parts.slice(1)
 }
 
@@ -71,12 +71,17 @@ export class CobolBankingCore {
       if (this.required) throw new CobolBankingCoreError('Compiled COBOL banking core is unavailable.', 'cobol_unavailable')
       return null
     }
+
     try {
       const { stdout } = await execFileAsync(this.binary, args, { timeout: 2_000, maxBuffer: 16_384, windowsHide: true })
       return parseResult(stdout)
     } catch (error) {
-      if (this.required) throw new CobolBankingCoreError(`COBOL banking operation failed: ${error instanceof Error ? error.message : 'unknown error'}`)
-      return null
+      if (error instanceof CobolBankingCoreError) throw error
+      throw new CobolBankingCoreError(
+        `COBOL banking operation failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+        'cobol_execution_failed',
+        { cause: error },
+      )
     }
   }
 
