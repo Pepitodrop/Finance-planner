@@ -106,6 +106,23 @@ export function validateProviderReconciliation({ accounts, transactions, reconci
   return true
 }
 
+async function validateProviderReconciliationWithCore(core, payload) {
+  validateProviderReconciliation(payload)
+  if (typeof core.validateProviderReconciliation !== 'function') {
+    throw new Error('The COBOL banking core does not expose provider reconciliation validation.')
+  }
+  const uniqueTransactionCount = new Set(payload.transactions.map((transaction) => transaction.externalId)).size
+  await core.validateProviderReconciliation({
+    accountCount: payload.accounts.length,
+    reconciledAccountCount: payload.reconciliation.accountCount ?? payload.accounts.length,
+    transactionCount: payload.transactions.length,
+    uniqueTransactionCount,
+    dateFrom: payload.reconciliation.dateFrom,
+    dateTo: payload.reconciliation.dateTo,
+  })
+  return true
+}
+
 export async function jsonFetch(url, options = {}, policy = {}) {
   const timeoutMs = Number(policy.timeoutMs ?? DEFAULT_TIMEOUT_MS)
   const retries = Number(policy.retries ?? DEFAULT_RETRIES)
@@ -337,7 +354,7 @@ class GoCardlessProvider extends OpenBankingProvider {
       }
     }
     const reconciliation = { accountCount: accounts.length, transactionCount: transactions.length, dateFrom: window.dateFrom, dateTo: window.dateTo, syncedAt: completedAt.toISOString() }
-    validateProviderReconciliation({ accounts, transactions, reconciliation })
+    await validateProviderReconciliationWithCore(this.core, { accounts, transactions, reconciliation })
     const health = completedHealth({ completedAt, consentExpiresAt, accounts, transactions })
     return {
       accounts,
@@ -464,7 +481,7 @@ class PayPalProvider extends OpenBankingProvider {
     const type = await this.core.normalizeProviderAccountType('CASH')
     const accounts = [{ externalId: 'paypal-eur', providerAccountId: balance.accountId, name: 'PayPal EUR', type, balanceCents: balance.balanceCents, currency: 'EUR' }]
     const reconciliation = { accountCount: accounts.length, pageCount: totalPages, transactionCount: transactions.length, dateFrom: window.dateFrom, dateTo: window.dateTo, syncedAt: completedAt.toISOString(), balanceAsOf: balance.asOfTime }
-    validateProviderReconciliation({ accounts, transactions, reconciliation })
+    await validateProviderReconciliationWithCore(this.core, { accounts, transactions, reconciliation })
     const health = completedHealth({ completedAt, accounts, transactions })
     return {
       accounts,
