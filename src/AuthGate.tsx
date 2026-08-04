@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { Fingerprint, LogIn, RefreshCw, ShieldCheck, X } from 'lucide-react'
+import { Fingerprint, KeyRound, LogIn, RefreshCw, ShieldCheck, X } from 'lucide-react'
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
 
 export interface AuthUser { id: string; email: string; name: string; picture?: string; passkeyCount: number }
@@ -20,6 +20,7 @@ export function AuthGate({ children }: AuthGateProps) {
   const [loading, setLoading] = useState(true)
   const [sessionError, setSessionError] = useState('')
   const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [promptDismissed, setPromptDismissed] = useState(() => localStorage.getItem(PASSKEY_PROMPT_KEY) === 'true')
@@ -57,6 +58,15 @@ export function AuthGate({ children }: AuthGateProps) {
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Biometrische Anmeldung fehlgeschlagen.') } finally { setBusy(false) }
   }
 
+  async function passwordLogin() {
+    setBusy(true); setError('')
+    try {
+      const result = await api<{ user: AuthUser }>('/api/auth/test-password/login', { method: 'POST', body: JSON.stringify({ email, password }) })
+      setPassword('')
+      setUser(result.user)
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Anmeldung mit Testpasswort fehlgeschlagen.') } finally { setBusy(false) }
+  }
+
   async function registerPasskey() {
     setBusy(true); setError('')
     try {
@@ -70,8 +80,8 @@ export function AuthGate({ children }: AuthGateProps) {
   const dismissPrompt = () => { localStorage.setItem(PASSKEY_PROMPT_KEY, 'true'); setPromptDismissed(true) }
   if (loading) return <main className="auth-screen"><p>Sichere Sitzung wird wiederhergestellt …</p></main>
   if (sessionError && !user) return <main className="auth-screen"><section className="panel auth-card"><div className="goal-hero-icon"><ShieldCheck size={28}/></div><p className="eyebrow">Sitzung bleibt erhalten</p><h1>Sitzung konnte noch nicht geprüft werden</h1><p className="muted">Du wurdest nicht automatisch abgemeldet. Die Verbindung zum Anmeldedienst ist beim Neuladen fehlgeschlagen.</p><p className="status-message error-message" role="alert">{sessionError}</p><button className="primary" type="button" onClick={() => void loadSession()}><RefreshCw size={18}/> Sitzung erneut prüfen</button></section></main>
-  if (!user) return <main className="auth-screen"><section className="panel auth-card"><div className="goal-hero-icon"><ShieldCheck size={28}/></div><p className="eyebrow">Sichere mobile Anmeldung</p><h1>Bei Finance Planner anmelden</h1><p className="muted">Nutze Google oder einen Geräte-Passkey. Biometrische Daten bleiben auf deinem Gerät.</p><button className="auth-google" type="button" onClick={() => { window.location.href = '/api/auth/google/start' }}><LogIn size={18}/> Mit Google fortfahren</button>{passkeysSupported && <><div className="auth-divider"><span>oder</span></div><label>E-Mail<input autoComplete="email webauthn" inputMode="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="du@beispiel.de"/></label><button className="primary" type="button" disabled={busy || !email} onClick={passkeyLogin}><Fingerprint size={19}/>{busy ? 'Wird geprüft …' : 'Face ID oder Fingerabdruck verwenden'}</button></>}{error && <p className="status-message error-message" role="alert">{error}</p>}</section></main>
+  if (!user) return <main className="auth-screen"><section className="panel auth-card"><div className="goal-hero-icon"><ShieldCheck size={28}/></div><p className="eyebrow">Sichere mobile Anmeldung</p><h1>Bei Finance Planner anmelden</h1><p className="muted">Nutze Google, einen Geräte-Passkey oder das serverseitig eingerichtete Testkonto.</p><button className="auth-google" type="button" onClick={() => { window.location.href = '/api/auth/google/start' }}><LogIn size={18}/> Mit Google fortfahren</button><div className="auth-divider"><span>oder</span></div><label>E-Mail<input autoComplete="email webauthn" inputMode="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="demo@finance-planner.test"/></label><label>Testpasswort<input autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Testpasswort" onKeyDown={(event) => { if (event.key === 'Enter' && email && password && !busy) void passwordLogin() }}/></label><button className="primary" type="button" disabled={busy || !email || !password} onClick={passwordLogin}><KeyRound size={19}/>{busy ? 'Wird geprüft …' : 'Mit Testpasswort anmelden'}</button>{passkeysSupported && <button className="auth-google" type="button" disabled={busy || !email} onClick={passkeyLogin}><Fingerprint size={19}/>{busy ? 'Wird geprüft …' : 'Mit Passkey anmelden'}</button>}{error && <p className="status-message error-message" role="alert">{error}</p>}</section></main>
 
   const content = typeof children === 'function' ? children(user) : children
-  return <>{user.passkeyCount === 0 && passkeysSupported && !promptDismissed && <div className="passkey-enrolment" role="status"><span>Schnellere Anmeldung mit Face ID oder Fingerabdruck aktivieren.</span><button type="button" disabled={busy} onClick={registerPasskey}><Fingerprint size={17}/> Biometrische Anmeldung aktivieren</button><button type="button" aria-label="Hinweis ausblenden" title="Nicht mehr anzeigen" onClick={dismissPrompt}><X size={18}/></button></div>}{content}</>
+  return <>{user.passkeyCount === 0 && passkeysSupported && !promptDismissed && <div className="passkey-enrolment" role="status"><span>Schnellere Anmeldung mit Face ID, Fingerabdruck oder Sicherheitsschlüssel aktivieren.</span><button type="button" disabled={busy} onClick={registerPasskey}><Fingerprint size={17}/> Passkey aktivieren</button><button type="button" aria-label="Hinweis ausblenden" title="Nicht mehr anzeigen" onClick={dismissPrompt}><X size={18}/></button></div>}{content}</>
 }
