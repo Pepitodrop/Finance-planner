@@ -56,8 +56,10 @@ describe('TransactionsPage', () => {
   it('uses existing Add, Edit and Delete callbacks', () => {
     const { onAdd, onEdit, onDelete } = setup()
     fireEvent.click(screen.getByRole('button', { name: 'Add transaction' }))
-    fireEvent.click(screen.getAllByRole('button', { name: /Edit Market/ })[0])
-    fireEvent.click(screen.getAllByRole('button', { name: /Delete Market/ })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'Actions for Market' })[0])
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Actions for Market' })[0])
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
     expect(onAdd).toHaveBeenCalledOnce()
     expect(onEdit).toHaveBeenCalledWith(expect.objectContaining({ id: 'expense' }))
     expect(onDelete).toHaveBeenCalledWith('expense')

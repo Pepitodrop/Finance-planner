@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Filter,
+  MoreHorizontal,
   Pencil,
   Plus,
   Search,
@@ -80,6 +81,33 @@ function TransactionIcon({ transaction }: { transaction: Transaction }) {
       )}
     </span>
   );
+}
+
+function TransactionActions({ transaction, onEdit, onDelete }: { transaction: Transaction; onEdit: (transaction: Transaction) => void; onDelete: (id: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const close = (event: MouseEvent | KeyboardEvent) => {
+      if (event instanceof KeyboardEvent && event.key === 'Escape') {
+        setOpen(false)
+        requestAnimationFrame(() => triggerRef.current?.focus())
+      } else if (event instanceof MouseEvent && !containerRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', close)
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', close) }
+  }, [open])
+
+  return <div className="transactions-row-actions" ref={containerRef}>
+    <button ref={triggerRef} type="button" aria-label={`Actions for ${transaction.description}`} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((current) => !current)}><MoreHorizontal/></button>
+    {open && <div className="transactions-row-menu" role="menu">
+      <button type="button" role="menuitem" onClick={() => { setOpen(false); onEdit(transaction) }}><Pencil/> Edit</button>
+      <button type="button" role="menuitem" onClick={() => { setOpen(false); onDelete(transaction.id) }}><Trash2/> Delete</button>
+    </div>}
+  </div>
 }
 
 interface FilterFieldsProps {
@@ -491,22 +519,7 @@ export function TransactionsPage({
                         {signedMoney(transaction)}
                       </td>
                       <td>
-                        <div className="transactions-row-actions">
-                          <button
-                            type="button"
-                            onClick={() => onEdit(transaction)}
-                            aria-label={`Edit ${transaction.description}`}
-                          >
-                            <Pencil />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onDelete(transaction.id)}
-                            aria-label={`Delete ${transaction.description}`}
-                          >
-                            <Trash2 />
-                          </button>
-                        </div>
+                        <TransactionActions transaction={transaction} onEdit={onEdit} onDelete={onDelete}/>
                       </td>
                     </tr>
                   );
@@ -543,22 +556,7 @@ export function TransactionsPage({
                     <span className="sr-only">{typeLabel(transaction)}: </span>
                     {signedMoney(transaction)}
                   </span>
-                  <div className="transactions-row-actions">
-                    <button
-                      type="button"
-                      onClick={() => onEdit(transaction)}
-                      aria-label={`Edit ${transaction.description}`}
-                    >
-                      <Pencil />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onDelete(transaction.id)}
-                      aria-label={`Delete ${transaction.description}`}
-                    >
-                      <Trash2 />
-                    </button>
-                  </div>
+                  <TransactionActions transaction={transaction} onEdit={onEdit} onDelete={onDelete}/>
                 </li>
               );
             })}
