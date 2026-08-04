@@ -138,15 +138,10 @@ function App({ userId, userName, onLockVault }: AppProps) {
   }
 
   return <ApplicationShell activeDestination={tab} onNavigate={setTab} onLockVault={onLockVault}>
-      {tab !== 'dashboard' && <header className={`topbar ${tab === 'transactions' ? 'transactions-topbar' : ''}`}>
+      {tab !== 'dashboard' && tab !== 'transactions' && <header className="topbar">
         <div>
-          {tab === 'transactions' ? <>
-            <h1>Transactions</h1>
-            <p className="dashboard-subtitle">Track, manage and review all your transactions.</p>
-          </> : <>
-            <p className="eyebrow">Persönliche Finanzen</p>
-            <h1>{titles[tab]}</h1>
-          </>}
+          <p className="eyebrow">Persönliche Finanzen</p>
+          <h1>{titles[tab]}</h1>
         </div>
         <button type="button" className="primary" onClick={openNewTransaction}><Plus size={18}/> Manuelle Buchung</button>
       </header>}
@@ -156,6 +151,7 @@ function App({ userId, userName, onLockVault }: AppProps) {
       {tab === 'transactions' && <TransactionsPage
         transactions={state.transactions}
         accounts={state.accounts}
+        onAdd={openNewTransaction}
         onEdit={openEditTransaction}
         onDelete={deleteTransaction}
       />}
@@ -179,8 +175,8 @@ function App({ userId, userName, onLockVault }: AppProps) {
       {tab === 'receipt' && <ReceiptReview/>}
       {tab === 'data' && <DataTools userId={userId} state={state} onRestore={setState} onReset={resetAll}/>} 
     {deletedTransaction && <div className="undo-toast" role="status">
-      <span>„{deletedTransaction.description}“ wurde gelöscht.</span>
-      <button type="button" onClick={undoDelete}><Undo2 size={16}/> Rückgängig</button>
+      <span>“{deletedTransaction.description}” was deleted.</span>
+      <button type="button" onClick={undoDelete}><Undo2 size={16}/> Undo</button>
     </div>}
 
     {dialogOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setDialogOpen(false)}>
@@ -195,21 +191,21 @@ function App({ userId, userName, onLockVault }: AppProps) {
         }}
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <div className="panel-header"><div><p className="eyebrow">{editing ? 'Buchung ändern' : 'Neue Buchung'}</p><h2 id="transaction-dialog-title">{editing ? 'Transaktion bearbeiten' : 'Transaktion hinzufügen'}</h2></div></div>
+        <div className="panel-header"><div><p className="eyebrow">{editing ? 'Update recorded activity' : 'Record activity'}</p><h2 id="transaction-dialog-title">{editing ? 'Edit transaction' : 'Add transaction'}</h2></div></div>
         <div className="segmented">
-          <button type="button" aria-pressed={transactionType === 'expense'} className={transactionType === 'expense' ? 'active' : ''} onClick={() => setTransactionType('expense')}>Ausgabe</button>
-          <button type="button" aria-pressed={transactionType === 'income'} className={transactionType === 'income' ? 'active' : ''} onClick={() => setTransactionType('income')}>Einnahme</button>
+          <button type="button" aria-pressed={transactionType === 'expense'} className={transactionType === 'expense' ? 'active' : ''} onClick={() => setTransactionType('expense')}>Expense</button>
+          <button type="button" aria-pressed={transactionType === 'income'} className={transactionType === 'income' ? 'active' : ''} onClick={() => setTransactionType('income')}>Income</button>
         </div>
-        <label>Beschreibung<input name="description" required maxLength={160} defaultValue={editing?.description ?? ''} placeholder="z. B. Supermarkt"/></label>
-        <label>Betrag in €<input name="amount" type="number" required min="0.01" max="100000000" step="0.01" inputMode="decimal" defaultValue={editing ? editing.amountCents / 100 : undefined} placeholder="0,00"/></label>
-        <label>Kategorie<input name="category" required maxLength={80} defaultValue={editing?.category ?? ''} placeholder="z. B. Lebensmittel"/></label>
-        <label>Konto<select name="accountId" defaultValue={editing?.accountId ?? state.accounts[0]?.id}>{state.accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
-        <label>Datum<input name="date" type="date" required defaultValue={editing?.date ?? new Date().toISOString().slice(0, 10)}/></label>
-        <label className="checkbox"><input name="recurring" type="checkbox" defaultChecked={Boolean(editing?.recurring)}/> Wiederkehrende Zahlung</label>
+        <label>Description<input name="description" required maxLength={160} defaultValue={editing?.description ?? ''} placeholder="For example, grocery shop"/></label>
+        <label>Amount in €<input name="amount" type="number" required min="0.01" max="100000000" step="0.01" inputMode="decimal" defaultValue={editing ? editing.amountCents / 100 : undefined} placeholder="0.00"/></label>
+        <label>Category<input name="category" required maxLength={80} defaultValue={editing?.category ?? ''} placeholder="For example, Groceries"/></label>
+        <label>Account<select name="accountId" defaultValue={editing?.accountId ?? state.accounts[0]?.id}>{state.accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
+        <label>Date<input name="date" type="date" required defaultValue={editing?.date ?? new Date().toISOString().slice(0, 10)}/></label>
+        <label className="checkbox"><input name="recurring" type="checkbox" defaultChecked={Boolean(editing?.recurring)}/> Recurring payment</label>
         {formError && <p className="status-message error-message" role="alert">{formError}</p>}
         <div className="modal-actions">
-          <button type="button" className="secondary" onClick={() => setDialogOpen(false)}>Abbrechen</button>
-          <button type="submit" className="primary">{editing ? 'Änderungen speichern' : 'Speichern'}</button>
+          <button type="button" className="secondary" onClick={() => setDialogOpen(false)}>Cancel</button>
+          <button type="submit" className="primary">{editing ? 'Save changes' : 'Save'}</button>
         </div>
       </form>
     </div>}
