@@ -269,7 +269,7 @@ async function runAcceptance() {
         language: document.documentElement.lang,
         mainExists: Boolean(document.querySelector('main#main-content')),
         skipLinkExists: Boolean(document.querySelector('a.skip-link[href="#main-content"]')),
-        currentNavigationItems: document.querySelectorAll('nav [aria-current="page"]').length,
+        currentNavigationItems: [...document.querySelectorAll('nav [aria-current="page"]')].filter(visible).length,
         visibleControlCount: controls.length,
         unnamedButtons: unnamedButtons.length,
         unlabelledInputs: unlabelledInputs.length,
@@ -334,6 +334,7 @@ async function runAcceptance() {
       return {
         width: innerWidth,
         height: innerHeight,
+        currentNavigationItems: [...document.querySelectorAll('nav [aria-current="page"]')].filter(visible).length,
         horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
         visibleButtons: buttons.length,
         undersized,
@@ -341,6 +342,7 @@ async function runAcceptance() {
       }
     })()`)
     assert.equal(report.checks.mobile.width, 390)
+    assert.equal(report.checks.mobile.currentNavigationItems, 1)
     assert.equal(report.checks.mobile.horizontalOverflow, false)
     assert.deepEqual(report.checks.mobile.undersized, [])
 

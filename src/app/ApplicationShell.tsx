@@ -46,6 +46,7 @@ export function ApplicationShell({ activeDestination, onNavigate, children, over
   const moreButtonRef = useRef<HTMLButtonElement>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
   const restoreFocusRef = useRef(true)
+  const pendingMainFocusRef = useRef(false)
   const moreActive = MORE_DESTINATIONS.some((destination) => destination.id === activeDestination)
 
   const navigate = (destination: DestinationId) => {
@@ -59,9 +60,9 @@ export function ApplicationShell({ activeDestination, onNavigate, children, over
   }
 
   const navigateFromMore = (destination: DestinationId) => {
+    pendingMainFocusRef.current = true
     navigate(destination)
     closeMore(false)
-    window.requestAnimationFrame(() => document.getElementById('main-content')?.focus())
   }
 
   useEffect(() => {
@@ -110,6 +111,12 @@ export function ApplicationShell({ activeDestination, onNavigate, children, over
       if (restoreFocusRef.current) previousFocusRef.current?.focus()
     }
   }, [moreOpen])
+
+  useEffect(() => {
+    if (moreOpen || !pendingMainFocusRef.current) return
+    pendingMainFocusRef.current = false
+    document.getElementById('main-content')?.focus()
+  }, [activeDestination, moreOpen])
 
   return <div className="app-shell">
     <div className="app-shell__frame" ref={frameRef} aria-hidden={moreOpen ? 'true' : undefined}>

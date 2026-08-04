@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it } from 'vitest'
 import { useState } from 'react'
@@ -61,6 +61,8 @@ describe('ApplicationShell navigation', () => {
     expect(screen.queryByRole('dialog', { name: 'More destinations' })).not.toBeInTheDocument()
     expect(more).toHaveFocus()
     expect(document.querySelector('.app-shell__frame')).not.toHaveAttribute('inert')
+    expect(screen.getByRole('navigation', { name: 'Mobile primary navigation' })).not.toHaveAttribute('inert')
+    expect(document.body.style.overflow).toBe('')
   })
 
   it('navigates from More and moves focus to the main content', async () => {
@@ -69,6 +71,10 @@ describe('ApplicationShell navigation', () => {
     await user.click(within(screen.getByRole('navigation', { name: 'Mobile primary navigation' })).getByRole('button', { name: 'More' }))
     await user.click(within(screen.getByRole('dialog', { name: 'More destinations' })).getByRole('button', { name: 'Recurring payments' }))
     expect(screen.getByRole('heading', { name: 'recurring' })).toBeInTheDocument()
-    expect(document.getElementById('main-content')).toHaveFocus()
+    expect(screen.queryByRole('dialog', { name: 'More destinations' })).not.toBeInTheDocument()
+    await waitFor(() => expect(document.getElementById('main-content')).toHaveFocus())
+    expect(document.querySelector('.app-shell__frame')).not.toHaveAttribute('inert')
+    expect(screen.getByRole('navigation', { name: 'Mobile primary navigation' })).not.toHaveAttribute('inert')
+    expect(document.body.style.overflow).toBe('')
   })
 })
