@@ -391,6 +391,53 @@ async function captureTransactionsEvidence(client, sessionId, width, height) {
   return { path, ...assertions }
 }
 
+async function setAccountsViewport(client, sessionId, width, height) {
+  await client.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width <= 768, screenWidth: width, screenHeight: height }, sessionId)
+  await clickButton(client, sessionId, 'Accounts')
+  await waitFor(client, sessionId, `(async()=>{await document.fonts.ready;await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));return innerWidth===${width}&&innerHeight===${height}&&Boolean(document.querySelector('[data-accounts-ready=true]'))})()`, `Accounts ${width}x${height}`)
+}
+
+async function accountsAssertions(client, sessionId, expectedMode = 'overview') {
+  return evaluate(client, sessionId, `(() => {
+    const visible=(element)=>{if(!(element instanceof Element))return false;const style=getComputedStyle(element),rect=element.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&rect.width>0&&rect.height>0}
+    const root=document.querySelector('[data-accounts-ready=true]')
+    const nav=[...document.querySelectorAll('nav [aria-current=page]')].filter(visible)
+    const summary=document.querySelector('.accounts-summary')
+    const values=summary?[...summary.querySelectorAll('strong')].map(item=>Number(item.textContent.replace(/[^0-9,-]/g,'').replaceAll('.','').replace(',','.'))):[]
+    return {viewport:{width:innerWidth,height:innerHeight},root:Boolean(root),language:root?.getAttribute('lang'),current:nav.length,currentText:nav[0]?.textContent?.trim(),overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth+1,modal:Boolean(document.querySelector('[role=dialog][aria-modal=true]')),accountRows:document.querySelectorAll('.accounts-list li').length,summaryReconciles:values.length===3&&Math.abs((values[0]-values[1])-values[2])<0.001,detail:root?.getAttribute('data-account-detail')||'overview',empty:Boolean(document.querySelector('.accounts-empty')),bottomNav:visible(document.querySelector('.app-mobile-navigation'))||innerWidth>768}
+  })()`)
+}
+
+async function captureAccountsEvidence(client, sessionId, width, height) {
+  await setAccountsViewport(client, sessionId, width, height)
+  const assertions=await accountsAssertions(client,sessionId)
+  assert.deepEqual(assertions.viewport,{width,height});assert.equal(assertions.root,true);assert.equal(assertions.language,'en');assert.equal(assertions.current,1);assert.match(assertions.currentText||'',/Accounts/);assert.equal(assertions.overflow,false);assert.equal(assertions.modal,false);assert.ok(assertions.accountRows>=6);assert.equal(assertions.summaryReconciles,true);assert.equal(assertions.empty,false);assert.equal(assertions.bottomNav,true)
+  const path=join(ARTIFACT_DIR,`accounts-${width}x${height}.png`);const screenshot=await client.send('Page.captureScreenshot',{format:'png',fromSurface:true,captureBeyondViewport:false},sessionId);await writeFile(path,screenshot.data,'base64');return{path,...assertions}
+}
+
+async function captureAccountDetailEvidence(client,sessionId,credit=false){
+  await setAccountsViewport(client,sessionId,390,844)
+  await evaluate(client,sessionId,`document.querySelector('button[aria-label="View details for ${credit?'Household credit card':'Everyday checking account'}"]')?.click()`)
+  await waitFor(client,sessionId,`document.querySelector('[data-account-detail="${credit?'credit-card':'checking'}"]')`,credit?'credit detail':'account detail')
+  const assertions=await accountsAssertions(client,sessionId,credit?'credit-card':'checking')
+  assert.equal(assertions.overflow,false);assert.equal(assertions.detail,credit?'credit-card':'checking');assert.equal(assertions.current,1)
+  const optional=await evaluate(client,sessionId,`({owed:Boolean(document.body.innerText.includes('Amount owed')),available:Boolean(document.body.innerText.includes('Available credit')),transactions:Boolean(document.querySelector('.accounts-transactions'))})`)
+  assert.equal(optional.transactions,true);if(credit){assert.equal(optional.owed,true);assert.equal(optional.available,true)}
+  const path=join(ARTIFACT_DIR,credit?'credit-card-details-390x844.png':'account-details-390x844.png');const screenshot=await client.send('Page.captureScreenshot',{format:'png',fromSurface:true,captureBeyondViewport:false},sessionId);await writeFile(path,screenshot.data,'base64');return{path,...assertions,...optional}
+}
+
+async function captureAccountsEmptyEvidence(client,sessionId){
+  await evaluate(client,sessionId,`window.__financePlannerAcceptanceState?.('empty')`);await setAccountsViewport(client,sessionId,390,844);await waitFor(client,sessionId,`Boolean(document.querySelector('.accounts-empty'))`,'Accounts empty state')
+  const assertions=await accountsAssertions(client,sessionId);assert.equal(assertions.empty,true);assert.equal(assertions.accountRows,0);assert.equal(assertions.overflow,false)
+  const path=join(ARTIFACT_DIR,'accounts-empty-390x844.png');const screenshot=await client.send('Page.captureScreenshot',{format:'png',fromSurface:true,captureBeyondViewport:false},sessionId);await writeFile(path,screenshot.data,'base64');await evaluate(client,sessionId,`window.__financePlannerAcceptanceState?.('accounts')`);return{path,...assertions}
+}
+
+async function captureAccountsFinalRowEvidence(client,sessionId){
+  await setAccountsViewport(client,sessionId,390,844);await waitFor(client,sessionId,`document.querySelectorAll('.accounts-list li').length>=6`,'restored Accounts fixtures');await evaluate(client,sessionId,`window.scrollTo({top:document.documentElement.scrollHeight,behavior:'instant'})`);await waitFor(client,sessionId,`(()=>{const row=document.querySelector('.accounts-section--liabilities .accounts-list li:last-child')?.getBoundingClientRect(),nav=document.querySelector('.app-mobile-navigation')?.getBoundingClientRect();return Boolean(row&&nav&&row.bottom<=nav.top)})()`,'last account above navigation')
+  const assertions=await evaluate(client,sessionId,`(()=>{const row=document.querySelector('.accounts-section--liabilities .accounts-list li:last-child'),button=row?.querySelector('button'),nav=document.querySelector('.app-mobile-navigation'),r=row?.getBoundingClientRect(),b=button?.getBoundingClientRect(),n=nav?.getBoundingClientRect();return{rowClear:Boolean(r&&n&&r.bottom<=n.top),actionClear:Boolean(b&&n&&b.bottom<=n.top),overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth+1}})()`);assert.equal(assertions.rowClear,true);assert.equal(assertions.actionClear,true);assert.equal(assertions.overflow,false)
+  const path=join(ARTIFACT_DIR,'accounts-final-row-390x844.png');const screenshot=await client.send('Page.captureScreenshot',{format:'png',fromSurface:true,captureBeyondViewport:false},sessionId);await writeFile(path,screenshot.data,'base64');return{path,...assertions}
+}
+
 async function captureTransactionFinalRowEvidence(client, sessionId) {
   const width = 390
   const height = 844
@@ -616,6 +663,12 @@ async function runAcceptance() {
       report.checks.dashboardScreenshots.push(await captureDashboardEvidence(client, sessionId, width, height))
     }
     report.checks.runtimeSurfaceStress = await captureRuntimeSurfaceStressEvidence(client, sessionId)
+    report.checks.accountsScreenshots = []
+    for (const [width,height] of [[1440,900],[1024,768],[390,844],[360,800]]) report.checks.accountsScreenshots.push(await captureAccountsEvidence(client,sessionId,width,height))
+    report.checks.accountDetail = await captureAccountDetailEvidence(client,sessionId,false)
+    report.checks.creditCardDetail = await captureAccountDetailEvidence(client,sessionId,true)
+    report.checks.accountsEmpty = await captureAccountsEmptyEvidence(client,sessionId)
+    report.checks.accountsFinalRow = await captureAccountsFinalRowEvidence(client,sessionId)
     report.checks.transactionsScreenshots = []
     for (const [width, height] of [[1440, 900], [1024, 768], [430, 932], [390, 844], [360, 800]]) {
       report.checks.transactionsScreenshots.push(await captureTransactionsEvidence(client, sessionId, width, height))

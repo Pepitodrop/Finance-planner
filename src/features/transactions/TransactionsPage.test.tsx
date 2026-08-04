@@ -43,6 +43,15 @@ describe('TransactionsPage', () => {
     expect(screen.getByRole('searchbox', { name: 'Search transactions' })).toHaveAttribute('placeholder', 'Search')
   })
 
+  it('applies a requested account scope and Reset returns to all accounts', async () => {
+    const other = { id: 'other', name: 'Other account', type: 'cash' as const, balanceCents: 0, currency: 'EUR' as const }
+    const otherTransaction = { ...transactions[1], id: 'other-row', accountId: 'other', description: 'Other purchase' }
+    setup({ accounts: [...accounts, other], transactions: [...transactions, otherTransaction], requestedAccountId: 'account' })
+    await vi.waitFor(() => expect(screen.queryByText('Other purchase')).not.toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Reset' }))
+    expect(screen.getAllByText('Other purchase')).toHaveLength(2)
+  })
+
   it('filters search results and resets to the complete current-month scope', () => {
     setup()
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search transactions' }), { target: { value: 'Market' } })
