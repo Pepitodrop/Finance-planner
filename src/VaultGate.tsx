@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { KeyRound, LockKeyhole, ShieldCheck } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { KeyRound, ShieldCheck } from 'lucide-react'
 import { shouldLockAfterBackground, setPrivacyShield } from './mobile-security'
 import { clearLegacyPlaintextState, configureAuthenticatedStorage, flushCloudState, hasLegacyPlaintextState, loadLegacyState, prepareNewDeviceCloudBootstrap, setUnlockedState, synchronizeUnlockedState } from './storage'
 import type { AppState } from './types'
 import { createVault, hasEncryptedVault, lockVault, unlockVault } from './vault'
 
-interface VaultGateProps { children: ReactNode; userId: string }
+interface VaultGateProps { children: ReactNode | ((lock: () => void) => ReactNode); userId: string }
 
 type Mode = 'setup' | 'unlock' | 'open'
 const AUTO_LOCK_MS = 15 * 60 * 1000
@@ -21,16 +21,15 @@ export function VaultGate({ children, userId }: VaultGateProps) {
   const [busy, setBusy] = useState(false)
   const backgroundedAt = useRef<number | null>(null)
   const migrating = mode === 'setup' && hasLegacyPlaintextState()
+  const lockNow = useCallback(() => {
+    void flushCloudState({ keepalive: true })
+    setPrivacyShield(true)
+    lockVault()
+    window.location.reload()
+  }, [])
 
   useEffect(() => {
     if (mode !== 'open') return
-
-    const lockNow = () => {
-      void flushCloudState({ keepalive: true })
-      setPrivacyShield(true)
-      lockVault()
-      window.location.reload()
-    }
 
     let timer = window.setTimeout(lockNow, AUTO_LOCK_MS)
     const resetTimer = () => {
@@ -71,7 +70,7 @@ export function VaultGate({ children, userId }: VaultGateProps) {
       window.removeEventListener('pagehide', handlePageHide)
       setPrivacyShield(false)
     }
-  }, [mode])
+  }, [lockNow, mode])
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -104,7 +103,7 @@ export function VaultGate({ children, userId }: VaultGateProps) {
   }
 
   if (mode === 'open') {
-    return <>{children}<button className="vault-lock-button runtime-security-action" type="button" aria-label="Lock encrypted finance vault" onClick={() => { void flushCloudState({ keepalive: true }); setPrivacyShield(true); lockVault(); window.location.reload() }}><LockKeyhole size={16}/> Lock vault</button></>
+    return <>{typeof children === 'function' ? children(lockNow) : children}</>
   }
 
   return <main className="vault-screen">

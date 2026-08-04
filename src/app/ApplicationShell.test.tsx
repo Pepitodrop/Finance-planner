@@ -1,6 +1,6 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 import { ApplicationShell } from './ApplicationShell'
 import type { DestinationId } from './navigation'
@@ -76,5 +76,16 @@ describe('ApplicationShell navigation', () => {
     expect(document.querySelector('.app-shell__frame')).not.toHaveAttribute('inert')
     expect(screen.getByRole('navigation', { name: 'Mobile primary navigation' })).not.toHaveAttribute('inert')
     expect(document.body.style.overflow).toBe('')
+  })
+
+  it('keeps vault locking in the shell and exposes it through More on mobile', async () => {
+    const user = userEvent.setup()
+    const onLockVault = vi.fn()
+    render(<ApplicationShell activeDestination="dashboard" onNavigate={vi.fn()} onLockVault={onLockVault}><h1>dashboard</h1></ApplicationShell>)
+    expect(within(screen.getByRole('complementary')).getByRole('button', { name: 'Lock encrypted finance vault' })).toBeInTheDocument()
+
+    await user.click(within(screen.getByRole('navigation', { name: 'Mobile primary navigation' })).getByRole('button', { name: 'More' }))
+    await user.click(within(screen.getByRole('dialog', { name: 'More destinations' })).getByRole('button', { name: 'Lock encrypted finance vault' }))
+    expect(onLockVault).toHaveBeenCalledOnce()
   })
 })

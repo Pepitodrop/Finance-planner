@@ -71,19 +71,6 @@
   border-radius: var(--fp-radius-control);
 }
 
-.runtime-security-action.vault-lock-button {
-  z-index: var(--fp-z-status);
-  right: max(var(--fp-space-4), var(--fp-safe-right));
-  bottom: max(var(--fp-space-4), var(--fp-safe-bottom));
-  min-height: var(--fp-touch-target);
-  border: var(--fp-border);
-  border-radius: var(--fp-radius-control);
-  color: var(--fp-color-text-secondary);
-  background: var(--fp-color-surface-elevated);
-  box-shadow: var(--fp-shadow-raised);
-  backdrop-filter: none;
-}
-
 .automatic-analysis {
   z-index: var(--fp-z-status);
   right: max(var(--fp-space-4), var(--fp-safe-right));
@@ -151,11 +138,6 @@ body:has([aria-modal="true"]) .runtime-optional-surface {
     grid-column: 1 / -1;
   }
 
-  .runtime-security-action.vault-lock-button {
-    right: max(var(--fp-gutter-mobile), var(--fp-safe-right));
-    bottom: calc(var(--fp-mobile-fixed-bottom) + var(--fp-space-3));
-  }
-
   .automatic-analysis,
   .cloud-sync-status,
   .undo-toast,
@@ -174,7 +156,8 @@ body:has([aria-modal="true"]) .runtime-optional-surface {
 
 @media (forced-colors: active) {
   .runtime-surface,
-  .runtime-security-action {
+  .app-navigation__security,
+  .app-more-sheet__security {
     border: 1px solid CanvasText;
     forced-color-adjust: auto;
   }

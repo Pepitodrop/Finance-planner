@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Landmark, Menu, ShieldCheck, X } from 'lucide-react'
+import { Landmark, LockKeyhole, Menu, ShieldCheck, X } from 'lucide-react'
 import {
   DESKTOP_DESTINATIONS,
   MOBILE_PRIMARY_DESTINATIONS,
@@ -13,6 +13,7 @@ interface ApplicationShellProps {
   onNavigate: (destination: DestinationId) => void
   children: ReactNode
   overlays?: ReactNode
+  onLockVault?: () => void
 }
 
 interface DestinationButtonProps {
@@ -38,7 +39,7 @@ function DestinationButton({ destination, activeDestination, onNavigate, classNa
   </button>
 }
 
-export function ApplicationShell({ activeDestination, onNavigate, children, overlays }: ApplicationShellProps) {
+export function ApplicationShell({ activeDestination, onNavigate, children, overlays, onLockVault }: ApplicationShellProps) {
   const [moreOpen, setMoreOpen] = useState(false)
   const frameRef = useRef<HTMLDivElement>(null)
   const mobileNavigationRef = useRef<HTMLElement>(null)
@@ -134,6 +135,10 @@ export function ApplicationShell({ activeDestination, onNavigate, children, over
             className="app-navigation__button"
           />)}
         </nav>
+        {onLockVault && <button type="button" className="app-navigation__button app-navigation__security" aria-label="Lock encrypted finance vault" onClick={onLockVault}>
+          <span className="app-navigation__icon" aria-hidden="true"><LockKeyhole size={20}/></span>
+          <span className="app-navigation__label">Lock vault</span>
+        </button>}
         <div className="privacy-note app-navigation__privacy">
           <ShieldCheck size={18} aria-hidden="true"/>
           <div><strong>Encrypted storage</strong><span>Sensitive connection secrets remain server-side.</span></div>
@@ -199,6 +204,10 @@ export function ApplicationShell({ activeDestination, onNavigate, children, over
             className="app-more-sheet__button"
           />)}
         </nav>
+        {onLockVault && <button type="button" className="app-more-sheet__security" onClick={() => {
+          closeMore(false)
+          onLockVault()
+        }}><LockKeyhole size={18} aria-hidden="true"/> Lock encrypted finance vault</button>}
       </section>
     </div>}
 

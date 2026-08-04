@@ -24,9 +24,9 @@ import { validateTransactionInput } from './validation'
 import { ApplicationShell } from './app/ApplicationShell'
 import type { DestinationId } from './app/navigation'
 
-interface AppProps { userId: string; userName?: string }
+interface AppProps { userId: string; userName?: string; onLockVault?: () => void }
 
-function App({ userId, userName }: AppProps) {
+function App({ userId, userName, onLockVault }: AppProps) {
   const [state, setState] = useState<AppState>(() => loadState())
   const [tab, setTab] = useState<DestinationId>('dashboard')
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -137,7 +137,7 @@ function App({ userId, userName }: AppProps) {
     data: 'Daten & Backup',
   }
 
-  return <ApplicationShell activeDestination={tab} onNavigate={setTab}>
+  return <ApplicationShell activeDestination={tab} onNavigate={setTab} onLockVault={onLockVault}>
       {tab !== 'dashboard' && <header className={`topbar ${tab === 'transactions' ? 'transactions-topbar' : ''}`}>
         <div>
           {tab === 'transactions' ? <>

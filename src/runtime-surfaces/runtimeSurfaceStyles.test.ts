@@ -6,7 +6,6 @@ const styles = readFileSync(new URL('./runtime-surfaces.css', import.meta.url), 
 describe('runtime-surface responsive policy', () => {
   it('uses foundation layers and reserves mobile bottom-navigation clearance', () => {
     expect(styles).toContain('z-index: var(--fp-z-status)')
-    expect(styles).toContain('bottom: calc(var(--fp-mobile-fixed-bottom) + var(--fp-space-3))')
     expect(styles).toContain('padding-bottom: calc(var(--fp-mobile-fixed-bottom) + var(--fp-touch-target) + var(--fp-space-6))')
     expect(styles).not.toMatch(/z-index:\s*\d{4,}/)
   })
