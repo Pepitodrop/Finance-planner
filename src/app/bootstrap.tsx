@@ -5,6 +5,7 @@ import { AuthGate } from '../AuthGate'
 import { AutomaticTransactionAnalysis } from '../AutomaticTransactionAnalysis'
 import { ErrorBoundary } from '../ErrorBoundary'
 import { FrontendExperience } from '../FrontendExperience'
+import { GlossyQuickActions } from '../GlossyQuickActions'
 import { MobileConnectivityStatus } from '../MobileConnectivityStatus'
 import { MobileEnhancements } from '../MobileEnhancements'
 import { MobileExperience } from '../MobileExperience'
@@ -37,6 +38,7 @@ import '../reference-dashboard-fidelity.css'
 import '../transactions-reference.css'
 import '../remaining-pages-redesign.css'
 import '../reference-page-compositions.css'
+import '../glossy-finance.css'
 
 const enrollmentRoute = window.location.pathname === '/test-enrollment'
 
@@ -46,6 +48,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       {enrollmentRoute ? <TestEnrollmentPage /> : <>
         <WebMobileHardening />
         <FrontendExperience />
+        <GlossyQuickActions />
         <NavigationAccessibility />
         <MobileProductionRuntime />
         <MobileRuntime />

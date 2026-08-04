@@ -1,0 +1,61 @@
+.animated-gradient-text {
+  --gradient-text-angle: to right;
+  --gradient-text-colors: #8b5cf6, #38bdf8, #f0abfc, #8b5cf6;
+  --gradient-text-speed: 7s;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  max-width: fit-content;
+  border-radius: 1.25rem;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.animated-gradient-text.with-border {
+  padding: 0.35rem 0.75rem;
+}
+
+.gradient-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  border-radius: inherit;
+  background: linear-gradient(var(--gradient-text-angle), var(--gradient-text-colors));
+  background-size: 300% 300%;
+  animation: gradient-text-shift var(--gradient-text-speed) ease-in-out infinite alternate;
+}
+
+.gradient-overlay::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  z-index: -1;
+  border-radius: inherit;
+  background: rgba(8, 10, 28, 0.88);
+  backdrop-filter: blur(18px);
+}
+
+.gradient-text-content {
+  display: inline-block;
+  color: transparent;
+  background: linear-gradient(var(--gradient-text-angle), var(--gradient-text-colors));
+  background-size: 300% 300%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: gradient-text-shift var(--gradient-text-speed) ease-in-out infinite alternate;
+}
+
+.animated-gradient-text.pause-on-hover:hover .gradient-text-content,
+.animated-gradient-text.pause-on-hover:hover .gradient-overlay {
+  animation-play-state: paused;
+}
+
+@keyframes gradient-text-shift {
+  from { background-position: 0% 50%; }
+  to { background-position: 100% 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gradient-text-content,
+  .gradient-overlay { animation: none; }
+}
