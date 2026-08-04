@@ -177,11 +177,11 @@ function connection(provider, stored, error) {
 }
 
 async function start(provider, request, response) {
+  const user = userId(request)
   const adapter = providerAdapter(provider)
   const description = adapter.describe()
   if (!description.available) throw new HttpError(501, 'provider_unavailable', description.reason || 'Provider adapter is unavailable.')
   if (!description.configured) throw new HttpError(503, 'provider_not_configured', `${description.displayName} is not configured.`)
-  const user = userId(request)
   const input = await body(request)
   const redirect = new URL(String(input.redirectUri || origin))
   if (redirect.origin !== origin) throw new HttpError(400, 'invalid_redirect', 'Invalid redirect origin.')
@@ -317,7 +317,7 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'GET' && (url.pathname === '/health' || url.pathname === '/health/ready')) {
       const capabilities = bankCapabilities()
-      const serviceReady = ready && (!capabilities.production || capabilities.ready)
+      const serviceReady = ready
       return send(response, serviceReady ? 200 : 503, {
         status: serviceReady ? 'ready' : 'not_ready',
         service: 'finance-planner-connector',
@@ -347,8 +347,8 @@ const server = createServer(async (request, response) => {
     if (request.method === 'POST' && url.pathname === '/api/connectors/sync') return await sync(request, response)
     const disconnect = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})$/)
     if (request.method === 'DELETE' && disconnect) {
-      providerAdapter(disconnect[1])
       const user = userId(request)
+      providerAdapter(disconnect[1])
       await store.remove(user, disconnect[1])
       metrics.recordBank(disconnect[1], 'disconnected')
       return send(response, 200, { disconnected: true })
