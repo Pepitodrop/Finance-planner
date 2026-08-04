@@ -425,9 +425,10 @@ async function captureAccountDetailEvidence(client,sessionId,credit=false){
   const selector=credit?'.accounts-section--liabilities .accounts-list button':'.accounts-section:not(.accounts-section--liabilities) .accounts-list button'
   await evaluate(client,sessionId,`document.querySelector(${JSON.stringify(selector)})?.scrollIntoView({block:'center'})`)
   await waitFor(client,sessionId,`(()=>{const target=document.querySelector(${JSON.stringify(selector)}),rect=target?.getBoundingClientRect();return Boolean(rect&&rect.top>=0&&rect.bottom<=innerHeight)})()`,'visible account detail action')
-  const point=await evaluate(client,sessionId,`(()=>{const rect=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:rect.left+rect.width/2,y:rect.top+rect.height/2}})()`)
-  await client.send('Input.dispatchMouseEvent',{type:'mousePressed',x:point.x,y:point.y,button:'left',clickCount:1},sessionId)
-  await client.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:point.x,y:point.y,button:'left',clickCount:1},sessionId)
+  const focused=await evaluate(client,sessionId,`(()=>{const target=document.querySelector(${JSON.stringify(selector)});target.focus();return document.activeElement===target})()`)
+  assert.equal(focused,true,'Account detail action could not receive focus')
+  await client.send('Input.dispatchKeyEvent',{type:'rawKeyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13},sessionId)
+  await client.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13},sessionId)
   await waitFor(client,sessionId,`document.querySelector('[data-account-detail="${credit?'credit-card':'checking'}"]')`,credit?'credit detail':'account detail')
   const assertions=await accountsAssertions(client,sessionId,credit?'credit-card':'checking')
   assert.equal(assertions.overflow,false);assert.equal(assertions.detail,credit?'credit-card':'checking');assert.equal(assertions.current,1)
