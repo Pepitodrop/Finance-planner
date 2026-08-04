@@ -63,16 +63,20 @@ test('provider banking operations never fall back to JavaScript', async () => {
   }
 })
 
-test('an available but failing banking executable is never hidden by fallback logic', { skip: process.platform === 'win32' }, async () => {
+test('COBOL execution errors never expose command arguments or financial values', { skip: process.platform === 'win32' }, async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'finance-planner-cobol-failure-'))
   const binary = path.join(directory, 'broken-banking-core')
   try {
-    await writeFile(binary, '#!/bin/sh\necho "ERROR|BROKEN_CORE"\nexit 3\n')
+    await writeFile(binary, '#!/bin/sh\necho "provider rejected 98765.43" >&2\nexit 3\n')
     await chmod(binary, 0o755)
     const core = new CobolBankingCore({ binary, required: false })
     await assert.rejects(
-      core.normalizeAccountType('Girokonto'),
-      (error) => error instanceof CobolBankingCoreError && error.code === 'cobol_execution_failed',
+      core.normalizeProviderAmount('98765.43'),
+      (error) => error instanceof CobolBankingCoreError
+        && error.code === 'cobol_execution_failed'
+        && error.message === 'COBOL banking operation failed.'
+        && !error.message.includes('98765.43')
+        && !error.message.includes(binary),
     )
   } finally {
     await rm(directory, { recursive: true, force: true })
