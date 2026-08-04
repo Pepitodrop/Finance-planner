@@ -528,6 +528,36 @@ table {
     min-width: 48rem;
   }
 }
+@media (min-width: 1024px) and (max-width: 1100px) {
+  .transactions-desktop-table th:nth-child(1) {
+    width: 5rem;
+  }
+  .transactions-desktop-table th:nth-child(2) {
+    width: 24%;
+  }
+  .transactions-desktop-table th:nth-child(3) {
+    width: 11%;
+  }
+  .transactions-desktop-table th:nth-child(4) {
+    width: 14%;
+  }
+  .transactions-desktop-table th:nth-child(5) {
+    width: 6rem;
+  }
+  .transactions-desktop-table th:nth-child(6) {
+    width: 4.5rem;
+  }
+  .transactions-desktop-table th,
+  .transactions-desktop-table td {
+    padding-inline: 0.5rem;
+  }
+  .transactions-row-actions {
+    gap: 0;
+  }
+  .transactions-row-actions button {
+    width: 2.1rem;
+  }
+}
 @media (max-width: 1023px) {
   .transactions-sidebar {
     grid-template-columns: 1fr;
