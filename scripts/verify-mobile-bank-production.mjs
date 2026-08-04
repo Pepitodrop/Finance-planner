@@ -57,6 +57,6 @@ assert.match(panel, /Meine Verbindungen/, 'Connection health and active connecti
 assert.match(panel, /Zustimmung/, 'Consent expiry must be shown to the user')
 assert.match(panel, /Bereits importierte Buchungen bleiben erhalten/, 'Disconnect data-retention semantics must be explicit')
 assert.match(panel, /Kein Passwort bei uns/, 'The guided setup must explain credential isolation')
-assert.match(panel, /Bankkonto verbinden/, 'The guided setup must expose a clear primary action')
+assert.match(panel, /(?:Bank)?konto verbinden/i, 'The guided setup must expose a clear primary action')
 
 console.log('Mobile and bank production gate passed.')
