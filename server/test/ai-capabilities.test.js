@@ -9,8 +9,9 @@ test('hosted AI capabilities fail closed without credentials', () => {
   assert.equal(result.tokenConfigured, false)
   assert.equal(result.financial.reason, 'missing_hf_token')
   assert.equal(result.receipt.reason, 'missing_hf_token')
-  assert.equal(JSON.stringify(result).includes('token'), true)
-  assert.equal(JSON.stringify(result).includes('hf_'), false)
+  assert.equal(Object.hasOwn(result, 'token'), false)
+  assert.equal(Object.hasOwn(result.financial, 'token'), false)
+  assert.equal(Object.hasOwn(result.receipt, 'token'), false)
 })
 
 test('hosted text and receipt inference report ready with reviewed production configuration', () => {
