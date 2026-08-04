@@ -12,6 +12,7 @@ import { createRateLimiters } from './distributed-rate-limiter.js'
 import { createFinanceRouter } from './finance-router.js'
 import { createGoogleSubscriptionsRouter } from './google-subscriptions-router.js'
 import { OperationalMetrics } from './operational-metrics.js'
+import { authorizeProviderUser } from './provider-access.js'
 import { createOpenBankingProviderRegistry } from './providers.js'
 import { HttpError, SlidingWindowRateLimiter, classifyError, clientIp, requestId, validateProductionConfig } from './runtime-security.js'
 import { bearerToken, createSession, issueState, verifySessionClaims, verifyState } from './security.js'
@@ -179,7 +180,7 @@ function connection(provider, stored, error) {
 async function start(provider, request, response) {
   const user = userId(request)
   const adapter = providerAdapter(provider)
-  const description = adapter.describe()
+  const description = authorizeProviderUser(adapter, user, env)
   if (!description.available) throw new HttpError(501, 'provider_unavailable', description.reason || 'Provider adapter is unavailable.')
   if (!description.configured) throw new HttpError(503, 'provider_not_configured', `${description.displayName} is not configured.`)
   const input = await body(request)
@@ -207,7 +208,9 @@ async function buildSyncPayload(user) {
     const stored = await store.get(user, provider)
     if (!stored) continue
     try {
-      const synced = await providerAdapter(provider).sync(stored)
+      const adapter = providerAdapter(provider)
+      authorizeProviderUser(adapter, user, env)
+      const synced = await adapter.sync(stored)
       const lastSyncAt = new Date().toISOString()
       await store.set(user, provider, { ...synced.credential, consentId: stored.consentId, redirectUri: stored.redirectUri, lastSyncAt, consentExpiresAt: synced.consentExpiresAt })
       metrics.recordBank(provider, 'success')
