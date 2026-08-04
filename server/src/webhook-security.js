@@ -147,9 +147,9 @@ export function bankProductionCapabilities(env, persistence, providerRegistry) {
   const paypal = providers.find((provider) => provider.id === 'paypal')
   return {
     deploymentProduction,
-    // Legacy server readiness field. Automatic bank monitoring is always an
-    // optional capability and must never become a core readiness dependency.
-    production: false,
+    // This reports whether the optional production bank capability is configured.
+    // server.js deliberately does not use it as a core readiness dependency.
+    production: automaticMonitoringConfigured,
     coreReadinessDependency: false,
     automaticMonitoringConfigured,
     persistence: persistence.driver,
