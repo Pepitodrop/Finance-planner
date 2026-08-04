@@ -422,7 +422,8 @@ async function captureAccountsEvidence(client, sessionId, width, height) {
 
 async function captureAccountDetailEvidence(client,sessionId,credit=false){
   await setAccountsViewport(client,sessionId,390,844)
-  await evaluate(client,sessionId,`document.querySelector('button[aria-label="View details for ${credit?'Household credit card':'Everyday checking account'}"]')?.click()`)
+  const opened=await evaluate(client,sessionId,`(()=>{const target=document.querySelector(${credit?'\'.accounts-section--liabilities .accounts-list button\'':'\'.accounts-section:not(.accounts-section--liabilities) .accounts-list button\''});if(!target)return false;target.click();return true})()`)
+  assert.equal(opened,true,credit?'Credit-card detail action unavailable':'Standard account detail action unavailable')
   await waitFor(client,sessionId,`document.querySelector('[data-account-detail="${credit?'credit-card':'checking'}"]')`,credit?'credit detail':'account detail')
   const assertions=await accountsAssertions(client,sessionId,credit?'credit-card':'checking')
   assert.equal(assertions.overflow,false);assert.equal(assertions.detail,credit?'credit-card':'checking');assert.equal(assertions.current,1)
