@@ -423,7 +423,7 @@ async function captureAccountsEvidence(client, sessionId, width, height) {
 async function captureAccountDetailEvidence(client,sessionId,credit=false){
   await setAccountsViewport(client,sessionId,390,844)
   await evaluate(client,sessionId,`window.__financePlannerAcceptanceState?.('${credit?'credit':'detail'}')`)
-  await waitFor(client,sessionId,`document.querySelector('[data-account-detail="${credit?'credit-card':'checking'}"]')`,credit?'credit detail':'account detail')
+  await waitFor(client,sessionId,`Boolean(document.querySelector('[data-account-detail="${credit?'credit-card':'checking'}"]'))`,credit?'credit detail':'account detail')
   const assertions=await accountsAssertions(client,sessionId,credit?'credit-card':'checking')
   assert.equal(assertions.overflow,false);assert.equal(assertions.detail,credit?'credit-card':'checking');assert.equal(assertions.current,1)
   const optional=await evaluate(client,sessionId,`({owed:Boolean(document.body.innerText.includes('Amount owed')),available:Boolean(document.body.innerText.includes('Available credit')),transactions:Boolean(document.querySelector('.accounts-transactions'))})`)
