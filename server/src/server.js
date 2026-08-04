@@ -12,7 +12,7 @@ import { createRateLimiters } from './distributed-rate-limiter.js'
 import { createFinanceRouter } from './finance-router.js'
 import { createGoogleSubscriptionsRouter } from './google-subscriptions-router.js'
 import { OperationalMetrics } from './operational-metrics.js'
-import { startGoCardless, startPayPal, syncGoCardless, syncPayPal } from './providers.js'
+import { createOpenBankingProviderRegistry } from './providers.js'
 import { HttpError, SlidingWindowRateLimiter, classifyError, clientIp, requestId, validateProductionConfig } from './runtime-security.js'
 import { bearerToken, createSession, issueState, verifySessionClaims, verifyState } from './security.js'
 import { SessionRevocationRegistry } from './session-revocation.js'
@@ -43,7 +43,8 @@ const sessionRevocations = new SessionRevocationRegistry({
 await sessionRevocations.load()
 sessionRevocations.start()
 const metrics = new OperationalMetrics({ version: releaseVersion, commit: releaseCommit })
-const bankCapabilities = () => bankProductionCapabilities(env, persistence)
+const providerRegistry = createOpenBankingProviderRegistry(env)
+const bankCapabilities = () => bankProductionCapabilities(env, persistence, providerRegistry)
 let ready = true
 let shuttingDown = false
 const generalLimit = Number(env.RATE_LIMIT_PER_MINUTE || 120)
@@ -154,11 +155,20 @@ async function rateLimit(request, response, pathname) {
   return false
 }
 
+function providerAdapter(provider) {
+  try {
+    return providerRegistry.get(provider)
+  } catch {
+    throw new HttpError(404, 'unknown_provider', 'Unknown connector provider.')
+  }
+}
+
 function connection(provider, stored, error) {
+  const description = providerAdapter(provider).describe()
   return {
     id: provider,
     provider,
-    displayName: provider === 'paypal' ? 'PayPal' : provider === 'gocardless' ? 'Bank (GoCardless)' : 'Bank (finAPI)',
+    displayName: description.displayName,
     status: error ? 'error' : stored ? 'connected' : 'disconnected',
     lastSyncAt: stored?.lastSyncAt,
     consentExpiresAt: stored?.consentExpiresAt,
@@ -167,6 +177,10 @@ function connection(provider, stored, error) {
 }
 
 async function start(provider, request, response) {
+  const adapter = providerAdapter(provider)
+  const description = adapter.describe()
+  if (!description.available) throw new HttpError(501, 'provider_unavailable', description.reason || 'Provider adapter is unavailable.')
+  if (!description.configured) throw new HttpError(503, 'provider_not_configured', `${description.displayName} is not configured.`)
   const user = userId(request)
   const input = await body(request)
   const redirect = new URL(String(input.redirectUri || origin))
@@ -174,11 +188,7 @@ async function start(provider, request, response) {
   const consentId = randomUUID()
   const state = issueState(user, provider, sessionSecret, { consentId, redirectUri: redirect.toString() })
   const claims = verifyState(state, provider, sessionSecret)
-  const result = provider === 'gocardless'
-    ? await startGoCardless({ env, state, redirectUri: redirect.toString(), country: input.country || 'DE' })
-    : provider === 'paypal'
-      ? await startPayPal({ env, state, redirectUri: redirect.toString() })
-      : (() => { throw new HttpError(501, 'provider_unavailable', 'finAPI adapter is not configured.') })()
+  const result = await adapter.start({ state, redirectUri: redirect.toString(), country: input.country || 'DE' })
   await store.createConnectionSetup({
     userId: user,
     provider,
@@ -193,13 +203,11 @@ async function start(provider, request, response) {
 
 async function buildSyncPayload(user) {
   const results = []
-  for (const provider of ['gocardless', 'finapi', 'paypal']) {
+  for (const { id: provider } of providerRegistry.list()) {
     const stored = await store.get(user, provider)
     if (!stored) continue
     try {
-      const synced = provider === 'gocardless' ? await syncGoCardless(stored, env)
-        : provider === 'paypal' ? await syncPayPal(stored, env)
-          : (() => { throw new Error('finAPI adapter is not configured.') })()
+      const synced = await providerAdapter(provider).sync(stored)
       const lastSyncAt = new Date().toISOString()
       await store.set(user, provider, { ...synced.credential, consentId: stored.consentId, redirectUri: stored.redirectUri, lastSyncAt, consentExpiresAt: synced.consentExpiresAt })
       metrics.recordBank(provider, 'success')
@@ -248,7 +256,12 @@ async function sync(request, response) {
 }
 
 async function handleWebhook(provider, request, response) {
-  const secret = env[`${provider.toUpperCase()}_WEBHOOK_SECRET`]
+  const adapter = providerAdapter(provider)
+  const description = adapter.describe()
+  if (!description.webhookRequired && !env[`${provider.toUpperCase().replaceAll('-', '_')}_WEBHOOK_SECRET`]) {
+    throw new HttpError(404, 'webhook_unavailable', 'This provider does not use webhook delivery.')
+  }
+  const secret = env[`${provider.toUpperCase().replaceAll('-', '_')}_WEBHOOK_SECRET`]
   const result = await processWebhook({
     request,
     provider,
@@ -317,7 +330,7 @@ const server = createServer(async (request, response) => {
         bank: capabilities,
       })
     }
-    const webhook = url.pathname.match(/^\/api\/connectors\/webhooks\/(gocardless|finapi|paypal)$/)
+    const webhook = url.pathname.match(/^\/api\/connectors\/webhooks\/([a-z0-9][a-z0-9-]{1,39})$/)
     if (request.method === 'POST' && webhook) return await handleWebhook(webhook[1], request, response)
     if (await handleGoogleSubscriptions(request, response, url)) return
     if (await handleAuth(request, response, url)) return
@@ -329,11 +342,12 @@ const server = createServer(async (request, response) => {
       const token = createSession('local-user', sessionSecret, 86400)
       return send(response, 200, { authenticated: true }, { 'Set-Cookie': `fp_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400${origin.startsWith('https://') ? '; Secure' : ''}` })
     }
-    const match = url.pathname.match(/^\/api\/connectors\/(gocardless|finapi|paypal)\/start$/)
+    const match = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})\/start$/)
     if (request.method === 'POST' && match) return await start(match[1], request, response)
     if (request.method === 'POST' && url.pathname === '/api/connectors/sync') return await sync(request, response)
-    const disconnect = url.pathname.match(/^\/api\/connectors\/(gocardless|finapi|paypal)$/)
+    const disconnect = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})$/)
     if (request.method === 'DELETE' && disconnect) {
+      providerAdapter(disconnect[1])
       const user = userId(request)
       await store.remove(user, disconnect[1])
       metrics.recordBank(disconnect[1], 'disconnected')
@@ -341,7 +355,7 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'GET' && url.pathname === '/api/connectors/callback') {
       const provider = String(url.searchParams.get('provider') || '')
-      if (!['gocardless', 'finapi', 'paypal'].includes(provider)) throw new HttpError(400, 'unknown_provider', 'Unknown connector provider.')
+      providerAdapter(provider)
       const state = verifyState(url.searchParams.get('state'), provider, sessionSecret)
       if (!state.consentId || !state.redirectUri) throw new HttpError(400, 'invalid_state', 'Consent state is incomplete.')
       const activated = await store.activateConnection({ nonce: state.nonce, consentId: state.consentId, userId: state.sub, provider, redirectUri: state.redirectUri, now: Date.now(), connectedAt: new Date().toISOString() })
