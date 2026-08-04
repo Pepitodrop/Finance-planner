@@ -1,6 +1,7 @@
 const DEFAULT_BUCKETS_MS = Object.freeze([25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000, 30_000])
 const METRIC_NAME = /^[a-zA-Z_:][a-zA-Z0-9_:]*$/
 const LABEL_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/
+const PROVIDER_ID = /^[a-z0-9][a-z0-9-]{1,39}$/
 
 function escapeLabel(value) {
   return String(value).replaceAll('\\', '\\\\').replaceAll('\n', '\\n').replaceAll('"', '\\"').slice(0, 120)
@@ -40,9 +41,9 @@ export function operationalRoute(pathname) {
   if (path.startsWith('/api/ai/')) return '/api/ai/:action'
   if (path === '/api/connectors/sync') return '/api/connectors/sync'
   if (path === '/api/connectors/callback') return '/api/connectors/callback'
-  if (/^\/api\/connectors\/(gocardless|finapi|paypal)\/start$/.test(path)) return '/api/connectors/:provider/start'
-  if (/^\/api\/connectors\/(gocardless|finapi|paypal)$/.test(path)) return '/api/connectors/:provider'
-  if (/^\/api\/connectors\/webhooks\/(gocardless|finapi|paypal)$/.test(path)) return '/api/connectors/webhooks/:provider'
+  if (/^\/api\/connectors\/[a-z0-9][a-z0-9-]{1,39}\/start$/.test(path)) return '/api/connectors/:provider/start'
+  if (/^\/api\/connectors\/[a-z0-9][a-z0-9-]{1,39}$/.test(path)) return '/api/connectors/:provider'
+  if (/^\/api\/connectors\/webhooks\/[a-z0-9][a-z0-9-]{1,39}$/.test(path)) return '/api/connectors/webhooks/:provider'
   return path.startsWith('/api/') ? '/api/unknown' : 'unknown'
 }
 
@@ -52,6 +53,11 @@ function sourceClass(source) {
   if (value.includes('local')) return 'local'
   if (value.includes('deterministic') || value.includes('fallback')) return 'deterministic'
   return 'other'
+}
+
+function providerLabel(provider) {
+  const value = String(provider || '').trim().toLowerCase()
+  return PROVIDER_ID.test(value) ? value : 'other'
 }
 
 export class OperationalMetrics {
@@ -110,7 +116,7 @@ export class OperationalMetrics {
   }
 
   recordBank(provider, outcome) {
-    const safeProvider = ['gocardless', 'finapi', 'paypal'].includes(provider) ? provider : 'other'
+    const safeProvider = providerLabel(provider)
     const safeOutcome = ['success', 'failure', 'expired', 'disconnected'].includes(outcome) ? outcome : 'other'
     this.increment('finance_planner_bank_operations_total', { provider: safeProvider, outcome: safeOutcome })
   }

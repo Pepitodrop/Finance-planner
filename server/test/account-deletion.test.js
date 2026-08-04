@@ -62,18 +62,32 @@ test('rolls back a failed PostgreSQL deletion after sessions are revoked', async
   assert.equal(events.at(-1), 'RELEASE')
 })
 
-test('removes every supported connector in file-backed development mode', async () => {
-  const removed = []
+test('removes every file-backed connector and OAuth nonce without a provider whitelist', async () => {
+  const calls = []
   const result = await deleteAccountData({
     userId: 'local-user',
     persistence: { pool: null },
-    store: { remove: async (userId, provider) => removed.push([userId, provider]) },
+    store: {
+      removeUser: async (userId) => {
+        calls.push(userId)
+        return { connectorConnections: 4, oauthNonces: 2 }
+      },
+    },
     sessionRevocations: { revoke: async () => '2026-08-01T12:00:00.000Z' },
   })
-  assert.deepEqual(removed, [
-    ['local-user', 'gocardless'],
-    ['local-user', 'finapi'],
-    ['local-user', 'paypal'],
-  ])
+  assert.deepEqual(calls, ['local-user'])
   assert.equal(result.persistence, 'file')
+  assert.deepEqual(result.deleted, { connectorConnections: 4, oauthNonces: 2, financeState: 0, learningProfiles: 0 })
+})
+
+test('fails closed when a file-backed store cannot delete all provider data', async () => {
+  await assert.rejects(
+    deleteAccountData({
+      userId: 'local-user',
+      persistence: { pool: null },
+      store: { remove: async () => {} },
+      sessionRevocations: { revoke: async () => '2026-08-01T12:00:00.000Z' },
+    }),
+    /complete user deletion/,
+  )
 })
