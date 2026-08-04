@@ -19,6 +19,7 @@ describe('public connectivity probe', () => {
 describe('merchant logo matching', () => {
   it('matches known merchant variants locally', () => {
     expect(resolveMerchantLogo('REWE Markt 1234')?.slug).toBe('rewe')
+    expect(resolveMerchantLogo('EDEKA Südwest 4711')?.slug).toBe('edeka')
     expect(resolveMerchantLogo('Spotify AB Stockholm')?.slug).toBe('spotify')
     expect(resolveMerchantLogo('Unbekannter Laden')).toBeNull()
   })
