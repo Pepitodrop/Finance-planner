@@ -192,13 +192,13 @@ table {
   width: 5.25rem;
 }
 .transactions-desktop-table th:nth-child(2) {
-  width: 26%;
+  width: 25%;
 }
 .transactions-desktop-table th:nth-child(3) {
-  width: 15%;
+  width: 12%;
 }
 .transactions-desktop-table th:nth-child(4) {
-  width: 21%;
+  width: 16%;
 }
 .transactions-desktop-table th:nth-child(5) {
   width: 7.25rem;
@@ -564,6 +564,8 @@ table {
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     margin: 0.2rem 0;
+    font-size: 0.96rem;
+    overflow-wrap: normal;
   }
   .transactions-filter-trigger--desktop {
     display: none;
