@@ -95,8 +95,11 @@ export class CobolBankingCore {
       return parseResult(stdout)
     } catch (error) {
       if (error instanceof CobolBankingCoreError) throw error
+      // execFile error messages contain the command and arguments. Provider
+      // arguments can include financial values, so they must never cross the
+      // process boundary in a client-visible or operational error message.
       throw new CobolBankingCoreError(
-        `COBOL banking operation failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+        'COBOL banking operation failed.',
         'cobol_execution_failed',
         { cause: error },
       )
