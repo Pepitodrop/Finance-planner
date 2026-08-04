@@ -12,10 +12,11 @@ import {
   syncWindow,
 } from '../src/providers.js'
 
-function fakeBankingCore() {
+function fakeBankingCore(reconciliationCalls = []) {
   return {
     async validateReadOnlyScope() { return true },
     async validateProviderConsent() { return 'ready' },
+    async validateProviderReconciliation(input) { reconciliationCalls.push(input); return true },
     async normalizeProviderAccountType(value) { return value === 'CASH' ? 'cash' : 'checking' },
     async normalizeProviderAmount(value) {
       const values = { '123.45': 12_345, '5.00': 500, '-2.50': -250 }
@@ -144,9 +145,10 @@ test('PayPal owner mode verifies reporting access without partner onboarding', a
   }
 })
 
-test('PayPal synchronization uses the reporting balance instead of summing the sync window', async () => {
+test('PayPal synchronization uses reporting balances and COBOL reconciliation', async () => {
   const originalFetch = globalThis.fetch
   const requests = []
+  const reconciliationCalls = []
   globalThis.fetch = async (input) => {
     const url = String(input)
     requests.push(url)
@@ -186,9 +188,18 @@ test('PayPal synchronization uses the reporting balance instead of summing the s
       ALLOW_JS_FINANCE_FALLBACK: 'true',
       NODE_ENV: 'test',
     }
-    const synced = await syncPayPal({ mode: 'owner' }, env, fakeBankingCore())
+    const synced = await syncPayPal({ mode: 'owner' }, env, fakeBankingCore(reconciliationCalls))
     assert.equal(synced.accounts[0].balanceCents, 12_345)
     assert.equal(synced.transactions[0].amountCents, 500)
+    assert.equal(reconciliationCalls.length, 1)
+    assert.deepEqual(reconciliationCalls[0], {
+      accountCount: 1,
+      reconciledAccountCount: 1,
+      transactionCount: 1,
+      uniqueTransactionCount: 1,
+      dateFrom: synced.reconciliation.dateFrom,
+      dateTo: synced.reconciliation.dateTo,
+    })
     const transactionUrl = new URL(requests.find((url) => url.includes('/v1/reporting/transactions')))
     assert.equal(transactionUrl.searchParams.get('fields'), 'transaction_info')
     assert.equal(transactionUrl.searchParams.get('balance_affecting_records_only'), 'Y')
@@ -265,6 +276,7 @@ test('bank connectors enforce consent, minimal reporting fields and no payment A
   const source = await readFile(new URL('../src/providers.js', import.meta.url), 'utf8')
   assert.match(source, /OpenBankingProviderRegistry/)
   assert.match(source, /validateReadOnlyScope/)
+  assert.match(source, /validateProviderReconciliationWithCore/)
   assert.match(source, /paymentInitiation: false/)
   assert.match(source, /\/v1\/reporting\/transactions/)
   assert.match(source, /\/v1\/reporting\/balances/)
@@ -274,6 +286,5 @@ test('bank connectors enforce consent, minimal reporting fields and no payment A
   assert.doesNotMatch(source, /\/v1\/payments/)
   assert.doesNotMatch(source, /\/v1\/payments\/payouts/)
   assert.match(source, /MAX_PAYPAL_PAGES/)
-  assert.match(source, /validateProviderReconciliation/)
   assert.match(source, /normalizeProviderAccountType/)
 })
