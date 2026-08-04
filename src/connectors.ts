@@ -3,6 +3,13 @@ import type { Account, AppState, CreditCardDetails, Transaction } from './types'
 
 export type ConnectorProvider = 'gocardless' | 'finapi' | 'paypal'
 export type ConnectorStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
+export type ConnectorAccountType = 'checking' | 'savings' | 'credit-card' | 'investment'
+
+export interface ConnectorStartContext {
+  institutionId?: string
+  institutionName?: string
+  accountType?: ConnectorAccountType
+}
 
 export interface ConnectorConnection { id: string; provider: ConnectorProvider; displayName: string; status: ConnectorStatus; lastSyncAt?: string; consentExpiresAt?: string; error?: string }
 export interface ExternalAccount {
@@ -100,6 +107,14 @@ export function buildSyncPreview(state: AppState, payload: SyncPayload): SyncPre
   return { accountsToCreate, transactionsToImport, duplicateCount, pendingCount, quality: assessBankImportQuality(transactionsToImport, smartCategorized) }
 }
 
+export function selectSyncPreviewAccounts(preview: SyncPreview, selectedAccountIds: Iterable<string>): SyncPreview {
+  const selected = new Set(selectedAccountIds)
+  const accountsToCreate = preview.accountsToCreate.filter((account) => selected.has(account.id))
+  const allowed = new Set(accountsToCreate.map((account) => account.id))
+  const transactionsToImport = preview.transactionsToImport.filter((transaction) => allowed.has(transaction.accountId))
+  return { ...preview, accountsToCreate, transactionsToImport }
+}
+
 export function applySyncPreview(state: AppState, preview: SyncPreview): AppState { return { ...state, accounts: [...state.accounts, ...preview.accountsToCreate], transactions: [...preview.transactionsToImport, ...state.transactions] } }
 
 function delay(milliseconds: number) { return new Promise((resolve) => window.setTimeout(resolve, milliseconds)) }
@@ -126,8 +141,16 @@ async function requestJson<T>(url: string, init: RequestInit, options: { retry?:
   throw lastError instanceof Error ? lastError : new Error('Das Banking-Backend ist vorübergehend nicht erreichbar.')
 }
 
-export function connectorReturnUrl(): string { const url = new URL(window.location.href); for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider']) url.searchParams.delete(key); url.hash = ''; return url.toString() }
-export async function startConnector(provider: ConnectorProvider): Promise<void> { const result = await requestJson<{ redirectUrl?: string }>(`/api/connectors/${provider}/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ redirectUri: connectorReturnUrl(), country: 'DE' }) }, { idempotent: true }); if (!result.redirectUrl || !result.redirectUrl.startsWith('https://')) throw new Error('Der Connector lieferte keine sichere Weiterleitungsadresse.'); window.location.assign(result.redirectUrl) }
+export function connectorReturnUrl(): string { const url = new URL(window.location.href); for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'institution']) url.searchParams.delete(key); url.hash = ''; return url.toString() }
+export async function startConnector(provider: ConnectorProvider, context: ConnectorStartContext = {}): Promise<void> {
+  const result = await requestJson<{ redirectUrl?: string }>(`/api/connectors/${provider}/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ redirectUri: connectorReturnUrl(), country: 'DE', institutionId: context.institutionId, institutionName: context.institutionName, accountType: context.accountType }),
+  }, { idempotent: true })
+  if (!result.redirectUrl || !result.redirectUrl.startsWith('https://')) throw new Error('Der Connector lieferte keine sichere Weiterleitungsadresse.')
+  window.location.assign(result.redirectUrl)
+}
 export async function synchronizeConnections(): Promise<SyncPayload[]> { if (activeSynchronization) return activeSynchronization; const operation = (async () => { const result = await requestJson<{ connections?: SyncPayload[] }>('/api/connectors/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } }, { retry: true, idempotent: true }); if (!Array.isArray(result.connections)) throw new Error('Der Sync-Dienst lieferte ein ungültiges Ergebnis.'); return result.connections })(); activeSynchronization = operation; try { return await operation } finally { if (activeSynchronization === operation) activeSynchronization = null } }
 export async function disconnectConnector(provider: ConnectorProvider): Promise<void> { await requestJson<{ disconnected: boolean }>(`/api/connectors/${provider}`, { method: 'DELETE' }, { idempotent: true }) }
 export function consentDaysRemaining(connection: ConnectorConnection, now = Date.now()): number | null { if (!connection.consentExpiresAt) return null; const expiresAt = Date.parse(connection.consentExpiresAt); if (!Number.isFinite(expiresAt)) return null; return Math.ceil((expiresAt - now) / 86_400_000) }
