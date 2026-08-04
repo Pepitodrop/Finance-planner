@@ -2,17 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowDownRight,
   ArrowUpRight,
-  BrainCircuit,
   CalendarClock,
-  DatabaseBackup,
-  Landmark,
-  Link2,
-  MessageCircleQuestion,
   PiggyBank,
   Plus,
-  ReceiptText,
   Repeat2,
-  Target,
   Undo2,
   WalletCards,
 } from 'lucide-react'
@@ -32,15 +25,16 @@ import { loadState, resetStoredState, saveState } from './storage'
 import { addTransactionToState, deleteTransactionFromState, updateTransactionInState } from './transactionState'
 import type { AppState, Transaction, TransactionType } from './types'
 import { validateTransactionInput } from './validation'
+import { ApplicationShell } from './app/ApplicationShell'
+import type { DestinationId } from './app/navigation'
 
-type Tab = 'dashboard' | 'transactions' | 'goals' | 'recurring' | 'connections' | 'ai' | 'assistant' | 'receipt' | 'data'
 interface AppProps { userId: string; userName?: string }
 
 const CATEGORY_COLORS = ['#5878ff', '#5fe0a0', '#ff9f5b', '#ff8b96', '#7dd3fc', '#c084fc', '#f4d35e', '#4dd0c4']
 
 function App({ userId, userName }: AppProps) {
   const [state, setState] = useState<AppState>(() => loadState())
-  const [tab, setTab] = useState<Tab>('dashboard')
+  const [tab, setTab] = useState<DestinationId>('dashboard')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<Transaction | null>(null)
   const [transactionType, setTransactionType] = useState<TransactionType>('expense')
@@ -147,7 +141,7 @@ function App({ userId, userName }: AppProps) {
     setState(structuredClone(initialState))
   }
 
-  const titles: Record<Tab, string> = {
+  const titles: Record<DestinationId, string> = {
     dashboard: 'Finanzübersicht',
     transactions: 'Transaktionen',
     goals: 'Sparziele',
@@ -159,41 +153,7 @@ function App({ userId, userName }: AppProps) {
     data: 'Daten & Backup',
   }
 
-  const navButton = (target: Tab, icon: React.ReactNode, label: string) => (
-    <button
-      type="button"
-      className={tab === target ? 'active' : ''}
-      aria-current={tab === target ? 'page' : undefined}
-      onClick={() => setTab(target)}
-    >
-      {icon}{label}
-    </button>
-  )
-
-  return <div className="app-shell">
-    <aside className="sidebar">
-      <div className="brand">
-        <div className="brand-mark"><Landmark size={22}/></div>
-        <div><strong>Finance Planner</strong><span>Offline-first + AI</span></div>
-      </div>
-      <nav aria-label="Hauptnavigation">
-        {navButton('dashboard', <WalletCards size={19}/>, 'Übersicht')}
-        {navButton('transactions', <ArrowDownRight size={19}/>, 'Transaktionen')}
-        {navButton('goals', <Target size={19}/>, 'Sparziele')}
-        {navButton('recurring', <Repeat2 size={19}/>, 'Verträge')}
-        {navButton('connections', <Link2 size={19}/>, 'Verbindungen')}
-        {navButton('ai', <BrainCircuit size={19}/>, 'KI-Lernen')}
-        {navButton('assistant', <MessageCircleQuestion size={19}/>, 'Assistent')}
-        {navButton('receipt', <ReceiptText size={19}/>, 'Beleg-Check')}
-        {navButton('data', <DatabaseBackup size={19}/>, 'Daten')}
-      </nav>
-      <div className="privacy-note">
-        <strong>Verschlüsselt gespeichert</strong>
-        <span>Bank-Secrets bleiben ausschließlich im Backend.</span>
-      </div>
-    </aside>
-
-    <main id="main-content" tabIndex={-1}>
+  return <ApplicationShell activeDestination={tab} onNavigate={setTab}>
       <header className={`topbar ${tab === 'dashboard' ? 'dashboard-topbar' : ''} ${tab === 'transactions' ? 'transactions-topbar' : ''}`}>
         <div>
           {tab === 'dashboard' ? <>
@@ -327,8 +287,6 @@ function App({ userId, userName }: AppProps) {
       {tab === 'assistant' && <FinanceAssistant state={state}/>} 
       {tab === 'receipt' && <ReceiptReview/>}
       {tab === 'data' && <DataTools userId={userId} state={state} onRestore={setState} onReset={resetAll}/>} 
-    </main>
-
     {deletedTransaction && <div className="undo-toast" role="status">
       <span>„{deletedTransaction.description}“ wurde gelöscht.</span>
       <button type="button" onClick={undoDelete}><Undo2 size={16}/> Rückgängig</button>
@@ -364,7 +322,7 @@ function App({ userId, userName }: AppProps) {
         </div>
       </form>
     </div>}
-  </div>
+  </ApplicationShell>
 }
 
 export default App

@@ -1,30 +1,9 @@
 :root {
   --mobile-keyboard-height: 0px;
-  --mobile-nav-height: 72px;
 }
 
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.mobile-bottom-nav,
-.mobile-sheet-backdrop {
-  display: none;
-}
-
+/* Mobile runtime behavior that is independent from application navigation. */
 @media (max-width: 768px) {
-  body {
-    padding-bottom: calc(var(--mobile-nav-height) + var(--safe-bottom) + var(--mobile-keyboard-height));
-  }
-
   .app-shell,
   main,
   .panel,
@@ -40,16 +19,12 @@
     overflow-x: clip;
   }
 
-  .sidebar {
-    display: none !important;
-  }
-
   .topbar {
     position: sticky;
-    z-index: 20;
-    top: var(--safe-top);
-    gap: 0.75rem;
-    padding-top: max(0.75rem, var(--safe-top));
+    z-index: var(--fp-z-sticky-navigation);
+    top: var(--fp-safe-top);
+    gap: var(--fp-space-3);
+    padding-top: max(var(--fp-space-3), var(--fp-safe-top));
     backdrop-filter: blur(18px);
   }
 
@@ -59,113 +34,8 @@
 
   .topbar .primary {
     flex: 0 0 auto;
-    min-width: 48px;
-    padding-inline: 0.8rem;
-  }
-
-  .mobile-bottom-nav {
-    position: fixed;
-    z-index: 10010;
-    right: var(--safe-right);
-    bottom: 0;
-    left: var(--safe-left);
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    min-height: calc(var(--mobile-nav-height) + var(--safe-bottom));
-    padding: 0.45rem 0.35rem calc(0.45rem + var(--safe-bottom));
-    border-top: 1px solid rgba(148, 163, 184, 0.25);
-    background: color-mix(in srgb, Canvas 92%, transparent);
-    box-shadow: 0 -12px 30px rgba(0, 0, 0, 0.25);
-    backdrop-filter: blur(22px);
-  }
-
-  .mobile-bottom-nav button {
-    display: grid;
-    place-items: center;
-    align-content: center;
-    gap: 0.2rem;
-    min-width: 0;
-    min-height: 54px;
-    padding: 0.25rem;
-    border: 0;
-    border-radius: 0.8rem;
-    color: color-mix(in srgb, CanvasText 65%, transparent);
-    background: transparent;
-    font: inherit;
-  }
-
-  .mobile-bottom-nav button span {
-    width: 100%;
-    overflow: hidden;
-    font-size: 0.68rem;
-    font-weight: 700;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .mobile-bottom-nav button.active {
-    color: CanvasText;
-    background: color-mix(in srgb, CanvasText 10%, transparent);
-  }
-
-  .mobile-sheet-backdrop {
-    position: fixed;
-    z-index: 10030;
-    inset: 0;
-    display: flex;
-    align-items: flex-end;
-    justify-content: center;
-    padding: 1rem max(0.75rem, var(--safe-right)) calc(var(--mobile-nav-height) + var(--safe-bottom) + 0.5rem) max(0.75rem, var(--safe-left));
-    background: rgba(2, 6, 23, 0.55);
-    backdrop-filter: blur(8px);
-  }
-
-  .mobile-bottom-sheet {
-    width: min(100%, 34rem);
-    max-height: min(75dvh, 36rem);
-    overflow: auto;
-    overscroll-behavior: contain;
-    padding: 0.6rem 1rem calc(1rem + var(--safe-bottom));
-    border: 1px solid rgba(148, 163, 184, 0.28);
-    border-radius: 1.35rem;
-    background: Canvas;
-    color: CanvasText;
-    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
-    animation: mobile-sheet-in 180ms ease-out;
-  }
-
-  .mobile-bottom-sheet__handle {
-    width: 3rem;
-    height: 0.3rem;
-    margin: 0 auto 0.75rem;
-    border-radius: 999px;
-    background: color-mix(in srgb, CanvasText 25%, transparent);
-  }
-
-  .mobile-bottom-sheet h2 {
-    margin: 0 0 1rem;
-    font-size: 1.15rem;
-  }
-
-  .mobile-bottom-sheet__grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.75rem;
-  }
-
-  .mobile-bottom-sheet__grid button {
-    display: flex;
-    align-items: center;
-    gap: 0.7rem;
-    min-height: 58px;
-    padding: 0.85rem;
-    border: 1px solid color-mix(in srgb, CanvasText 14%, transparent);
-    border-radius: 1rem;
-    background: color-mix(in srgb, CanvasText 6%, Canvas);
-    color: inherit;
-    font: inherit;
-    font-weight: 700;
-    text-align: left;
+    min-width: var(--fp-touch-target);
+    padding-inline: var(--fp-space-3);
   }
 
   .transaction-row {
@@ -180,10 +50,10 @@
   }
 
   .modal {
-    max-height: calc(100dvh - var(--safe-top) - var(--mobile-keyboard-height) - 1rem);
+    max-height: calc(100dvh - var(--fp-safe-top) - var(--mobile-keyboard-height) - var(--fp-space-4));
     overflow-y: auto;
     overscroll-behavior: contain;
-    scroll-padding-bottom: calc(var(--mobile-keyboard-height) + 2rem);
+    scroll-padding-bottom: calc(var(--mobile-keyboard-height) + var(--fp-space-8));
   }
 
   input:focus,
@@ -194,36 +64,9 @@
 }
 
 @media (max-width: 390px) {
-  .mobile-bottom-nav button span {
-    font-size: 0.61rem;
-  }
-
-  .mobile-bottom-sheet__grid,
   .stats-grid,
   .goal-card-grid {
     grid-template-columns: 1fr;
-  }
-}
-
-@media (orientation: landscape) and (max-height: 520px) {
-  :root {
-    --mobile-nav-height: 58px;
-  }
-
-  .mobile-bottom-nav {
-    padding-top: 0.2rem;
-  }
-
-  .mobile-bottom-nav button {
-    min-height: 44px;
-  }
-
-  .mobile-bottom-nav button span {
-    display: none;
-  }
-
-  .mobile-bottom-sheet {
-    max-height: 70dvh;
   }
 }
 
@@ -231,24 +74,5 @@
   .dashboard-grid,
   .stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@keyframes mobile-sheet-in {
-  from { transform: translateY(18px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .mobile-bottom-sheet {
-    animation: none;
-  }
-}
-
-@media (prefers-contrast: more) {
-  .mobile-bottom-nav,
-  .mobile-bottom-sheet,
-  .mobile-bottom-sheet__grid button {
-    border-width: 2px;
   }
 }
