@@ -78,7 +78,9 @@ services:
       # therefore always a trusted proxy here, not an operator choice.
       TRUST_PROXY: "true"
       APP_ORIGIN: ${APP_ORIGIN:-http://localhost:8080}
-      AUTH_MODE: ${AUTH_MODE:?Set AUTH_MODE in .env; use google for production}
+      # Google is the safe Compose default. Production runtime validation still
+      # rejects missing Google credentials and never falls back to local auth.
+      AUTH_MODE: ${AUTH_MODE:-google}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_SUBSCRIPTIONS_ENABLED: ${GOOGLE_SUBSCRIPTIONS_ENABLED:-false}
