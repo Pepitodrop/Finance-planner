@@ -91,7 +91,7 @@ jobs:
       REQUIRE_LIVE_BANK_ACCEPTANCE: ${{ inputs.require_live_bank }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: 22 }
       - run: node scripts/live-bank-acceptance.mjs
       - uses: actions/upload-artifact@v4
