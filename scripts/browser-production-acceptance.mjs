@@ -330,8 +330,8 @@ async function captureTransactionsEvidence(client, sessionId, width, height) {
       tableVisible: visible(document.querySelector('.transactions-desktop-table table')),
       listVisible: visible(document.querySelector('.transactions-mobile-list')),
       transactionRows: document.querySelectorAll('.transactions-desktop-table tbody tr').length,
-      compactHeaderSingleLine: ${mobile} || width >= 1200 || [...document.querySelectorAll('.transactions-desktop-table th')].every((cell) => cell.getBoundingClientRect().height <= 46),
-      compactMetadataVisible: ${mobile} || width >= 1200 || [...document.querySelectorAll('.transactions-desktop-table .transactions-compact-category')].some(visible),
+      compactHeaderSingleLine: ${mobile} || innerWidth >= 1200 || [...document.querySelectorAll('.transactions-desktop-table th')].every((cell) => cell.getBoundingClientRect().height <= 46),
+      compactMetadataVisible: ${mobile} || innerWidth >= 1200 || [...document.querySelectorAll('.transactions-desktop-table .transactions-compact-category')].some(visible),
       amountCellsWithinViewport: ${mobile} || [...document.querySelectorAll('.transactions-desktop-table .transactions-amount')].every((cell) => {
         const rect = cell.getBoundingClientRect()
         return visible(cell) && rect.left >= 0 && rect.right <= innerWidth
