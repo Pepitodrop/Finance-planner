@@ -1,7 +1,6 @@
 import { HttpError } from './runtime-security.js'
 
 export const ACCOUNT_DELETE_CONFIRMATION = 'DELETE MY ACCOUNT'
-const PROVIDERS = Object.freeze(['gocardless', 'finapi', 'paypal'])
 
 function safeUserId(value) {
   const userId = String(value || '').trim()
@@ -24,12 +23,18 @@ export async function deleteAccountData({ userId, persistence, store, sessionRev
   const revokedBefore = await sessionRevocations.revoke(normalizedUserId, now)
 
   if (!persistence?.pool) {
-    for (const provider of PROVIDERS) await store.remove(normalizedUserId, provider)
+    if (typeof store?.removeUser !== 'function') throw new Error('File-backed connector store does not support complete user deletion.')
+    const deleted = await store.removeUser(normalizedUserId)
     return {
       userId: normalizedUserId,
       revokedBefore,
       persistence: 'file',
-      deleted: { connectorConnections: PROVIDERS.length, oauthNonces: 0, financeState: 0, learningProfiles: 0 },
+      deleted: {
+        connectorConnections: deleted.connectorConnections || 0,
+        oauthNonces: deleted.oauthNonces || 0,
+        financeState: 0,
+        learningProfiles: 0,
+      },
     }
   }
 
