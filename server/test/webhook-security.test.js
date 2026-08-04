@@ -95,7 +95,7 @@ test('polling-based GoCardless monitoring stays optional for core readiness', ()
   assert.equal(result.configuredProviders.gocardless, true)
   assert.equal(result.webhookRequired.gocardless, false)
   assert.equal(result.ready, true)
-  assert.equal(result.production, false)
+  assert.equal(result.production, true)
   assert.equal(result.coreReadinessDependency, false)
 })
 
@@ -107,7 +107,8 @@ test('configured automatic monitoring still requires durable PostgreSQL storage'
     GOCARDLESS_SECRET_KEY: 'key',
   }, { driver: 'file' })
   assert.equal(result.ready, false)
-  assert.equal(result.production, false)
+  assert.equal(result.production, true)
+  assert.equal(result.coreReadinessDependency, false)
   assert.ok(result.blockers.includes('postgres_persistence_required'))
 })
 
@@ -123,7 +124,8 @@ test('PayPal owner-account monitoring requires only application reporting creden
   assert.equal(owner.configuredProviders.paypal, true)
   assert.equal(owner.webhookRequired.paypal, false)
   assert.equal(owner.ready, true)
-  assert.equal(owner.production, false)
+  assert.equal(owner.production, true)
+  assert.equal(owner.coreReadinessDependency, false)
 })
 
 test('PayPal partner mode requires approved onboarding and webhook verification', () => {
@@ -135,6 +137,7 @@ test('PayPal partner mode requires approved onboarding and webhook verification'
     PAYPAL_CONNECTION_MODE: 'partner',
   }, { driver: 'postgres' })
   assert.equal(incomplete.configuredProviders.paypal, false)
+  assert.equal(incomplete.production, false)
   assert.ok(incomplete.blockers.includes('provider_credentials_required'))
 
   const missingWebhook = bankProductionCapabilities({
@@ -146,6 +149,7 @@ test('PayPal partner mode requires approved onboarding and webhook verification'
     PAYPAL_PARTNER_MERCHANT_ID: 'partner',
   }, { driver: 'postgres' })
   assert.equal(missingWebhook.configuredProviders.paypal, true)
+  assert.equal(missingWebhook.production, true)
   assert.ok(missingWebhook.blockers.includes('paypal_webhook_secret_required'))
 
   const complete = bankProductionCapabilities({
@@ -158,7 +162,8 @@ test('PayPal partner mode requires approved onboarding and webhook verification'
     PAYPAL_WEBHOOK_SECRET: secret,
   }, { driver: 'postgres' })
   assert.equal(complete.ready, true)
-  assert.equal(complete.production, false)
+  assert.equal(complete.production, true)
+  assert.equal(complete.coreReadinessDependency, false)
 })
 
 test('finAPI credentials cannot make an unimplemented adapter look ready', () => {
@@ -173,4 +178,5 @@ test('finAPI credentials cannot make an unimplemented adapter look ready', () =>
   assert.ok(result.blockers.includes('provider_credentials_required'))
   assert.ok(result.blockers.includes('finapi_adapter_not_implemented'))
   assert.equal(result.production, false)
+  assert.equal(result.coreReadinessDependency, false)
 })
