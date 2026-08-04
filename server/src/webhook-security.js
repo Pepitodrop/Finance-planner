@@ -57,11 +57,9 @@ export async function processWebhook({ request, provider, secret, store, handler
   try {
     payload = JSON.parse(rawBody.toString('utf8'))
   } catch {
-    throw new HttpError(400, 'invalid_json', 'Invalid webhook JSON payload.')
+    throw new HttpError(400, 'invalid_json', 'Invalid JSON webhook payload.')
   }
 
-  // Lease-based webhook idempotency prevents duplicate side effects while still
-  // allowing a failed or abandoned delivery to be retried safely.
   const leaseToken = await store.claimWebhookEvent({
     provider,
     eventId: verified.eventId,
@@ -87,39 +85,63 @@ export async function processWebhook({ request, provider, secret, store, handler
   }
 }
 
+function paypalConnectionMode(env) {
+  const configured = String(env.PAYPAL_CONNECTION_MODE || '').trim().toLowerCase()
+  if (configured === 'owner' || configured === 'partner') return configured
+  return env.PAYPAL_PARTNER_MERCHANT_ID ? 'partner' : 'owner'
+}
+
 export function bankProductionCapabilities(env, persistence) {
-  const production = env.NODE_ENV === 'production' && env.PUBLIC_DEPLOYMENT === 'true'
+  const deploymentProduction = env.NODE_ENV === 'production' && env.PUBLIC_DEPLOYMENT === 'true'
+  const paypalMode = paypalConnectionMode(env)
   const configuredProviders = {
     gocardless: Boolean(env.GOCARDLESS_SECRET_ID && env.GOCARDLESS_SECRET_KEY),
-    // A PayPal client credential pair alone can only access the application's
-    // own reporting account. User authorization requires the provider-hosted
-    // partner onboarding flow and must not be advertised without it.
-    paypal: Boolean(env.PAYPAL_CLIENT_ID && env.PAYPAL_CLIENT_SECRET && env.PAYPAL_PARTNER_MERCHANT_ID),
-    // The HTTP adapter currently fails with 501. Credentials must never make an
-    // unimplemented provider count toward production readiness.
+    paypal: Boolean(
+      env.PAYPAL_CLIENT_ID
+      && env.PAYPAL_CLIENT_SECRET
+      && (paypalMode === 'owner' || env.PAYPAL_PARTNER_MERCHANT_ID),
+    ),
     finapi: false,
   }
+  const automaticMonitoringConfigured = Object.values(configuredProviders).some(Boolean)
   const webhookVerification = {
     gocardless: Boolean(env.GOCARDLESS_WEBHOOK_SECRET?.length >= 32),
     paypal: Boolean(env.PAYPAL_WEBHOOK_SECRET?.length >= 32),
     finapi: false,
   }
-  const blockers = []
-  if (production && persistence.driver !== 'postgres') blockers.push('postgres_persistence_required')
-  if (production && !Object.values(configuredProviders).some(Boolean)) blockers.push('provider_credentials_required')
-  for (const provider of Object.keys(configuredProviders)) {
-    if (configuredProviders[provider] && !webhookVerification[provider]) blockers.push(`${provider}_webhook_secret_required`)
+  const webhookRequired = {
+    gocardless: false,
+    paypal: paypalMode === 'partner',
+    finapi: false,
   }
-  if (production && (env.FINAPI_CLIENT_ID || env.FINAPI_CLIENT_SECRET || env.FINAPI_WEBHOOK_SECRET)) blockers.push('finapi_adapter_not_implemented')
+  const blockers = []
+  if (automaticMonitoringConfigured && deploymentProduction && persistence.driver !== 'postgres') blockers.push('postgres_persistence_required')
+  if (!automaticMonitoringConfigured) blockers.push('provider_credentials_required')
+  for (const provider of Object.keys(configuredProviders)) {
+    if (configuredProviders[provider] && webhookRequired[provider] && !webhookVerification[provider]) blockers.push(`${provider}_webhook_secret_required`)
+  }
+  if (deploymentProduction && (env.FINAPI_CLIENT_ID || env.FINAPI_CLIENT_SECRET || env.FINAPI_WEBHOOK_SECRET)) blockers.push('finapi_adapter_not_implemented')
+
   return {
-    production,
+    deploymentProduction,
+    // server.js uses this field to decide whether bank capability is a core
+    // readiness dependency. No provider means optional monitoring is disabled,
+    // not that the core application is unhealthy.
+    production: automaticMonitoringConfigured,
+    automaticMonitoringConfigured,
     persistence: persistence.driver,
     encryptedCredentials: true,
     oauthReplayProtection: true,
+    readOnly: true,
+    paymentInitiation: false,
+    transfers: false,
+    payouts: false,
     webhookVerification,
+    webhookRequired,
     webhookIdempotency: true,
+    paypalMode,
     configuredProviders,
-    ready: blockers.length === 0,
+    ready: automaticMonitoringConfigured && blockers.length === 0,
     blockers,
   }
 }
