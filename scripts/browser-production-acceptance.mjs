@@ -427,7 +427,7 @@ async function captureAccountDetailEvidence(client,sessionId,credit=false){
   await waitFor(client,sessionId,`(()=>{const target=document.querySelector(${JSON.stringify(selector)}),rect=target?.getBoundingClientRect();return Boolean(rect&&rect.top>=0&&rect.bottom<=innerHeight)})()`,'visible account detail action')
   const focused=await evaluate(client,sessionId,`(()=>{const target=document.querySelector(${JSON.stringify(selector)});target.focus();return document.activeElement===target})()`)
   assert.equal(focused,true,'Account detail action could not receive focus')
-  await client.send('Input.dispatchKeyEvent',{type:'rawKeyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13},sessionId)
+  await client.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',text:'\r',unmodifiedText:'\r',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13},sessionId)
   await client.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13},sessionId)
   await waitFor(client,sessionId,`document.querySelector('[data-account-detail="${credit?'credit-card':'checking'}"]')`,credit?'credit detail':'account detail')
   const assertions=await accountsAssertions(client,sessionId,credit?'credit-card':'checking')
