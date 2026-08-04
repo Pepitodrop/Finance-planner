@@ -93,6 +93,7 @@ jobs:
           --health-retries 10
     env:
       TEST_DATABASE_URL: postgresql://finance_planner:ci-postgres-password@127.0.0.1:5432/finance_planner_test
+      COBOL_BANKING_BINARY: ${{ github.workspace }}/build/banking-core
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -121,10 +122,11 @@ jobs:
       - name: Install backend dependencies
         working-directory: server
         run: npm install --no-fund --no-audit --silent
-      - name: Compile authoritative COBOL engine
+      - name: Compile authoritative COBOL engines
         run: |
           mkdir -p build
           cobc -Wall -Wextra -x -o build/transaction-rules core/cobol/transaction_rules.cob
+          cobc -Wall -Wextra -x -o build/banking-core core/cobol/banking/banking-core.cob
       - name: Capture backend-test diagnostics
         id: backend_tests
         continue-on-error: true
@@ -165,6 +167,7 @@ jobs:
           node --check server/src/auth-store.js
           node --check server/src/providers.js
           node --check server/src/cobol-engine.js
+          node --check server/src/cobol-banking-core.js
           node --check server/src/crypto-store.js
           node --check server/src/database.js
           node --check server/src/postgres-store.js
@@ -187,12 +190,32 @@ jobs:
           mkdir -p build
           cobc -Wall -Wextra -m core/cobol/finance_projection.cob
           cobc -Wall -Wextra -x -o build/transaction-rules core/cobol/transaction_rules.cob
+          cobc -Wall -Wextra -x -o build/banking-core core/cobol/banking/banking-core.cob
       - name: Verify COBOL transaction rules
         run: |
           test "$(build/transaction-rules NORMALIZE -1299)" = "OK|expense|1299"
           test "$(build/transaction-rules NORMALIZE 250000)" = "OK|income|250000"
           test "$(build/transaction-rules APPLY 100000 1299 expense)" = "OK|98701"
           test "$(build/transaction-rules APPLY 98701 5000 income)" = "OK|103701"
+      - name: Verify COBOL banking rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          account_output="$(build/banking-core normalize-account-type Girokonto)"
+          card_type_output="$(build/banking-core normalize-account-type Kreditkarte)"
+          balance_output="$(build/banking-core normalize-credit-card -12550 50000 -2000)"
+          printf 'account output: <%s>\n' "$account_output"
+          printf 'card type output: <%s>\n' "$card_type_output"
+          printf 'balance output: <%s>\n' "$balance_output"
+          test "$account_output" = "OK|checking"
+          test "$card_type_output" = "OK|credit-card"
+          test "$balance_output" = "OK|12550|-12550|35450|2000"
+          if build/banking-core normalize-credit-card -12550 50000 >/tmp/banking-invalid.out 2>&1; then
+            echo "banking-core accepted an invalid argument count"
+            exit 1
+          fi
+          echo "invalid-argument output:"
+          cat /tmp/banking-invalid.out || true
 
   containers:
     runs-on: ubuntu-latest
