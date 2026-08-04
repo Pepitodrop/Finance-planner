@@ -1,4 +1,5 @@
 import { assessBankConnectionHealth, chooseBankSyncBackoff } from './bank-sync-health.js'
+import { CobolBankingCore } from './cobol-banking-core.js'
 import { normalizeSignedAmount } from './cobol-engine.js'
 
 const GC_BASE = 'https://bankaccountdata.gocardless.com/api/v2'
@@ -15,6 +16,27 @@ const MAX_RETRY_DELAY_MS = 30_000
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)) }
 function isoDate(value) { return new Date(value).toISOString().slice(0, 10) }
+
+function createBankingCore(env) {
+  return new CobolBankingCore({
+    binary: env.COBOL_BANKING_BINARY,
+    required: env.COBOL_BANKING_REQUIRED === 'true',
+  })
+}
+
+export function providerAccountTypeAlias(account = {}) {
+  const code = String(account.cashAccountType || account.type || '').trim().toUpperCase()
+  if (['SVGS', 'SAVINGS', 'DEPOSIT'].includes(code)) return 'savings'
+  if (['CASH'].includes(code)) return 'cash'
+  if (['CARD', 'CREDITCARD', 'CREDIT-CARD'].includes(code)) return 'credit-card'
+  if (['INVE', 'INVESTMENT', 'BROKERAGE', 'TRAS'].includes(code)) return 'investment'
+  return 'checking'
+}
+
+export async function normalizeProviderAccountType(account, env = {}, suppliedCore) {
+  const core = suppliedCore || createBankingCore(env)
+  return core.normalizeAccountType(providerAccountTypeAlias(account))
+}
 
 export function retryDelayMs(value, now = Date.now()) {
   if (!value) return null
@@ -190,8 +212,9 @@ export async function startGoCardless({ env, state, redirectUri, country = 'DE' 
   }
 }
 
-export async function syncGoCardless(credential, env) {
+export async function syncGoCardless(credential, env, suppliedCore) {
   const completedAt = new Date()
+  const bankingCore = suppliedCore || createBankingCore(env)
   const consentExpiresAt = gocardlessConsentExpiresAt(credential)
   if (consentExpiresAt && Date.parse(consentExpiresAt) <= completedAt.getTime() + CONSENT_EXPIRY_SAFETY_MS) {
     throw new Error(`GoCardless consent expired at ${consentExpiresAt}; reconnect the bank account.`)
@@ -220,7 +243,8 @@ export async function syncGoCardless(credential, env) {
     ])
     const account = details.account ?? {}
     const balance = balances.balances?.find((item) => item.balanceAmount?.currency === 'EUR')?.balanceAmount?.amount ?? '0'
-    accounts.push({ externalId: accountId, name: account.name || account.product || account.iban || 'Bankkonto', type: 'checking', balanceCents: decimalToCents(balance), currency: 'EUR' })
+    const type = await normalizeProviderAccountType(account, env, bankingCore)
+    accounts.push({ externalId: accountId, name: account.name || account.product || account.iban || 'Bankkonto', type, balanceCents: decimalToCents(balance), currency: 'EUR' })
     for (const [pending, rows] of [[false, tx.transactions?.booked ?? []], [true, tx.transactions?.pending ?? []]]) {
       for (const item of rows) {
         if (item.transactionAmount?.currency !== 'EUR') continue
@@ -255,7 +279,9 @@ async function paypalAccessToken(env) {
 
 export async function startPayPal({ env, state, redirectUri }) {
   if (!env.PAYPAL_CLIENT_ID || !env.PAYPAL_CLIENT_SECRET) throw new Error('PayPal credentials are not configured.')
-  if (!env.PAYPAL_PARTNER_MERCHANT_ID) return { redirectUrl: `${redirectUri}${redirectUri.includes('?') ? '&' : '?'}connector=paypal&state=${encodeURIComponent(state)}`, credential: { mode: 'owner-reporting' } }
+  if (!env.PAYPAL_PARTNER_MERCHANT_ID) {
+    throw new Error('PayPal user authorization is unavailable because partner onboarding is not configured. Set PAYPAL_PARTNER_MERCHANT_ID before enabling this connector.')
+  }
   const base = env.PAYPAL_ENV === 'live' ? 'https://www.paypal.com' : 'https://www.sandbox.paypal.com'
   const url = new URL(`${base}/bizsignup/partner/entry`)
   url.searchParams.set('partnerId', env.PAYPAL_PARTNER_MERCHANT_ID)
@@ -265,8 +291,9 @@ export async function startPayPal({ env, state, redirectUri }) {
   return { redirectUrl: url.toString(), credential: { mode: 'partner', pending: true } }
 }
 
-export async function syncPayPal(credential, env) {
+export async function syncPayPal(credential, env, suppliedCore) {
   const completedAt = new Date()
+  const bankingCore = suppliedCore || createBankingCore(env)
   const { base, token } = await paypalAccessToken(env)
   const window = syncWindow(credential.lastSyncedAt, completedAt)
   const transactions = []
@@ -295,7 +322,8 @@ export async function syncPayPal(credential, env) {
     }
     page += 1
   } while (page <= totalPages)
-  const accounts = [{ externalId: 'paypal-eur', name: 'PayPal EUR', type: 'cash', balanceCents, currency: 'EUR' }]
+  const type = await normalizeProviderAccountType({ cashAccountType: 'CASH' }, env, bankingCore)
+  const accounts = [{ externalId: 'paypal-eur', name: 'PayPal EUR', type, balanceCents, currency: 'EUR' }]
   const reconciliation = { pageCount: totalPages, transactionCount: transactions.length, dateFrom: window.dateFrom, dateTo: window.dateTo, syncedAt: completedAt.toISOString() }
   validateProviderReconciliation({ accounts, transactions, reconciliation })
   const health = completedHealth({ completedAt, accounts, transactions })

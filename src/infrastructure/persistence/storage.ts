@@ -13,7 +13,6 @@ import { CloudStateConflictError, fetchCloudState, saveCloudState } from './clou
 
 const STORAGE_KEY = 'finance-planner-state-v2'
 const LEGACY_STORAGE_KEY = 'finance-planner-state-v1'
-const RECOVERY_KEY = 'finance-planner-recovery-state'
 const CONFLICT_KEY_PREFIX = 'finance-planner-cloud-conflict-v2:'
 const SYNC_METADATA_PREFIX = 'finance-planner-cloud-metadata-v1:'
 const SAVE_DEBOUNCE_MS = 650
@@ -280,17 +279,17 @@ export function loadLegacyState(): AppState {
   requireActiveUser()
   const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY)
   if (!raw) return cloneInitialState()
+
+  let parsed: unknown
   try {
-    const parsed: unknown = JSON.parse(raw)
-    if (!isAppState(parsed)) {
-      localStorage.setItem(RECOVERY_KEY, raw)
-      return cloneInitialState()
-    }
-    return parsed
+    parsed = JSON.parse(raw)
   } catch {
-    localStorage.setItem(RECOVERY_KEY, raw)
-    return cloneInitialState()
+    throw new Error('Die vorhandenen Klartextdaten sind beschädigt und wurden nicht verändert. Sie können nicht automatisch in den verschlüsselten Vault migriert werden.')
   }
+  if (!isAppState(parsed)) {
+    throw new Error('Die vorhandenen Klartextdaten haben ein unbekanntes Format und wurden nicht verändert. Sie können nicht automatisch in den verschlüsselten Vault migriert werden.')
+  }
+  return parsed
 }
 
 export function hasLegacyPlaintextState(): boolean {

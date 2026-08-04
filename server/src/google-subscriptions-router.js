@@ -48,6 +48,18 @@ export function createGoogleSubscriptionsRouter({
   return async function handleGoogleSubscriptions(request, response, url) {
     if (!url.pathname.startsWith('/api/subscriptions/google')) return false
 
+    if (request.method === 'GET' && url.pathname === '/api/subscriptions/google/capability') {
+      userId(request)
+      const configured = capability(env)
+      const stored = await store.get(userId(request), PROVIDER)
+      send(response, 200, {
+        ...configured,
+        connected: stored?.status === 'connected',
+        lastSyncAt: stored?.lastSyncAt,
+      })
+      return true
+    }
+
     if (request.method === 'POST' && url.pathname === '/api/subscriptions/google/start') {
       const user = userId(request)
       const input = await body(request)
@@ -55,6 +67,7 @@ export function createGoogleSubscriptionsRouter({
       const consentId = randomUUID()
       const state = issueState(user, PROVIDER, sessionSecret, { consentId, redirectUri: returnUri })
       const claims = verifyState(state, PROVIDER, sessionSecret)
+      const currentCapability = capability(env)
       const redirectUrl = authorize({ env, state, redirectUri: callbackUri })
       await store.createConnectionSetup({
         userId: user,
@@ -67,11 +80,12 @@ export function createGoogleSubscriptionsRouter({
           consentId,
           redirectUri: returnUri,
           callbackUri,
+          source: currentCapability.source,
           status: 'pending',
           createdAt: new Date().toISOString(),
         },
       })
-      send(response, 200, { redirectUrl, capability: capability(env) })
+      send(response, 200, { redirectUrl, capability: currentCapability })
       return true
     }
 
@@ -92,11 +106,13 @@ export function createGoogleSubscriptionsRouter({
       })
       if (!consumed) throw new Error('Google subscription state was already used, expired, or does not match.')
       const credential = await exchange({ env, code, redirectUri: callbackUri })
+      const currentCapability = capability(env)
       await store.set(state.sub, PROVIDER, {
         ...credential,
         consentId: state.consentId,
         redirectUri: state.redirectUri,
         callbackUri,
+        source: currentCapability.source,
         status: 'connected',
         connectedAt: new Date().toISOString(),
       })
@@ -110,9 +126,17 @@ export function createGoogleSubscriptionsRouter({
 
     if (request.method === 'POST' && url.pathname === '/api/subscriptions/google/sync') {
       const user = userId(request)
+      const currentCapability = capability(env)
       const stored = await store.get(user, PROVIDER)
       if (!stored || stored.status !== 'connected') {
-        send(response, 200, { connected: false, subscriptions: [], unavailableReason: capability(env).reason || 'not_connected' })
+        send(response, 200, {
+          connected: false,
+          subscriptions: [],
+          capability: currentCapability,
+          source: currentCapability.source,
+          limitations: currentCapability.limitations || [],
+          unavailableReason: currentCapability.reason || 'not_connected',
+        })
         return true
       }
       const result = await synchronize(stored, env)
@@ -120,11 +144,20 @@ export function createGoogleSubscriptionsRouter({
       await store.set(user, PROVIDER, {
         ...stored,
         ...(result.credential || {}),
+        source: result.source || currentCapability.source,
         subscriptions: result.subscriptions,
+        limitations: result.limitations || currentCapability.limitations || [],
         lastSyncAt,
         status: 'connected',
       })
-      send(response, 200, { connected: true, lastSyncAt, subscriptions: result.subscriptions })
+      send(response, 200, {
+        connected: true,
+        lastSyncAt,
+        source: result.source || currentCapability.source,
+        limitations: result.limitations || currentCapability.limitations || [],
+        capability: currentCapability,
+        subscriptions: result.subscriptions,
+      })
       return true
     }
 

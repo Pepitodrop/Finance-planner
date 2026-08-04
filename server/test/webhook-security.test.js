@@ -79,3 +79,39 @@ test('production capabilities require durable storage and webhook secrets', () =
   assert.ok(result.blockers.includes('postgres_persistence_required'))
   assert.ok(result.blockers.includes('gocardless_webhook_secret_required'))
 })
+
+test('PayPal requires partner onboarding before it counts as production configured', () => {
+  const incomplete = bankProductionCapabilities({
+    NODE_ENV: 'production',
+    PUBLIC_DEPLOYMENT: 'true',
+    PAYPAL_CLIENT_ID: 'client',
+    PAYPAL_CLIENT_SECRET: 'secret',
+    PAYPAL_WEBHOOK_SECRET: secret,
+  }, { driver: 'postgres' })
+  assert.equal(incomplete.configuredProviders.paypal, false)
+  assert.ok(incomplete.blockers.includes('provider_credentials_required'))
+
+  const complete = bankProductionCapabilities({
+    NODE_ENV: 'production',
+    PUBLIC_DEPLOYMENT: 'true',
+    PAYPAL_CLIENT_ID: 'client',
+    PAYPAL_CLIENT_SECRET: 'secret',
+    PAYPAL_PARTNER_MERCHANT_ID: 'partner',
+    PAYPAL_WEBHOOK_SECRET: secret,
+  }, { driver: 'postgres' })
+  assert.equal(complete.configuredProviders.paypal, true)
+  assert.equal(complete.ready, true)
+})
+
+test('finAPI credentials cannot make an unimplemented adapter look ready', () => {
+  const result = bankProductionCapabilities({
+    NODE_ENV: 'production',
+    PUBLIC_DEPLOYMENT: 'true',
+    FINAPI_CLIENT_ID: 'client',
+    FINAPI_CLIENT_SECRET: 'secret',
+    FINAPI_WEBHOOK_SECRET: secret,
+  }, { driver: 'postgres' })
+  assert.equal(result.configuredProviders.finapi, false)
+  assert.ok(result.blockers.includes('provider_credentials_required'))
+  assert.ok(result.blockers.includes('finapi_adapter_not_implemented'))
+})

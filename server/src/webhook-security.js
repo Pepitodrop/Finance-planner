@@ -91,13 +91,18 @@ export function bankProductionCapabilities(env, persistence) {
   const production = env.NODE_ENV === 'production' && env.PUBLIC_DEPLOYMENT === 'true'
   const configuredProviders = {
     gocardless: Boolean(env.GOCARDLESS_SECRET_ID && env.GOCARDLESS_SECRET_KEY),
-    paypal: Boolean(env.PAYPAL_CLIENT_ID && env.PAYPAL_CLIENT_SECRET),
-    finapi: Boolean(env.FINAPI_CLIENT_ID && env.FINAPI_CLIENT_SECRET),
+    // A PayPal client credential pair alone can only access the application's
+    // own reporting account. User authorization requires the provider-hosted
+    // partner onboarding flow and must not be advertised without it.
+    paypal: Boolean(env.PAYPAL_CLIENT_ID && env.PAYPAL_CLIENT_SECRET && env.PAYPAL_PARTNER_MERCHANT_ID),
+    // The HTTP adapter currently fails with 501. Credentials must never make an
+    // unimplemented provider count toward production readiness.
+    finapi: false,
   }
   const webhookVerification = {
     gocardless: Boolean(env.GOCARDLESS_WEBHOOK_SECRET?.length >= 32),
     paypal: Boolean(env.PAYPAL_WEBHOOK_SECRET?.length >= 32),
-    finapi: Boolean(env.FINAPI_WEBHOOK_SECRET?.length >= 32),
+    finapi: false,
   }
   const blockers = []
   if (production && persistence.driver !== 'postgres') blockers.push('postgres_persistence_required')
@@ -105,6 +110,7 @@ export function bankProductionCapabilities(env, persistence) {
   for (const provider of Object.keys(configuredProviders)) {
     if (configuredProviders[provider] && !webhookVerification[provider]) blockers.push(`${provider}_webhook_secret_required`)
   }
+  if (production && (env.FINAPI_CLIENT_ID || env.FINAPI_CLIENT_SECRET || env.FINAPI_WEBHOOK_SECRET)) blockers.push('finapi_adapter_not_implemented')
   return {
     production,
     persistence: persistence.driver,

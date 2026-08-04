@@ -3,6 +3,11 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { performance } from 'node:perf_hooks'
 import { createHuggingFaceChatTransport } from '../server/src/huggingFaceClient.js'
 
+const RUNTIME_MODEL_ALIAS = 'Qwen/Qwen3-4B-Thinking-2507:fastest'
+const RUNTIME_MODEL_REVISION = '768f209d9ea81521153ed38c47d515654e938aea'
+const RUNTIME_SYSTEM_MESSAGE = 'Return only a JSON object. Do not provide financial advice or request personal data.'
+const RUNTIME_USER_MESSAGE = 'Synthetic health check: return {"status":"ok","safe":true}.'
+
 const readJson = async (relativePath) => JSON.parse(await readFile(new URL(`../${relativePath}`, import.meta.url), 'utf8'))
 const percentile = (values, ratio) => {
   const sorted = [...values].sort((a, b) => a - b)
@@ -33,6 +38,8 @@ assert.equal(governedModel.revision, baseline.modelRevision)
 assert.equal(governedModel.productionEligible, true)
 assert.equal(governedModel.integrationStatus, 'integrated')
 assert.match(governedModel.revision, /^[0-9a-f]{40}$/)
+assert.equal(governedModel.providerAlias, RUNTIME_MODEL_ALIAS, 'Runtime model alias must match the reviewed compiled constant')
+assert.equal(governedModel.revision, RUNTIME_MODEL_REVISION, 'Runtime model revision must match the reviewed compiled constant')
 assert.equal(baseline.measurement.qualityGateScript, 'scripts/verify-ai-quality-gates.mjs')
 assert.equal(baseline.measurement.evaluationDataset, 'ai/evaluation/transaction-categories.json')
 assert.equal(baseline.measurement.hostedProviderLatencyValidated, false)
@@ -88,12 +95,12 @@ if (process.argv.includes('--runtime')) {
     const started = performance.now()
     try {
       const content = await transport.chatCompletion({
-        model: governedModel.providerAlias,
-        revision: governedModel.revision,
+        model: RUNTIME_MODEL_ALIAS,
+        revision: RUNTIME_MODEL_REVISION,
         maxTokens: 80,
         messages: [
-          { role: 'system', content: 'Return only a JSON object. Do not provide financial advice or request personal data.' },
-          { role: 'user', content: `Health check ${index + 1}: return {"status":"ok","safe":true}.` },
+          { role: 'system', content: RUNTIME_SYSTEM_MESSAGE },
+          { role: 'user', content: RUNTIME_USER_MESSAGE },
         ],
       })
       const parsed = JSON.parse(content)
@@ -101,13 +108,13 @@ if (process.argv.includes('--runtime')) {
       assert.equal(parsed.safe, true)
       latencies.push(Math.round(performance.now() - started))
     } catch (error) {
-      errors.push({ sample: index + 1, message: String(error?.message || error).slice(0, 200) })
+      errors.push({ sample: index + 1, message: error instanceof Error ? error.name : 'HostedInferenceError' })
     }
   }
 
   const samples = launch.ai.minimumHostedSamples
   const errorRate = errors.length / samples
-  assert.ok(errorRate <= launch.ai.maximumHostedErrorRate, `Hosted AI error rate ${errorRate} exceeds ${launch.ai.maximumHostedErrorRate}: ${JSON.stringify(errors)}`)
+  assert.ok(errorRate <= launch.ai.maximumHostedErrorRate, `Hosted AI error rate ${errorRate} exceeds ${launch.ai.maximumHostedErrorRate}`)
   assert.equal(latencies.length, samples, 'Every hosted validation sample must succeed')
   const p95LatencyMs = percentile(latencies, 0.95)
   assert.ok(p95LatencyMs <= requirements.maximumP95LatencyMs, `Hosted AI p95 latency ${p95LatencyMs}ms exceeds ${requirements.maximumP95LatencyMs}ms`)
@@ -118,8 +125,8 @@ if (process.argv.includes('--runtime')) {
     launchDate: launch.launchDate,
     environment: launch.mode,
     modelId: governedModel.id,
-    modelRevision: governedModel.revision,
-    providerAlias: governedModel.providerAlias,
+    modelRevision: RUNTIME_MODEL_REVISION,
+    providerAlias: RUNTIME_MODEL_ALIAS,
     samples,
     successfulSamples: latencies.length,
     errorRate,

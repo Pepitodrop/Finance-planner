@@ -6,8 +6,9 @@ function fixture(input = { balanceCents: 100000, monthlyContributionCents: 25000
   const sent = []
   let authenticated = false
   let projectedArgs
+  let bankingArgs
   const handle = createFinanceRouter({
-    env: { NODE_ENV: 'test' },
+    env: { NODE_ENV: 'test', COBOL_BANKING_REQUIRED: 'true' },
     body: async () => input,
     userId: () => {
       authenticated = true
@@ -18,8 +19,27 @@ function fixture(input = { balanceCents: 100000, monthlyContributionCents: 25000
       projectedArgs = args
       return 400000
     },
+    bankingCore: {
+      async normalizeCreditCard(value) {
+        bankingArgs = value
+        return {
+          amountOwedCents: Math.abs(value.providerBalanceCents),
+          ledgerBalanceCents: -Math.abs(value.providerBalanceCents),
+          availableCreditCents: value.creditLimitCents
+            ? Math.max(0, value.creditLimitCents - Math.abs(value.providerBalanceCents) - value.pendingAmountCents)
+            : undefined,
+          pendingAmountCents: value.pendingAmountCents,
+        }
+      },
+    },
   })
-  return { handle, sent: () => sent, wasAuthenticated: () => authenticated, projectedArgs: () => projectedArgs }
+  return {
+    handle,
+    sent: () => sent,
+    wasAuthenticated: () => authenticated,
+    projectedArgs: () => projectedArgs,
+    bankingArgs: () => bankingArgs,
+  }
 }
 
 test('finance route exposes the authenticated COBOL savings projection', async () => {
@@ -43,6 +63,53 @@ test('finance route exposes the authenticated COBOL savings projection', async (
       calculationEngine: 'cobol',
     },
   }])
+})
+
+test('finance route normalizes a manual credit card through the authenticated COBOL boundary', async () => {
+  const state = fixture({ providerBalanceCents: 12_550, creditLimitCents: 50_000, pendingAmountCents: 2_000 })
+  const handled = await state.handle(
+    { method: 'POST' },
+    {},
+    new URL('http://localhost/api/finance/normalize-credit-card'),
+  )
+
+  assert.equal(handled, true)
+  assert.equal(state.wasAuthenticated(), true)
+  assert.deepEqual(state.bankingArgs(), {
+    providerBalanceCents: 12_550,
+    creditLimitCents: 50_000,
+    pendingAmountCents: 2_000,
+  })
+  assert.deepEqual(state.sent(), [{
+    status: 200,
+    payload: {
+      providerBalanceCents: 12_550,
+      creditLimitCents: 50_000,
+      pendingAmountCents: 2_000,
+      amountOwedCents: 12_550,
+      ledgerBalanceCents: -12_550,
+      availableCreditCents: 35_450,
+      calculationEngine: 'cobol',
+    },
+  }])
+})
+
+test('finance route rejects invalid credit-card cents before invoking COBOL', async () => {
+  const state = fixture({ providerBalanceCents: 12_550, creditLimitCents: -1, pendingAmountCents: 0 })
+  await assert.rejects(
+    () => state.handle({ method: 'POST' }, {}, new URL('http://localhost/api/finance/normalize-credit-card')),
+    (error) => error.status === 400 && error.code === 'invalid_credit_card_input',
+  )
+  assert.equal(state.bankingArgs(), undefined)
+})
+
+test('finance route rejects unexpected credit-card fields', async () => {
+  const state = fixture({ providerBalanceCents: 12_550, creditLimitCents: 50_000, pendingAmountCents: 0, cardNumber: 'not-allowed' })
+  await assert.rejects(
+    () => state.handle({ method: 'POST' }, {}, new URL('http://localhost/api/finance/normalize-credit-card')),
+    (error) => error.status === 400 && error.code === 'invalid_credit_card_input',
+  )
+  assert.equal(state.bankingArgs(), undefined)
 })
 
 test('finance route rejects invalid projection input before invoking COBOL', async () => {
