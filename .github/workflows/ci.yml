@@ -21,8 +21,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
       - name: Install dependencies
-        run: npm install --no-fund --no-audit --silent
+        run: npm ci --no-fund --no-audit --silent
       - name: Capture unit-test diagnostics
         id: tests
         continue-on-error: true
@@ -34,7 +35,7 @@ jobs:
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
           exit 0
       - name: Upload unit-test diagnostics
-        if: always()
+        if: always() && steps.tests.outcome != 'skipped'
         uses: actions/upload-artifact@v4
         with:
           name: unit-test-diagnostics
@@ -47,6 +48,7 @@ jobs:
           cat unit-test-diagnostics.txt
           exit 1
       - name: Capture TypeScript diagnostics
+        if: always()
         id: typescript
         continue-on-error: true
         shell: bash
@@ -57,7 +59,7 @@ jobs:
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
           exit 0
       - name: Upload TypeScript diagnostics
-        if: always()
+        if: always() && steps.typescript.outcome != 'skipped'
         uses: actions/upload-artifact@v4
         with:
           name: typescript-diagnostics
@@ -65,7 +67,7 @@ jobs:
           if-no-files-found: error
           retention-days: 3
       - name: Enforce TypeScript result
-        if: steps.typescript.outputs.exit_code != '0'
+        if: always() && steps.typescript.outputs.exit_code != '0'
         run: |
           cat typescript-diagnostics.txt
           exit 1
@@ -99,6 +101,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
       - name: Install GnuCOBOL and PostgreSQL 17 client
         shell: bash
         run: |
@@ -121,7 +125,7 @@ jobs:
           pg_restore --version | grep -E '^pg_restore \(PostgreSQL\) 17\.'
       - name: Install backend dependencies
         working-directory: server
-        run: npm install --no-fund --no-audit --silent
+        run: npm ci --no-fund --no-audit --silent
       - name: Compile authoritative COBOL engines
         run: |
           mkdir -p build
@@ -139,7 +143,7 @@ jobs:
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
           exit 0
       - name: Upload backend-test diagnostics
-        if: always()
+        if: always() && steps.backend_tests.outcome != 'skipped'
         uses: actions/upload-artifact@v4
         with:
           name: backend-test-diagnostics
@@ -248,6 +252,7 @@ jobs:
           ignore-unfixed: true
       - name: Validate Compose configuration
         env:
+          AUTH_MODE: google
           SESSION_SECRET: ci-session-secret-with-at-least-32-characters
           CONNECTOR_MASTER_KEY: ci-master-key-with-at-least-32-characters
           POSTGRES_PASSWORD: ci-postgres-password
