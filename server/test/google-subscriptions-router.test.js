@@ -32,10 +32,34 @@ function memoryStore() {
   }
 }
 
+function memoryStateStore() {
+  let version = 1
+  let payload = {
+    state: { accounts: [], transactions: [], goals: [] },
+    secureData: {
+      subscriptions: [
+        { id: 'google:one', source: 'google', product: 'Google One' },
+        { id: 'manual:gym', source: 'manual', product: 'Gym' },
+      ],
+    },
+  }
+  return {
+    async get() { return { payload: structuredClone(payload), version, updatedAt: null } },
+    async save(_user, next, expectedVersion) {
+      assert.equal(expectedVersion, version)
+      payload = structuredClone(next)
+      version += 1
+      return { version, updatedAt: '2026-08-04T14:00:00.000Z' }
+    },
+    snapshot() { return structuredClone(payload) },
+  }
+}
+
 function request(method, path, payload) {
   const chunks = payload === undefined ? [] : [Buffer.from(JSON.stringify(payload))]
   return {
     method,
+    url: path,
     headers: { cookie: `fp_session=${encodeURIComponent(createSession('user-1', secret))}`, ...(payload === undefined ? {} : { 'content-type': 'application/json' }) },
     async *[Symbol.asyncIterator]() { for (const chunk of chunks) yield chunk },
   }
@@ -65,10 +89,10 @@ function userId(req) {
   return payload.sub
 }
 
-function harness(store = memoryStore()) {
+function harness(store = memoryStore(), stateStore = memoryStateStore()) {
   const calls = { exchanges: 0, revokes: 0 }
   const handler = createGoogleSubscriptionsRouter({
-    env, origin, sessionSecret: secret, store, body: jsonBody, userId,
+    env, origin, sessionSecret: secret, store, stateStore, body: jsonBody, userId,
     send(res, status, payload, headers = {}) { res.writeHead(status, headers); res.end(JSON.stringify(payload)) },
     adapter: {
       capability: () => ({ enabled: true, configured: true, ready: true }),
@@ -78,11 +102,11 @@ function harness(store = memoryStore()) {
       async revokeAccess() { calls.revokes += 1; return true },
     },
   })
-  return { handler, store, calls }
+  return { handler, store, stateStore, calls }
 }
 
-test('start, callback, sync, and disconnect form a complete secure lifecycle', async () => {
-  const { handler, calls } = harness()
+test('start, callback, sync, and query-parameter deletion form a complete secure lifecycle', async () => {
+  const { handler, calls, stateStore } = harness()
   const startResponse = response()
   await handler(request('POST', '/api/subscriptions/google/start', { redirectUri: `${origin}/connections` }), startResponse, new URL(`${origin}/api/subscriptions/google/start`))
   assert.equal(startResponse.status, 200)
@@ -105,9 +129,27 @@ test('start, callback, sync, and disconnect form a complete secure lifecycle', a
   assert.equal(syncResponse.payload.subscriptions.length, 1)
 
   const deleteResponse = response()
-  await handler(request('DELETE', '/api/subscriptions/google', { deleteImportedData: true }), deleteResponse, new URL(`${origin}/api/subscriptions/google`))
-  assert.deepEqual(deleteResponse.payload, { disconnected: true, revoked: true, deletedImportedData: true })
+  const deleteUrl = new URL(`${origin}/api/subscriptions/google?deleteImportedData=true`)
+  await handler(request('DELETE', deleteUrl.pathname), deleteResponse, deleteUrl)
+  assert.deepEqual(deleteResponse.payload, {
+    disconnected: true,
+    revoked: true,
+    deletedImportedData: true,
+    deletedSubscriptionCount: 1,
+    cloudStateUpdated: true,
+  })
   assert.equal(calls.revokes, 1)
+  assert.deepEqual(stateStore.snapshot().secureData.subscriptions, [{ id: 'manual:gym', source: 'manual', product: 'Gym' }])
+})
+
+test('disconnect without deletion preserves persisted imported subscriptions', async () => {
+  const { handler, stateStore } = harness()
+  const deleteResponse = response()
+  await handler(request('DELETE', '/api/subscriptions/google'), deleteResponse, new URL(`${origin}/api/subscriptions/google`))
+  assert.equal(deleteResponse.payload.deletedImportedData, false)
+  assert.equal(deleteResponse.payload.deletedSubscriptionCount, 0)
+  assert.equal(deleteResponse.payload.cloudStateUpdated, false)
+  assert.equal(stateStore.snapshot().secureData.subscriptions.length, 2)
 })
 
 test('callback state is single-use and rejects replay', async () => {
