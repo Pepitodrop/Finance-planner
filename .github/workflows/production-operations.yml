@@ -72,7 +72,7 @@ jobs:
             -e BACKUP_FILE -e BACKUP_ENCRYPTION_KEY_FILE -e RESTORE_DATABASE_URL \
             postgres:17-bookworm bash ops/backup/restore-drill.sh
           test "$(psql "$RESTORE_DATABASE_URL" -Atc 'select count(*) from acceptance_probe')" = "1"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: production-operations-evidence
@@ -94,7 +94,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: node scripts/live-bank-acceptance.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: live-bank-acceptance

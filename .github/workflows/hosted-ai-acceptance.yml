@@ -35,7 +35,7 @@ jobs:
         run: node scripts/live-ai-acceptance.mjs
       - name: Upload hosted AI evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hosted-ai-acceptance
           path: artifacts/live-ai-acceptance.json
