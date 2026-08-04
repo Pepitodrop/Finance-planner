@@ -9,15 +9,15 @@ import {
 const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly'
 
 test('Google subscription capability fails closed until explicitly enabled and configured', () => {
-  assert.deepEqual(googleSubscriptionCapability({}), {
-    enabled: false,
-    source: 'gmail',
-    configured: false,
-    ready: false,
-    reason: 'disabled',
-    requiredScopes: ['openid', 'email', 'profile', GMAIL_SCOPE],
-    limitations: assert.matching(Array),
-  })
+  const disabled = googleSubscriptionCapability({})
+  assert.equal(disabled.enabled, false)
+  assert.equal(disabled.source, 'gmail')
+  assert.equal(disabled.configured, false)
+  assert.equal(disabled.ready, false)
+  assert.equal(disabled.reason, 'disabled')
+  assert.deepEqual(disabled.requiredScopes, ['openid', 'email', 'profile', GMAIL_SCOPE])
+  assert.ok(Array.isArray(disabled.limitations) && disabled.limitations.length >= 1)
+
   const enabled = googleSubscriptionCapability({ GOOGLE_SUBSCRIPTIONS_ENABLED: 'true' })
   assert.equal(enabled.enabled, true)
   assert.equal(enabled.ready, false)
