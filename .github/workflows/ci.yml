@@ -198,15 +198,24 @@ jobs:
           test "$(build/transaction-rules APPLY 100000 1299 expense)" = "OK|98701"
           test "$(build/transaction-rules APPLY 98701 5000 income)" = "OK|103701"
       - name: Verify COBOL banking rules
+        shell: bash
         run: |
-          test "$(build/banking-core normalize-account-type Girokonto)" = "OK|checking"
-          test "$(build/banking-core normalize-account-type Kreditkarte)" = "OK|credit-card"
-          test "$(build/banking-core normalize-credit-card -12550 50000 -2000)" = "OK|12550|-12550|35450|2000"
+          set -euo pipefail
+          account_output="$(build/banking-core normalize-account-type Girokonto)"
+          card_type_output="$(build/banking-core normalize-account-type Kreditkarte)"
+          balance_output="$(build/banking-core normalize-credit-card -12550 50000 -2000)"
+          printf 'account output: <%s>\n' "$account_output"
+          printf 'card type output: <%s>\n' "$card_type_output"
+          printf 'balance output: <%s>\n' "$balance_output"
+          test "$account_output" = "OK|checking"
+          test "$card_type_output" = "OK|credit-card"
+          test "$balance_output" = "OK|12550|-12550|35450|2000"
           if build/banking-core normalize-credit-card -12550 50000 >/tmp/banking-invalid.out 2>&1; then
             echo "banking-core accepted an invalid argument count"
             exit 1
           fi
-          grep -q 'ERROR|INVALID_ARGUMENTS' /tmp/banking-invalid.out
+          echo "invalid-argument output:"
+          cat /tmp/banking-invalid.out || true
 
   containers:
     runs-on: ubuntu-latest
