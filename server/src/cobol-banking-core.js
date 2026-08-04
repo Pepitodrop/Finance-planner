@@ -57,48 +57,6 @@ export function normalizeAccountTypeFallback(value) {
   return normalized
 }
 
-export function normalizeProviderAccountTypeFallback(value) {
-  const key = String(value || '').trim().toUpperCase()
-  if (['SVGS', 'SAVINGS', 'DEPOSIT'].includes(key)) return 'savings'
-  if (key === 'CASH') return 'cash'
-  if (['CARD', 'CREDITCARD', 'CREDIT-CARD'].includes(key)) return 'credit-card'
-  if (['INVE', 'INVESTMENT', 'BROKERAGE', 'TRAS'].includes(key)) return 'investment'
-  return 'checking'
-}
-
-export function normalizeProviderAmountFallback(value) {
-  const match = String(value).trim().match(/^(-?)(\d+)(?:\.(\d{1,2}))?$/)
-  if (!match) throw new CobolBankingCoreError('Provider returned an invalid monetary amount.', 'invalid_provider_amount')
-  const [, sign, units, fraction = ''] = match
-  const cents = Number(units) * 100 + Number(fraction.padEnd(2, '0'))
-  const signed = sign ? -cents : cents
-  return safeInteger(signed, 'providerAmountCents')
-}
-
-export function validateProviderConsentFallback(provider, status) {
-  const normalizedProvider = String(provider || '').trim().toLowerCase()
-  const normalizedStatus = String(status || '').trim().toUpperCase()
-  if (normalizedProvider === 'gocardless') {
-    if (normalizedStatus === 'LN') return 'ready'
-    if (['EX', 'RJ', 'SU'].includes(normalizedStatus)) return 'expired'
-    return 'pending'
-  }
-  if (['ACTIVE', 'AUTHORIZED', 'READY'].includes(normalizedStatus)) return 'ready'
-  if (['EXPIRED', 'REVOKED', 'REJECTED'].includes(normalizedStatus)) return 'expired'
-  return 'pending'
-}
-
-export function validateReadOnlyScopeFallback(scope) {
-  const normalized = String(scope || '').trim().toLowerCase()
-  if (/(payment|payout|transfer|order|mandate|debit)/.test(normalized)) {
-    throw new CobolBankingCoreError('Money-movement provider scopes are forbidden.', 'money_movement_scope_forbidden')
-  }
-  if (!/(balance|detail|transaction|report)/.test(normalized)) {
-    throw new CobolBankingCoreError('At least one read-only provider scope is required.', 'read_only_scope_required')
-  }
-  return true
-}
-
 function parseResult(stdout) {
   const line = String(stdout || '').trim().split(/\r?\n/).at(-1) || ''
   const parts = line.split('|').map((part) => part.trim())
@@ -138,6 +96,17 @@ export class CobolBankingCore {
     }
   }
 
+  async executeProviderOperation(args) {
+    const result = await this.execute(args)
+    if (!result) {
+      throw new CobolBankingCoreError(
+        'Compiled COBOL banking core is required for provider banking operations.',
+        'cobol_unavailable',
+      )
+    }
+    return result
+  }
+
   async normalizeAccountType(value) {
     const result = await this.execute(['normalize-account-type', String(value)])
     const normalized = result?.[0] || normalizeAccountTypeFallback(value)
@@ -146,29 +115,27 @@ export class CobolBankingCore {
   }
 
   async normalizeProviderAccountType(value) {
-    const result = await this.execute(['normalize-provider-account-type', String(value || '')])
-    const normalized = result?.[0] || normalizeProviderAccountTypeFallback(value)
+    const result = await this.executeProviderOperation(['normalize-provider-account-type', String(value || '')])
+    const normalized = result[0]
     if (!ACCOUNT_TYPES.has(normalized)) throw new CobolBankingCoreError('Malformed provider account type returned by COBOL.', 'malformed_cobol_output')
     return normalized
   }
 
   async normalizeProviderAmount(value) {
-    const result = await this.execute(['normalize-provider-amount', String(value)])
-    if (!result) return normalizeProviderAmountFallback(value)
+    const result = await this.executeProviderOperation(['normalize-provider-amount', String(value)])
     if (result.length !== 1) throw new CobolBankingCoreError('Malformed provider amount returned by COBOL.', 'malformed_cobol_output')
     return parseCobolInteger(result[0], 'provider amount')
   }
 
   async validateProviderConsent(provider, status) {
-    const result = await this.execute(['validate-provider-consent', String(provider), String(status || '')])
-    const consent = result?.[0] || validateProviderConsentFallback(provider, status)
+    const result = await this.executeProviderOperation(['validate-provider-consent', String(provider), String(status || '')])
+    const consent = result[0]
     if (!CONSENT_STATES.has(consent)) throw new CobolBankingCoreError('Malformed provider consent state returned by COBOL.', 'malformed_cobol_output')
     return consent
   }
 
   async validateReadOnlyScope(scope) {
-    const result = await this.execute(['validate-read-only-scope', String(scope)])
-    if (!result) return validateReadOnlyScopeFallback(scope)
+    const result = await this.executeProviderOperation(['validate-read-only-scope', String(scope)])
     if (result.length !== 1 || result[0] !== 'read-only') throw new CobolBankingCoreError('Malformed read-only scope result returned by COBOL.', 'malformed_cobol_output')
     return true
   }
