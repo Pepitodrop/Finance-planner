@@ -6,6 +6,13 @@
   --glass-shadow: 0 24px 70px rgba(0, 0, 20, .46), inset 0 1px 0 rgba(255,255,255,.16), inset 0 -1px 0 rgba(70, 42, 170, .2);
 }
 
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100%;
+}
+
 body::before {
   content: '';
   position: fixed;
@@ -112,6 +119,88 @@ body::before {
 
 .recharts-wrapper svg { filter: drop-shadow(0 0 12px rgba(125, 66, 255, .18)); }
 .recharts-area-area { filter: drop-shadow(0 0 12px rgba(153, 68, 255, .32)); }
+
+/* Use the whole available desktop canvas instead of leaving a large dead column. */
+.app-shell {
+  width: 100%;
+  max-width: none;
+  grid-template-columns: clamp(248px, 15.5vw, 292px) minmax(0, 1fr);
+}
+
+main {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  padding-inline: clamp(26px, 2.4vw, 52px);
+}
+
+main > *,
+.topbar,
+.stats-grid,
+.dashboard-grid,
+.transactions-layout,
+.transactions-shell,
+.goals-reference-page,
+.reference-page-toolbar,
+.reference-kpi-grid,
+.reference-content-grid,
+.table-panel {
+  width: 100%;
+  max-width: none !important;
+}
+
+.dashboard-grid {
+  grid-template-columns: minmax(0, 1.55fr) minmax(340px, .95fr);
+}
+
+.dashboard-grid.lower {
+  grid-template-columns: minmax(300px, .95fr) minmax(300px, .95fr) minmax(360px, 1.2fr);
+}
+
+.transactions-layout {
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 22vw, 370px);
+}
+
+.reference-content-grid {
+  grid-template-columns: minmax(0, 1fr) clamp(280px, 21vw, 360px);
+}
+
+.auth-screen,
+.vault-screen {
+  width: 100%;
+  min-width: 100%;
+  background:
+    radial-gradient(circle at 50% 35%, rgba(95, 59, 220, .13), transparent 32%),
+    linear-gradient(180deg, #060918, #050817);
+}
+
+.auth-card {
+  width: min(100%, 31rem);
+}
+
+@media (min-width: 1700px) {
+  main { padding-inline: clamp(42px, 3vw, 68px); }
+  .stats-grid { gap: 20px; }
+  .dashboard-grid,
+  .dashboard-grid.lower,
+  .reference-content-grid { gap: 20px; }
+  .panel { padding: 24px 26px; }
+}
+
+@media (max-width: 1250px) {
+  .app-shell { grid-template-columns: 224px minmax(0, 1fr); }
+  .dashboard-grid.lower { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .recent-panel { grid-column: 1 / -1; }
+  .transactions-layout,
+  .reference-content-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
+  .app-shell { display: block; }
+  main { padding-inline: 14px; }
+  .dashboard-grid,
+  .dashboard-grid.lower { grid-template-columns: 1fr; }
+}
 
 @media (prefers-reduced-motion: no-preference) {
   .sidebar nav button.active::after {
