@@ -17,6 +17,7 @@
        01 WS-WHOLE                  PIC X(24).
        01 WS-FRACTION               PIC X(8).
        01 WS-FRACTION-LENGTH        PIC 9(4) COMP-5.
+       01 WS-MATCH-COUNT            PIC 9(4) COMP-5.
        01 WS-TEST-NUMVAL            PIC 9(4) COMP-5.
        01 WS-DECIMAL-AMOUNT         PIC S9(13)V99 COMP-3.
        01 WS-CENTS                  PIC S9(15) COMP-5.
@@ -140,7 +141,14 @@
               STOP RUN RETURNING 3
            END-IF
 
-           IF FUNCTION INDEX(TRIM(WS-DECIMAL-TEXT), ".") > 0
+           MOVE 0 TO WS-MATCH-COUNT
+           INSPECT WS-DECIMAL-TEXT
+              TALLYING WS-MATCH-COUNT FOR ALL "."
+           IF WS-MATCH-COUNT > 1
+              DISPLAY "ERROR|INVALID_PROVIDER_AMOUNT"
+              STOP RUN RETURNING 3
+           END-IF
+           IF WS-MATCH-COUNT = 1
               MOVE SPACES TO WS-WHOLE WS-FRACTION
               UNSTRING TRIM(WS-DECIMAL-TEXT)
                  DELIMITED BY "."
@@ -195,35 +203,64 @@
            ACCEPT WS-SCOPE FROM ARGUMENT-VALUE
            MOVE FUNCTION LOWER-CASE(TRIM(WS-SCOPE)) TO WS-SCOPE
 
-           IF FUNCTION INDEX(WS-SCOPE, "payment") > 0
-              DISPLAY "ERROR|MONEY_MOVEMENT_SCOPE_FORBIDDEN"
-              STOP RUN RETURNING 4
-           END-IF
-           IF FUNCTION INDEX(WS-SCOPE, "payout") > 0
-              DISPLAY "ERROR|MONEY_MOVEMENT_SCOPE_FORBIDDEN"
-              STOP RUN RETURNING 4
-           END-IF
-           IF FUNCTION INDEX(WS-SCOPE, "transfer") > 0
-              DISPLAY "ERROR|MONEY_MOVEMENT_SCOPE_FORBIDDEN"
-              STOP RUN RETURNING 4
-           END-IF
-           IF FUNCTION INDEX(WS-SCOPE, "order") > 0
-              DISPLAY "ERROR|MONEY_MOVEMENT_SCOPE_FORBIDDEN"
-              STOP RUN RETURNING 4
-           END-IF
-           IF FUNCTION INDEX(WS-SCOPE, "mandate") > 0
-              DISPLAY "ERROR|MONEY_MOVEMENT_SCOPE_FORBIDDEN"
-              STOP RUN RETURNING 4
-           END-IF
-           IF FUNCTION INDEX(WS-SCOPE, "debit") > 0
+           MOVE 0 TO WS-MATCH-COUNT
+           INSPECT WS-SCOPE
+              TALLYING WS-MATCH-COUNT FOR ALL "payment"
+           IF WS-MATCH-COUNT > 0
               DISPLAY "ERROR|MONEY_MOVEMENT_SCOPE_FORBIDDEN"
               STOP RUN RETURNING 4
            END-IF
 
-           IF FUNCTION INDEX(WS-SCOPE, "balance") = 0
-              AND FUNCTION INDEX(WS-SCOPE, "detail") = 0
-              AND FUNCTION INDEX(WS-SCOPE, "transaction") = 0
-              AND FUNCTION INDEX(WS-SCOPE, "report") = 0
+           MOVE 0 TO WS-MATCH-COUNT
+           INSPECT WS-SCOPE
+              TALLYING WS-MATCH-COUNT FOR ALL "payout"
+           IF WS-MATCH-COUNT > 0
+              DISPLAY "ERROR|MONEY_MOVEMENT_SCOPE_FORBIDDEN"
+              STOP RUN RETURNING 4
+           END-IF
+
+           MOVE 0 TO WS-MATCH-COUNT
+           INSPECT WS-SCOPE
+              TALLYING WS-MATCH-COUNT FOR ALL "transfer"
+           IF WS-MATCH-COUNT > 0
+              DISPLAY "ERROR|MONEY_MOVEMENT_SCOPE_FORBIDDEN"
+              STOP RUN RETURNING 4
+           END-IF
+
+           MOVE 0 TO WS-MATCH-COUNT
+           INSPECT WS-SCOPE
+              TALLYING WS-MATCH-COUNT FOR ALL "order"
+           IF WS-MATCH-COUNT > 0
+              DISPLAY "ERROR|MONEY_MOVEMENT_SCOPE_FORBIDDEN"
+              STOP RUN RETURNING 4
+           END-IF
+
+           MOVE 0 TO WS-MATCH-COUNT
+           INSPECT WS-SCOPE
+              TALLYING WS-MATCH-COUNT FOR ALL "mandate"
+           IF WS-MATCH-COUNT > 0
+              DISPLAY "ERROR|MONEY_MOVEMENT_SCOPE_FORBIDDEN"
+              STOP RUN RETURNING 4
+           END-IF
+
+           MOVE 0 TO WS-MATCH-COUNT
+           INSPECT WS-SCOPE
+              TALLYING WS-MATCH-COUNT FOR ALL "debit"
+           IF WS-MATCH-COUNT > 0
+              DISPLAY "ERROR|MONEY_MOVEMENT_SCOPE_FORBIDDEN"
+              STOP RUN RETURNING 4
+           END-IF
+
+           MOVE 0 TO WS-MATCH-COUNT
+           INSPECT WS-SCOPE
+              TALLYING WS-MATCH-COUNT FOR ALL "balance"
+           INSPECT WS-SCOPE
+              TALLYING WS-MATCH-COUNT FOR ALL "detail"
+           INSPECT WS-SCOPE
+              TALLYING WS-MATCH-COUNT FOR ALL "transaction"
+           INSPECT WS-SCOPE
+              TALLYING WS-MATCH-COUNT FOR ALL "report"
+           IF WS-MATCH-COUNT = 0
               DISPLAY "ERROR|READ_ONLY_SCOPE_REQUIRED"
               STOP RUN RETURNING 4
            END-IF
