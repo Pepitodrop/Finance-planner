@@ -117,8 +117,17 @@ function defaultProviderDescriptions(env) {
   ]
 }
 
+function environmentKey(providerId, suffix) {
+  return `${String(providerId).toUpperCase().replaceAll('-', '_')}_${suffix}`
+}
+
 function webhookSecretKey(providerId) {
-  return `${String(providerId).toUpperCase().replaceAll('-', '_')}_WEBHOOK_SECRET`
+  return environmentKey(providerId, 'WEBHOOK_SECRET')
+}
+
+function ownerUserId(env, provider) {
+  if (provider.mode !== 'owner') return null
+  return String(env[environmentKey(provider.id, 'OWNER_USER_ID')] || '').trim() || null
 }
 
 export function bankProductionCapabilities(env, persistence, providerRegistry) {
@@ -126,7 +135,11 @@ export function bankProductionCapabilities(env, persistence, providerRegistry) {
   const providers = providerRegistry?.list?.() || defaultProviderDescriptions(env)
   const configuredProviders = Object.fromEntries(providers.map((provider) => [
     provider.id,
-    Boolean(provider.available !== false && provider.configured),
+    Boolean(
+      provider.available !== false
+      && provider.configured
+      && (provider.mode !== 'owner' || ownerUserId(env, provider)),
+    ),
   ]))
   const webhookRequired = Object.fromEntries(providers.map((provider) => [provider.id, Boolean(provider.webhookRequired)]))
   const webhookVerification = Object.fromEntries(providers.map((provider) => [
@@ -135,6 +148,11 @@ export function bankProductionCapabilities(env, persistence, providerRegistry) {
   ]))
   const automaticMonitoringConfigured = Object.values(configuredProviders).some(Boolean)
   const blockers = []
+  for (const provider of providers) {
+    if (provider.available !== false && provider.configured && provider.mode === 'owner' && !ownerUserId(env, provider)) {
+      blockers.push(`${provider.id}_owner_user_required`)
+    }
+  }
   if (automaticMonitoringConfigured && deploymentProduction && persistence.driver !== 'postgres') blockers.push('postgres_persistence_required')
   if (!automaticMonitoringConfigured) blockers.push('provider_credentials_required')
   for (const provider of providers) {
