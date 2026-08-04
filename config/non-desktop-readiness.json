@@ -70,7 +70,7 @@
       "label": "Frontend",
       "gates": [
         { "id": "browser-acceptance", "weight": 30, "evidence": [{ "path": "scripts/browser-production-acceptance.mjs", "contains": ["desktopAccessibility", "transactionCrud", "accountDeletion"] }] },
-        { "id": "accessibility", "weight": 25, "evidence": [{ "path": "src/App.tsx", "contains": ["aria-current", "aria-modal"] }, { "path": "src/WebMobileHardening.tsx", "contains": ["skip-link"] }, { "path": "src/production-readiness.css", "contains": ["focus-visible", "prefers-reduced-motion"] }, { "path": "src/appAccessibility.test.tsx", "contains": ["axe.run"] }] },
+        { "id": "accessibility", "weight": 25, "evidence": [{ "path": "src/app/ApplicationShell.tsx", "contains": ["aria-current", "aria-modal"] }, { "path": "src/App.tsx", "contains": ["aria-modal"] }, { "path": "src/WebMobileHardening.tsx", "contains": ["skip-link"] }, { "path": "src/production-readiness.css", "contains": ["focus-visible", "prefers-reduced-motion"] }, { "path": "src/appAccessibility.test.tsx", "contains": ["axe.run"] }] },
         { "id": "responsive-pwa", "weight": 20, "evidence": [{ "path": "src/mobile.css", "contains": ["@media"] }, { "path": "public/manifest.webmanifest", "contains": ["share_target", "shortcuts"] }] },
         { "id": "automated-tests", "weight": 15, "evidence": [{ "path": "package.json", "contains": ["vitest run", "verify-production-readiness"] }, { "path": ".github/workflows/production-acceptance.yml", "contains": ["Chromium", "accessibility"] }] },
         { "id": "fault-and-sync-ux", "weight": 10, "evidence": [{ "path": "src/ErrorBoundary.tsx", "contains": ["ErrorBoundary"] }, { "path": "src/features/sync/CloudSyncStatus.tsx", "contains": ["conflict"] }] }

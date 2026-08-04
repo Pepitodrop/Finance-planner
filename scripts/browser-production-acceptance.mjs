@@ -166,7 +166,12 @@ async function navigate(client, sessionId, url) {
 
 async function clickButton(client, sessionId, text) {
   const clicked = await evaluate(client, sessionId, `(() => {
-    const target = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim().includes(${JSON.stringify(text)}) && !button.disabled)
+    const visible = (element) => {
+      const style = getComputedStyle(element)
+      const rect = element.getBoundingClientRect()
+      return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0
+    }
+    const target = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim().includes(${JSON.stringify(text)}) && !button.disabled && visible(button))
     if (!target) return false
     target.click()
     return true
@@ -269,7 +274,7 @@ async function runAcceptance() {
         language: document.documentElement.lang,
         mainExists: Boolean(document.querySelector('main#main-content')),
         skipLinkExists: Boolean(document.querySelector('a.skip-link[href="#main-content"]')),
-        currentNavigationItems: document.querySelectorAll('nav [aria-current="page"]').length,
+        currentNavigationItems: [...document.querySelectorAll('nav [aria-current="page"]')].filter(visible).length,
         visibleControlCount: controls.length,
         unnamedButtons: unnamedButtons.length,
         unlabelledInputs: unlabelledInputs.length,
@@ -334,6 +339,7 @@ async function runAcceptance() {
       return {
         width: innerWidth,
         height: innerHeight,
+        currentNavigationItems: [...document.querySelectorAll('nav [aria-current="page"]')].filter(visible).length,
         horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
         visibleButtons: buttons.length,
         undersized,
@@ -341,6 +347,7 @@ async function runAcceptance() {
       }
     })()`)
     assert.equal(report.checks.mobile.width, 390)
+    assert.equal(report.checks.mobile.currentNavigationItems, 1)
     assert.equal(report.checks.mobile.horizontalOverflow, false)
     assert.deepEqual(report.checks.mobile.undersized, [])
 
@@ -361,7 +368,9 @@ async function runAcceptance() {
     assert.equal(report.checks.manifest.display, 'standalone')
     assert.ok(report.checks.manifest.iconCount >= 2)
 
-    await clickButton(client, sessionId, 'Daten')
+    await clickButton(client, sessionId, 'More')
+    await waitFor(client, sessionId, 'Boolean(document.querySelector("#app-more-sheet"))', 'mobile More sheet')
+    await clickButton(client, sessionId, 'Data and Backup')
     await waitFor(client, sessionId, 'document.body?.innerText.includes("Konto und sämtliche Serverdaten löschen")', 'account deletion controls')
     report.checks.accountDeletion = await evaluate(client, sessionId, `(() => {
       const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.includes('Konto endgültig löschen'))
@@ -374,7 +383,9 @@ async function runAcceptance() {
     report.checks.accountDeletion.enabledAfterExactConfirmation = await evaluate(client, sessionId, `!document.querySelector('.danger-action')?.disabled`)
     assert.equal(report.checks.accountDeletion.enabledAfterExactConfirmation, true)
 
-    await clickButton(client, sessionId, 'Assistent')
+    await clickButton(client, sessionId, 'More')
+    await waitFor(client, sessionId, 'Boolean(document.querySelector("#app-more-sheet"))', 'mobile More sheet for Finance Assistant')
+    await clickButton(client, sessionId, 'Finance Assistant')
     await waitFor(client, sessionId, 'document.body?.innerText.includes("Lernender Monatsbudgetplan")', 'learning budget assistant')
     report.checks.smartBudget = await evaluate(client, sessionId, `(() => ({
       persistentLearning: document.body.innerText.includes('Persistentes Verhaltenslernen'),

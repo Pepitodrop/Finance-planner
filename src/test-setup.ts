@@ -25,6 +25,8 @@ if (typeof window !== 'undefined') {
     }
   }
 
+  window.scrollTo = () => {}
+
   // Component tests run with no backend present. Default every unmocked fetch to a
   // fast, real network-style failure so offline-first code paths (cloud sync, etc.)
   // fail closed deterministically instead of hanging or making a real request.

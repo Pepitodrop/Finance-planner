@@ -79,7 +79,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
 }
 
 @media (forced-colors: active) {
-  .active, .primary, .pill, .mobile-bottom-nav button, .platform-action-bar, .platform-action-bar button {
+  .active, .primary, .pill, .platform-action-bar, .platform-action-bar button {
     border: 1px solid ButtonText;
   }
 }
