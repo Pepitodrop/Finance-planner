@@ -1,20 +1,111 @@
-import { writeFile } from 'node:fs/promises'
-import { createTestEnrollment } from '../src/test-enrollment.js'
+import { createHash } from 'node:crypto'
+import { AuthStore } from '../src/auth-store.js'
+import { createDatabase, migrateDatabase } from '../src/database.js'
+import { encryptCloudPayload } from '../src/user-state-store.js'
+import { buildDemoPayload } from './reset-and-seed-demo.mjs'
 
-const email = String(process.argv[2] || process.env.TEST_ACCOUNT_EMAIL || '').trim()
-const name = String(process.env.TEST_ACCOUNT_NAME || 'Finance Planner Test').trim()
-const ttlMinutes = Number(process.env.TEST_ENROLLMENT_TTL_MINUTES || 15)
-const origin = String(process.env.APP_ORIGIN || 'http://localhost:8080').replace(/\/$/, '')
-const outputPath = String(process.env.TEST_ENROLLMENT_OUTPUT || '/tmp/finance-planner-test-enrollment.txt')
+function requiredEmail(value) {
+  const email = String(value || '').trim().toLowerCase()
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error('A valid TEST_ACCOUNT_EMAIL is required.')
+  }
+  return email
+}
 
-const result = await createTestEnrollment({ email, name, ttlMinutes })
-const enrollmentUrl = `${origin}/test-enrollment?token=${encodeURIComponent(result.token)}`
-await writeFile(outputPath, `${enrollmentUrl}\n`, { mode: 0o600 })
+const env = process.env
+const email = requiredEmail(process.argv[2] || env.TEST_ACCOUNT_EMAIL)
+const name = String(env.TEST_ACCOUNT_NAME || 'Finance Planner Test').trim()
+const seedDemoData = String(env.SEED_DEMO_DATA || '').toLowerCase() === 'true'
+const pool = createDatabase(env.DATABASE_URL)
 
-console.log(JSON.stringify({
-  email: result.email,
-  userId: result.userId,
-  expiresAt: new Date(result.expiresAt).toISOString(),
-  enrollmentUrlFile: outputPath,
-  note: 'Read the URL file from the server terminal and delete it after enrollment.',
-}, null, 2))
+await migrateDatabase(pool)
+
+try {
+  const store = new AuthStore(
+    env.AUTH_STORE_PATH || './data/auth.enc.json',
+    env.AUTH_MASTER_KEY || env.CONNECTOR_MASTER_KEY || '',
+    pool,
+    env.AUTH_MASTER_KEY ? env.CONNECTOR_MASTER_KEY || '' : '',
+  )
+
+  await store.load()
+
+  const userId = `test:${createHash('sha256').update(email).digest('hex').slice(0, 24)}`
+  const now = new Date().toISOString()
+
+  await store.mutate((data) => {
+    const existing = data.users[userId] || store.findByEmail(email)
+    const user = existing || {
+      id: userId,
+      email,
+      name,
+      passkeys: [],
+      createdAt: now,
+    }
+
+    user.id = userId
+    user.email = email
+    user.name = name
+    user.passkeys ||= []
+    user.updatedAt = now
+    data.users[userId] = user
+  })
+
+  const verificationStore = new AuthStore(
+    env.AUTH_STORE_PATH || './data/auth.enc.json',
+    env.AUTH_MASTER_KEY || env.CONNECTOR_MASTER_KEY || '',
+    pool,
+    env.AUTH_MASTER_KEY ? env.CONNECTOR_MASTER_KEY || '' : '',
+  )
+  await verificationStore.load()
+
+  const verifiedUser = verificationStore.findByEmail(email)
+  if (!verifiedUser || verifiedUser.id !== userId) {
+    throw new Error(`Test account persistence verification failed for ${email}.`)
+  }
+
+  let seedSummary = null
+  if (seedDemoData) {
+    const payload = buildDemoPayload(new Date())
+    const encryptedPayload = encryptCloudPayload(
+      payload,
+      env.CONNECTOR_MASTER_KEY,
+      userId,
+    )
+
+    const result = await pool.query(
+      `INSERT INTO user_finance_state
+         (user_id, encrypted_payload, version, updated_at)
+       VALUES ($1, $2, 1, now())
+       ON CONFLICT (user_id)
+       DO UPDATE SET
+         encrypted_payload = EXCLUDED.encrypted_payload,
+         version = user_finance_state.version + 1,
+         updated_at = now()
+       RETURNING version, updated_at`,
+      [userId, encryptedPayload],
+    )
+
+    seedSummary = {
+      version: Number(result.rows[0].version),
+      updatedAt: result.rows[0].updated_at,
+      accounts: payload.state.accounts.length,
+      transactions: payload.state.transactions.length,
+      goals: payload.state.goals.length,
+    }
+  }
+
+  console.log(JSON.stringify({
+    created: true,
+    persisted: true,
+    email,
+    userId,
+    name,
+    passwordLoginConfigured: Boolean(env.TEST_ACCOUNT_PASSWORD_HASH),
+    demoDataSeeded: seedDemoData,
+    seed: seedSummary,
+    note: 'This command creates a persistent password-capable test account. It does not create a passkey enrollment token.',
+  }, null, 2))
+} finally {
+  await pool.end()
+}
