@@ -394,7 +394,7 @@ async function captureTransactionsEvidence(client, sessionId, width, height) {
 async function setAccountsViewport(client, sessionId, width, height) {
   await client.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width <= 768, screenWidth: width, screenHeight: height }, sessionId)
   await waitFor(client,sessionId,`(async()=>{await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));return innerWidth===${width}&&innerHeight===${height}})()`,'settled Accounts navigation viewport')
-  const navigated=await evaluate(client,sessionId,`(()=>{const visible=element=>{const style=getComputedStyle(element),rect=element.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&rect.width>0&&rect.height>0};const target=[...document.querySelectorAll('nav button[aria-label="Accounts"]')].find(visible);if(!target)return false;target.click();return true})()`)
+  const navigated=await evaluate(client,sessionId,`(()=>{if(document.querySelector('[data-accounts-ready=true]'))return true;const visible=element=>{const style=getComputedStyle(element),rect=element.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&rect.width>0&&rect.height>0};const target=[...document.querySelectorAll('nav button[aria-label="Accounts"]')].find(visible);if(!target)return false;target.click();return true})()`)
   assert.equal(navigated,true,'Visible Accounts navigation control not found')
   await waitFor(client, sessionId, `(async()=>{await document.fonts.ready;await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));return innerWidth===${width}&&innerHeight===${height}&&Boolean(document.querySelector('[data-accounts-ready=true]'))})()`, `Accounts ${width}x${height}`)
 }
@@ -412,6 +412,8 @@ async function accountsAssertions(client, sessionId, expectedMode = 'overview') 
 
 async function captureAccountsEvidence(client, sessionId, width, height) {
   await setAccountsViewport(client, sessionId, width, height)
+  const fixtureActivated=await evaluate(client,sessionId,`(()=>{if(document.querySelectorAll('.accounts-list li').length>=6)return false;if(typeof window.__financePlannerAcceptanceState!=='function')return null;window.__financePlannerAcceptanceState('accounts');return true})()`)
+  assert.notEqual(fixtureActivated,null,'Accounts acceptance fixture hook unavailable')
   await waitFor(client,sessionId,`document.querySelectorAll('.accounts-list li').length>=6`,'Accounts fixture rows')
   const assertions=await accountsAssertions(client,sessionId)
   assert.deepEqual(assertions.viewport,{width,height});assert.equal(assertions.root,true);assert.equal(assertions.language,'en');assert.equal(assertions.current,1);assert.match(assertions.currentText||'',/Accounts/);assert.equal(assertions.overflow,false);assert.equal(assertions.modal,false);assert.ok(assertions.accountRows>=6);assert.equal(assertions.summaryReconciles,true);assert.equal(assertions.empty,false);assert.equal(assertions.bottomNav,true)
@@ -669,12 +671,6 @@ async function runAcceptance() {
       report.checks.dashboardScreenshots.push(await captureDashboardEvidence(client, sessionId, width, height))
     }
     report.checks.runtimeSurfaceStress = await captureRuntimeSurfaceStressEvidence(client, sessionId)
-    report.checks.accountsFixtureActivation = await evaluate(client, sessionId, `(() => {
-      if (typeof window.__financePlannerAcceptanceState !== 'function') return false
-      window.__financePlannerAcceptanceState('accounts')
-      return true
-    })()`)
-    assert.equal(report.checks.accountsFixtureActivation, true)
     report.checks.accountsScreenshots = []
     for (const [width,height] of [[1440,900],[1024,768],[390,844],[360,800]]) report.checks.accountsScreenshots.push(await captureAccountsEvidence(client,sessionId,width,height))
     report.checks.accountDetail = await captureAccountDetailEvidence(client,sessionId,false)
