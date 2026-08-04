@@ -38,6 +38,21 @@ Set:
 - `GOOGLE_SUBSCRIPTIONS_DATA_SOURCE`
 - `VERIFY_GOOGLE_SUBSCRIPTIONS=true`
 
+Register this exact OAuth callback:
+
+```text
+https://<finance-planner-origin>/api/subscriptions/google/callback
+```
+
+The server exposes the complete authenticated lifecycle:
+
+- `POST /api/subscriptions/google/start`
+- `GET /api/subscriptions/google/callback`
+- `POST /api/subscriptions/google/sync`
+- `DELETE /api/subscriptions/google`
+
+OAuth state is signed, short-lived, single-use, tied to the authenticated user, and persisted in the encrypted connector store. Provider tokens remain server-side. Disconnect attempts provider revocation before deleting the encrypted connection record.
+
 The source response must use:
 
 ```json
