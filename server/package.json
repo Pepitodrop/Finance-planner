@@ -7,6 +7,7 @@
     "start": "node src/server.js",
     "test": "node --test",
     "test:ai-evaluation": "node --test test/ai-evaluation.test.js",
+    "verify:issue-105-live": "node scripts/verify-issue-105-live.mjs",
     "migrate": "node src/migrate.js",
     "migrate:rollback": "node src/migrate-rollback.js",
     "database:reset-demo": "node scripts/reset-and-seed-demo.mjs",
