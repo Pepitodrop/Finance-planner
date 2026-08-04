@@ -104,7 +104,7 @@ export function VaultGate({ children, userId }: VaultGateProps) {
   }
 
   if (mode === 'open') {
-    return <>{children}<button className="vault-lock-button" type="button" onClick={() => { void flushCloudState({ keepalive: true }); setPrivacyShield(true); lockVault(); window.location.reload() }}><LockKeyhole size={16}/> Sperren</button></>
+    return <>{children}<button className="vault-lock-button runtime-security-action" type="button" aria-label="Lock encrypted finance vault" onClick={() => { void flushCloudState({ keepalive: true }); setPrivacyShield(true); lockVault(); window.location.reload() }}><LockKeyhole size={16}/> Lock vault</button></>
   }
 
   return <main className="vault-screen">
