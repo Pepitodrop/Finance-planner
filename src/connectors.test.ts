@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applySyncPreview, buildSyncPreview, transactionFingerprint, type SyncPayload } from './connectors'
+import { applySyncPreview, buildSyncPreview, selectSyncPreviewAccounts, transactionFingerprint, type SyncPayload } from './connectors'
 import type { AppState, Transaction } from './types'
 
 const state: AppState = {
@@ -10,10 +10,13 @@ const state: AppState = {
 
 const payload: SyncPayload = {
   connection: { id: 'connection-1', provider: 'gocardless', displayName: 'Testbank', status: 'connected' },
-  accounts: [{ externalId: 'bank-account-1', name: 'Testbank Giro', type: 'checking', balanceCents: 250_000, currency: 'EUR' }],
+  accounts: [
+    { externalId: 'bank-account-1', name: 'Testbank Giro', type: 'checking', balanceCents: 250_000, currency: 'EUR' },
+    { externalId: 'card-1', name: 'Testbank Visa', type: 'credit-card', balanceCents: -12_500, creditLimitCents: 50_000, pendingAmountCents: -2_000, currency: 'EUR' },
+  ],
   transactions: [
     { externalId: 'tx-1', externalAccountId: 'bank-account-1', description: 'Gehalt Juli', amountCents: 200_000, currency: 'EUR', bookingDate: '2026-07-25' },
-    { externalId: 'tx-2', externalAccountId: 'bank-account-1', description: 'Kartenzahlung Café', amountCents: -850, currency: 'EUR', bookingDate: '2026-07-24' },
+    { externalId: 'tx-2', externalAccountId: 'card-1', description: 'Kartenzahlung Café', amountCents: -850, currency: 'EUR', bookingDate: '2026-07-24' },
     { externalId: 'tx-pending', externalAccountId: 'bank-account-1', description: 'Vorgemerkt', amountCents: -5000, currency: 'EUR', bookingDate: '2026-07-26', pending: true },
   ],
 }
@@ -21,11 +24,18 @@ const payload: SyncPayload = {
 describe('connector sync', () => {
   it('builds a preview and skips pending transactions', () => {
     const preview = buildSyncPreview(state, payload)
-    expect(preview.accountsToCreate).toHaveLength(1)
+    expect(preview.accountsToCreate).toHaveLength(2)
     expect(preview.transactionsToImport).toHaveLength(2)
     expect(preview.pendingCount).toBe(1)
-    expect(preview.transactionsToImport[0].type).toBe('income')
-    expect(preview.transactionsToImport[1].type).toBe('expense')
+    expect(preview.accountsToCreate[1].creditCard?.amountOwedCents).toBe(12_500)
+    expect(preview.accountsToCreate[1].creditCard?.availableCreditCents).toBe(35_500)
+  })
+
+  it('filters transactions when the user selects discovered accounts', () => {
+    const preview = buildSyncPreview(state, payload)
+    const selected = selectSyncPreviewAccounts(preview, ['connector:gocardless:card-1'])
+    expect(selected.accountsToCreate.map((account) => account.id)).toEqual(['connector:gocardless:card-1'])
+    expect(selected.transactionsToImport.map((transaction) => transaction.id)).toEqual(['connector:gocardless:tx-2'])
   })
 
   it('does not import the same external transaction twice', () => {
