@@ -1,15 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  ArrowDownRight,
-  ArrowUpRight,
   CalendarClock,
-  PiggyBank,
   Plus,
   Repeat2,
   Undo2,
-  WalletCards,
 } from 'lucide-react'
-import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { AiPanel } from './AiPanel'
 import type { AiSuggestion } from './ai'
 import { learnBehavior } from './behavior'
@@ -20,7 +15,8 @@ import { FinanceAssistant } from './FinanceAssistant'
 import { ReceiptReview } from './ReceiptReview'
 import { SavingsGoals } from './SavingsGoals'
 import { TransactionsPage } from './TransactionsPage'
-import { categoryBreakdown, currentMonthTotals, formatMoney, monthlyProjection, recurringPayments, totalBalance } from './finance'
+import { formatMoney, recurringPayments } from './finance'
+import { Dashboard } from './features/dashboard/Dashboard'
 import { loadState, resetStoredState, saveState } from './storage'
 import { addTransactionToState, deleteTransactionFromState, updateTransactionInState } from './transactionState'
 import type { AppState, Transaction, TransactionType } from './types'
@@ -29,8 +25,6 @@ import { ApplicationShell } from './app/ApplicationShell'
 import type { DestinationId } from './app/navigation'
 
 interface AppProps { userId: string; userName?: string }
-
-const CATEGORY_COLORS = ['#5878ff', '#5fe0a0', '#ff9f5b', '#ff8b96', '#7dd3fc', '#c084fc', '#f4d35e', '#4dd0c4']
 
 function App({ userId, userName }: AppProps) {
   const [state, setState] = useState<AppState>(() => loadState())
@@ -51,17 +45,7 @@ function App({ userId, userName }: AppProps) {
     return () => document.removeEventListener('keydown', closeOnEscape)
   }, [dialogOpen])
 
-  const totals = useMemo(() => currentMonthTotals(state.transactions), [state.transactions])
-  const projection = useMemo(() => monthlyProjection(state), [state])
-  const categories = useMemo(() => categoryBreakdown(state.transactions), [state.transactions])
   const recurring = useMemo(() => recurringPayments(state.transactions), [state.transactions])
-  const recentTransactions = useMemo(
-    () => [...state.transactions].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 4),
-    [state.transactions],
-  )
-  const net = totals.incomeCents - totals.expenseCents
-  const monthLabel = new Intl.DateTimeFormat('de-DE', { month: 'long' }).format(new Date())
-  const greetingName = userName?.trim().split(/\s+/)[0] || 'there'
 
   const openNewTransaction = () => {
     setEditing(null)
@@ -142,7 +126,7 @@ function App({ userId, userName }: AppProps) {
   }
 
   const titles: Record<DestinationId, string> = {
-    dashboard: 'Finanzübersicht',
+    dashboard: 'Dashboard',
     transactions: 'Transaktionen',
     goals: 'Sparziele',
     recurring: 'Wiederkehrende Zahlungen',
@@ -154,12 +138,9 @@ function App({ userId, userName }: AppProps) {
   }
 
   return <ApplicationShell activeDestination={tab} onNavigate={setTab}>
-      <header className={`topbar ${tab === 'dashboard' ? 'dashboard-topbar' : ''} ${tab === 'transactions' ? 'transactions-topbar' : ''}`}>
+      {tab !== 'dashboard' && <header className={`topbar ${tab === 'transactions' ? 'transactions-topbar' : ''}`}>
         <div>
-          {tab === 'dashboard' ? <>
-            <h1>Good evening, {greetingName} <span aria-hidden="true">👋</span></h1>
-            <p className="dashboard-subtitle">Here&apos;s what&apos;s happening with your finances today.</p>
-          </> : tab === 'transactions' ? <>
+          {tab === 'transactions' ? <>
             <h1>Transactions</h1>
             <p className="dashboard-subtitle">Track, manage and review all your transactions.</p>
           </> : <>
@@ -168,99 +149,9 @@ function App({ userId, userName }: AppProps) {
           </>}
         </div>
         <button type="button" className="primary" onClick={openNewTransaction}><Plus size={18}/> Manuelle Buchung</button>
-      </header>
+      </header>}
 
-      {tab === 'dashboard' && <>
-        <section className="stats-grid">
-          <article className="stat-card"><span>Gesamtvermögen</span><strong>{formatMoney(totalBalance(state))}</strong><small><ArrowUpRight size={15}/> Kontenübergreifend</small></article>
-          <article className="stat-card"><span>Einnahmen im {monthLabel}</span><strong>{formatMoney(totals.incomeCents)}</strong><small><ArrowUpRight size={15}/> Erfasst</small></article>
-          <article className="stat-card"><span>Ausgaben im {monthLabel}</span><strong>{formatMoney(totals.expenseCents)}</strong><small className="negative"><ArrowDownRight size={15}/> Inklusive Verträge</small></article>
-          <article className="stat-card highlight"><span>Monatlicher Überschuss</span><strong>{formatMoney(net)}</strong><small><PiggyBank size={15}/> Für Sparziele verfügbar</small></article>
-        </section>
-
-        <section className="dashboard-grid">
-          <article className="panel projection-panel">
-            <div className="panel-header"><div><p className="eyebrow">12 Monate</p><h2>Vermögensprognose</h2></div><span className="pill">Deterministisch</span></div>
-            <div className="chart">
-              <ResponsiveContainer width="100%" height={290}>
-                <AreaChart data={projection}>
-                  <CartesianGrid strokeDasharray="4 4" vertical={false}/>
-                  <XAxis dataKey="month"/>
-                  <YAxis tickFormatter={(value) => `${Math.round(Number(value) / 1000)}k`}/>
-                  <Tooltip formatter={(value) => formatMoney(Number(value) * 100)}/>
-                  <Area type="monotone" dataKey="balance" stroke="currentColor" fill="currentColor" fillOpacity={0.15} strokeWidth={3}/>
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </article>
-          <article className="panel">
-            <div className="panel-header"><div><p className="eyebrow">Ausgaben</p><h2>Kategorien</h2></div></div>
-            <div className="donut-layout">
-              <ResponsiveContainer width="100%" height={210}>
-                <PieChart>
-                  <Pie data={categories} dataKey="value" nameKey="name" innerRadius={58} outerRadius={86} paddingAngle={3}>
-                    {categories.map((category, index) => <Cell key={category.name} fill={CATEGORY_COLORS[index % CATEGORY_COLORS.length]}/>) }
-                  </Pie>
-                  <Tooltip formatter={(value) => formatMoney(Number(value) * 100)}/>
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="category-list">
-                {categories.slice(0, 5).map((category, index) => <div key={category.name}>
-                  <span><i className="category-dot" style={{ background: CATEGORY_COLORS[index % CATEGORY_COLORS.length] }}/>{category.name}</span>
-                  <strong>{formatMoney(category.value * 100)}</strong>
-                </div>)}
-              </div>
-            </div>
-          </article>
-        </section>
-
-        <section className="dashboard-grid lower">
-          <article className="panel">
-            <div className="panel-header"><div><p className="eyebrow">Konten</p><h2>Deine Guthaben</h2></div></div>
-            <div className="account-list">
-              {state.accounts.map((account) => <div className="account-row" key={account.id}>
-                <div className="account-icon"><WalletCards size={19}/></div>
-                <div><strong>{account.name}</strong><span>{account.type}</span></div>
-                <b>{formatMoney(account.balanceCents)}</b>
-              </div>)}
-            </div>
-          </article>
-
-          <article className="panel">
-            <div className="panel-header"><div><p className="eyebrow">Nächste Schritte</p><h2>Sparziele</h2></div></div>
-            <div className="goal-list">
-              {state.goals.map((goal) => {
-                const progress = Math.min(100, Math.round((goal.currentCents / goal.targetCents) * 100))
-                return <div className="goal-item" key={goal.id}>
-                  <div><strong>{goal.name}</strong><span>{formatMoney(goal.currentCents)} von {formatMoney(goal.targetCents)}</span></div>
-                  <b>{progress}%</b>
-                  <div className="progress"><span style={{ width: `${progress}%` }}/></div>
-                </div>
-              })}
-            </div>
-          </article>
-
-          <article className="panel recent-panel">
-            <div className="panel-header">
-              <div><p className="eyebrow">Aktivität</p><h2>Letzte Transaktionen</h2></div>
-              <button type="button" className="panel-link" onClick={() => setTab('transactions')}>Alle ansehen</button>
-            </div>
-            <div className="recent-transaction-list">
-              {recentTransactions.length > 0 ? recentTransactions.map((transaction) => (
-                <button type="button" className="recent-transaction-row" key={transaction.id} onClick={() => openEditTransaction(transaction)}>
-                  <span className={transaction.type === 'income' ? 'recent-icon income' : 'recent-icon expense'}>
-                    {transaction.type === 'income' ? <ArrowUpRight size={17}/> : <ArrowDownRight size={17}/>} 
-                  </span>
-                  <span className="recent-copy"><strong>{transaction.description}</strong><small>{transaction.category} · {new Date(transaction.date).toLocaleDateString('de-DE')}</small></span>
-                  <b className={transaction.type === 'income' ? 'positive-text' : 'negative-text'}>
-                    {transaction.type === 'income' ? '+' : '-'}{formatMoney(transaction.amountCents)}
-                  </b>
-                </button>
-              )) : <p className="recent-empty">Noch keine Transaktionen vorhanden.</p>}
-            </div>
-          </article>
-        </section>
-      </>}
+      {tab === 'dashboard' && <Dashboard state={state} userName={userName} onAddTransaction={openNewTransaction} onEditTransaction={openEditTransaction} onNavigate={setTab}/>}
 
       {tab === 'transactions' && <TransactionsPage
         transactions={state.transactions}

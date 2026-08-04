@@ -203,6 +203,5 @@ export function ApplicationShell({ activeDestination, onNavigate, children, over
     </div>}
 
     {overlays}
-    <span className="fp-visually-hidden" data-dashboard-ready="true">Finanzübersicht</span>
   </div>
 }
