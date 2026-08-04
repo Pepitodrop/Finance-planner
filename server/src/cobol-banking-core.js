@@ -20,6 +20,13 @@ function safeInteger(value, field) {
   return value
 }
 
+function safeCount(value, field) {
+  if (!Number.isSafeInteger(value) || value < 0 || value > 999_999_999) {
+    throw new CobolBankingCoreError(`${field} must be a bounded non-negative integer.`, 'invalid_reconciliation')
+  }
+  return value
+}
+
 function parseCobolInteger(value, field) {
   // Edited COBOL numeric pictures may contain display padding between a sign
   // and the digits. Removing display-only whitespace does not alter the value.
@@ -137,6 +144,22 @@ export class CobolBankingCore {
   async validateReadOnlyScope(scope) {
     const result = await this.executeProviderOperation(['validate-read-only-scope', String(scope)])
     if (result.length !== 1 || result[0] !== 'read-only') throw new CobolBankingCoreError('Malformed read-only scope result returned by COBOL.', 'malformed_cobol_output')
+    return true
+  }
+
+  async validateProviderReconciliation({ accountCount, reconciledAccountCount, transactionCount, uniqueTransactionCount, dateFrom, dateTo }) {
+    const result = await this.executeProviderOperation([
+      'validate-provider-reconciliation',
+      String(safeCount(accountCount, 'accountCount')),
+      String(safeCount(reconciledAccountCount, 'reconciledAccountCount')),
+      String(safeCount(transactionCount, 'transactionCount')),
+      String(safeCount(uniqueTransactionCount, 'uniqueTransactionCount')),
+      String(dateFrom || ''),
+      String(dateTo || ''),
+    ])
+    if (result.length !== 1 || result[0] !== 'reconciled') {
+      throw new CobolBankingCoreError('Malformed reconciliation result returned by COBOL.', 'malformed_cobol_output')
+    }
     return true
   }
 
