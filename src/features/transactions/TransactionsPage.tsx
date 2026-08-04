@@ -297,13 +297,14 @@ export function TransactionsPage({
           <h1 id="transactions-title">Transactions</h1>
           <p>Search, review and manage your recorded activity.</p>
         </div>
-        <button
-          type="button"
-          className="primary transactions-add"
-          onClick={onAdd}
-        >
-          <Plus aria-hidden="true" /> Add transaction
-        </button>
+      <button
+        type="button"
+        className="primary transactions-add"
+        aria-label="Add transaction"
+        onClick={onAdd}
+      >
+        <Plus aria-hidden="true" /> <span className="transactions-add__full">Add transaction</span><span className="transactions-add__short">Add</span>
+      </button>
       </header>
 
       <div className="transactions-controls">

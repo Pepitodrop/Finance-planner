@@ -24,6 +24,9 @@
   min-height: var(--fp-touch-target);
   white-space: nowrap;
 }
+.transactions-add__short {
+  display: none;
+}
 .transactions-controls {
   display: flex;
   gap: var(--fp-space-3);
@@ -182,7 +185,29 @@ table {
 }
 .transactions-desktop-table table {
   width: 100%;
-  min-width: 52rem;
+  min-width: 42rem;
+  table-layout: fixed;
+}
+.transactions-desktop-table th:nth-child(1) {
+  width: 5.25rem;
+}
+.transactions-desktop-table th:nth-child(2) {
+  width: 26%;
+}
+.transactions-desktop-table th:nth-child(3) {
+  width: 15%;
+}
+.transactions-desktop-table th:nth-child(4) {
+  width: 21%;
+}
+.transactions-desktop-table th:nth-child(5) {
+  width: 7.25rem;
+}
+.transactions-desktop-table th:nth-child(6) {
+  width: 6rem;
+}
+.transactions-desktop-table td:first-child {
+  white-space: nowrap;
 }
 .transactions-desktop-table th {
   padding: 0.8rem var(--fp-space-3);
@@ -567,8 +592,14 @@ table {
     font-size: clamp(1.85rem, 9vw, 2.45rem);
   }
   .transactions-add {
-    min-width: 6rem;
+    min-width: 5rem;
     padding-inline: 0.9rem;
+  }
+  .transactions-add__full {
+    display: none;
+  }
+  .transactions-add__short {
+    display: inline;
   }
   .transactions-controls {
     display: grid;
@@ -582,7 +613,8 @@ table {
   }
   .transaction-tabs button {
     flex: 1;
-    min-width: 5.1rem;
+    min-width: 0;
+    white-space: nowrap;
   }
   .transactions-list-panel {
     border: 0;
@@ -615,7 +647,8 @@ table {
     padding-inline: 0.4rem;
   }
   .transactions-summary dd {
-    font-size: clamp(0.86rem, 4vw, 1.08rem);
+    font-size: clamp(0.78rem, 3.5vw, 1rem);
+    white-space: nowrap;
   }
   .transactions-pagination {
     padding-inline: 0;
@@ -650,8 +683,9 @@ table {
     height: 2.6rem;
   }
   .transaction-tabs button {
-    min-width: 4.75rem;
-    padding-inline: 0.5rem;
+    min-width: 0;
+    padding-inline: 0.3rem;
+    font-size: 0.78rem;
   }
   .transactions-summary {
     padding-inline: 0.75rem;
