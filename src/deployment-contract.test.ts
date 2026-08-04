@@ -38,6 +38,7 @@ describe('production deployment contract', () => {
       'GOOGLE_SUBSCRIPTIONS_DATA_SOURCE: ${GOOGLE_SUBSCRIPTIONS_DATA_SOURCE:-}',
       'WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}',
       'WEBAUTHN_RP_NAME: ${WEBAUTHN_RP_NAME:-Finance Planner}',
+      'GOCARDLESS_WEBHOOK_SECRET: ${GOCARDLESS_WEBHOOK_SECRET:-}',
       'PAYPAL_PARTNER_MERCHANT_ID: ${PAYPAL_PARTNER_MERCHANT_ID:-}',
       'PAYPAL_ENV: ${PAYPAL_ENVIRONMENT:-sandbox}',
       'COBOL_BANKING_REQUIRED: ${COBOL_BANKING_REQUIRED:-true}',
@@ -47,14 +48,17 @@ describe('production deployment contract', () => {
     expect(compose).not.toContain('AUTH_MODE: ${AUTH_MODE:-local}')
   })
 
-  it('does not present an invalid local-auth production template', () => {
+  it('does not present an invalid local-auth or false provider production template', () => {
     const example = read('.env.example')
 
     expect(example).toContain('AUTH_MODE=google')
     expect(example).toContain('PUBLIC_DEPLOYMENT=true')
     expect(example).toContain('APP_ORIGIN=https://')
+    expect(example).toContain('GOCARDLESS_WEBHOOK_SECRET=')
+    expect(example).toContain('PAYPAL_PARTNER_MERCHANT_ID=')
     expect(example).toContain('PAYPAL_ENVIRONMENT=sandbox')
     expect(example).not.toMatch(/^AUTH_MODE=local$/m)
+    expect(example).not.toContain('supports owner-reporting credentials')
   })
 
   it('revalidates the application shell while caching hashed assets immutably', () => {
