@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { getActiveDatabasePool } from './database.js'
+import { deleteGoogleSubscriptionsFromCloudState } from './google-subscription-data.js'
 import {
   createGoogleSubscriptionAuthorizationUrl,
   exchangeGoogleSubscriptionCode,
@@ -7,6 +9,7 @@ import {
   syncGoogleSubscriptionSource,
 } from './google-subscriptions-provider.js'
 import { issueState, verifyState } from './security.js'
+import { PostgresUserStateStore } from './user-state-store.js'
 
 const PROVIDER = 'google-subscriptions'
 
@@ -17,6 +20,11 @@ function exactReturnUrl(value, origin) {
   return url.toString()
 }
 
+function deletionRequested(url, input) {
+  if (typeof input?.deleteImportedData === 'boolean') return input.deleteImportedData
+  return url.searchParams.get('deleteImportedData') === 'true'
+}
+
 export function createGoogleSubscriptionsRouter({
   env,
   origin,
@@ -25,6 +33,7 @@ export function createGoogleSubscriptionsRouter({
   send,
   body,
   userId,
+  stateStore,
   adapter = {},
 }) {
   const authorize = adapter.createAuthorizationUrl || createGoogleSubscriptionAuthorizationUrl
@@ -33,6 +42,8 @@ export function createGoogleSubscriptionsRouter({
   const revoke = adapter.revokeAccess || revokeGoogleSubscriptionAccess
   const capability = adapter.capability || googleSubscriptionCapability
   const callbackUri = `${origin}/api/subscriptions/google/callback`
+  const activePool = getActiveDatabasePool()
+  const cloudState = stateStore || (activePool ? new PostgresUserStateStore(activePool, env.CONNECTOR_MASTER_KEY || '') : null)
 
   return async function handleGoogleSubscriptions(request, response, url) {
     if (!url.pathname.startsWith('/api/subscriptions/google')) return false
@@ -120,11 +131,23 @@ export function createGoogleSubscriptionsRouter({
     if (request.method === 'DELETE' && url.pathname === '/api/subscriptions/google') {
       const user = userId(request)
       const input = await body(request)
+      const deleteImportedData = deletionRequested(url, input)
       const stored = await store.get(user, PROVIDER)
       let revoked = false
       if (stored) revoked = await revoke(stored, env)
+
+      const deletion = deleteImportedData
+        ? await deleteGoogleSubscriptionsFromCloudState(user, cloudState)
+        : { deleted: 0, persisted: false, reason: 'not_requested' }
+
       await store.remove(user, PROVIDER)
-      send(response, 200, { disconnected: true, revoked, deletedImportedData: Boolean(input.deleteImportedData) })
+      send(response, 200, {
+        disconnected: true,
+        revoked,
+        deletedImportedData: deleteImportedData,
+        deletedSubscriptionCount: deletion.deleted,
+        cloudStateUpdated: deletion.persisted,
+      })
       return true
     }
 
