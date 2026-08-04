@@ -162,6 +162,21 @@ export class EncryptedStore {
     })
   }
 
+  async removeUser(userId) {
+    return this.mutate(() => {
+      const connectorConnections = Object.keys(this.data.connections?.[userId] || {}).length
+      delete this.data.connections[userId]
+      let oauthNonces = 0
+      for (const [key, nonce] of Object.entries(this.data.oauthNonces)) {
+        if (nonce?.userId === userId) {
+          delete this.data.oauthNonces[key]
+          oauthNonces += 1
+        }
+      }
+      return { connectorConnections, oauthNonces }
+    })
+  }
+
   async createConnectionSetup(input) {
     return this.mutate(() => {
       this.data.connections[input.userId] ??= {}
