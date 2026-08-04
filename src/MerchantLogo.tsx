@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowDownRight, ArrowUpRight } from 'lucide-react'
 import { merchantLogoUrl, resolveMerchantLogo } from './merchant-logos'
 import type { TransactionType } from './types'
@@ -17,6 +17,8 @@ function initials(description: string): string {
 export function MerchantLogo({ description, type }: MerchantLogoProps) {
   const [failed, setFailed] = useState(false)
   const logo = resolveMerchantLogo(description)
+
+  useEffect(() => setFailed(false), [description])
 
   if (logo && !failed) {
     return (
