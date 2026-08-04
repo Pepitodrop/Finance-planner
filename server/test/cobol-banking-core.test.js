@@ -8,34 +8,12 @@ import {
   CobolBankingCoreError,
   normalizeAccountTypeFallback,
   normalizeCreditCardFallback,
-  normalizeProviderAccountTypeFallback,
-  normalizeProviderAmountFallback,
-  validateProviderConsentFallback,
-  validateReadOnlyScopeFallback,
 } from '../src/cobol-banking-core.js'
 
-test('normalizes German and provider account type aliases', () => {
+test('normalizes manual German account type aliases', () => {
   assert.equal(normalizeAccountTypeFallback('Girokonto'), 'checking')
   assert.equal(normalizeAccountTypeFallback('Kreditkarte'), 'credit-card')
   assert.equal(normalizeAccountTypeFallback('brokerage'), 'investment')
-  assert.equal(normalizeProviderAccountTypeFallback('SVGS'), 'savings')
-  assert.equal(normalizeProviderAccountTypeFallback('CARD'), 'credit-card')
-  assert.equal(normalizeProviderAccountTypeFallback('unknown-provider-value'), 'checking')
-})
-
-test('normalizes provider decimal amounts without floating-point arithmetic', () => {
-  assert.equal(normalizeProviderAmountFallback('12.34'), 1234)
-  assert.equal(normalizeProviderAmountFallback('-0.01'), -1)
-  assert.equal(normalizeProviderAmountFallback('1.2'), 120)
-  assert.throws(() => normalizeProviderAmountFallback('1.234'))
-})
-
-test('classifies provider consent and rejects money movement scopes', () => {
-  assert.equal(validateProviderConsentFallback('gocardless', 'LN'), 'ready')
-  assert.equal(validateProviderConsentFallback('gocardless', 'EX'), 'expired')
-  assert.equal(validateProviderConsentFallback('gocardless', 'CR'), 'pending')
-  assert.equal(validateReadOnlyScopeFallback('balances,details,transactions'), true)
-  assert.throws(() => validateReadOnlyScopeFallback('transactions,payment-initiation'), /forbidden/i)
 })
 
 test('normalizes a positive provider card debt to a negative ledger liability', () => {
@@ -56,14 +34,25 @@ test('normalizes a negative provider card balance without double-negating debt',
   })
 })
 
-test('adapter safely falls back only when the COBOL binary is unavailable', async () => {
+test('manual calculations may fall back when COBOL is unavailable outside production', async () => {
   const core = new CobolBankingCore({ binary: '/definitely/not/installed/banking-core', required: false })
   assert.equal(await core.normalizeAccountType('Sparkonto'), 'savings')
-  assert.equal(await core.normalizeProviderAccountType('SVGS'), 'savings')
-  assert.equal(await core.normalizeProviderAmount('-12.34'), -1234)
-  assert.equal(await core.validateProviderConsent('gocardless', 'LN'), 'ready')
-  assert.equal(await core.validateReadOnlyScope('reporting,transactions'), true)
   assert.equal((await core.normalizeCreditCard({ providerBalanceCents: 90_00, creditLimitCents: 100_00 })).availableCreditCents, 10_00)
+})
+
+test('provider banking operations never fall back to JavaScript', async () => {
+  const core = new CobolBankingCore({ binary: '/definitely/not/installed/banking-core', required: false })
+  for (const operation of [
+    () => core.normalizeProviderAccountType('SVGS'),
+    () => core.normalizeProviderAmount('-12.34'),
+    () => core.validateProviderConsent('gocardless', 'LN'),
+    () => core.validateReadOnlyScope('reporting,transactions'),
+  ]) {
+    await assert.rejects(
+      operation(),
+      (error) => error instanceof CobolBankingCoreError && error.code === 'cobol_unavailable',
+    )
+  }
 })
 
 test('an available but failing banking executable is never hidden by fallback logic', { skip: process.platform === 'win32' }, async () => {
