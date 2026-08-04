@@ -10,6 +10,16 @@
        WORKING-STORAGE SECTION.
        01 WS-OPERATION              PIC X(32).
        01 WS-ACCOUNT-TYPE           PIC X(32).
+       01 WS-PROVIDER               PIC X(32).
+       01 WS-PROVIDER-STATUS        PIC X(32).
+       01 WS-SCOPE                  PIC X(128).
+       01 WS-DECIMAL-TEXT           PIC X(32).
+       01 WS-WHOLE                  PIC X(24).
+       01 WS-FRACTION               PIC X(8).
+       01 WS-FRACTION-LENGTH        PIC 9(4) COMP-5.
+       01 WS-TEST-NUMVAL            PIC 9(4) COMP-5.
+       01 WS-DECIMAL-AMOUNT         PIC S9(13)V99 COMP-3.
+       01 WS-CENTS                  PIC S9(15) COMP-5.
        01 WS-AMOUNT                 PIC S9(15) COMP-5.
        01 WS-LIMIT                  PIC S9(15) COMP-5.
        01 WS-PENDING                PIC S9(15) COMP-5.
@@ -18,6 +28,7 @@
        01 WS-LEDGER                 PIC S9(15) COMP-5.
        01 WS-STATUS                 PIC X(16).
        01 WS-NORMALIZED-TYPE        PIC X(16).
+       01 WS-CONSENT-STATE          PIC X(16).
        01 WS-ARG-COUNT              PIC 9(4) COMP-5.
        01 WS-TEXT-AMOUNT            PIC -ZZZZZZZZZZZZZZ9.
        01 WS-TEXT-LIMIT             PIC -ZZZZZZZZZZZZZZ9.
@@ -25,6 +36,7 @@
        01 WS-TEXT-AVAILABLE         PIC -ZZZZZZZZZZZZZZ9.
        01 WS-TEXT-OWED              PIC -ZZZZZZZZZZZZZZ9.
        01 WS-TEXT-LEDGER            PIC ZZZZZZZZZZZZZZ9.
+       01 WS-TEXT-CENTS             PIC -ZZZZZZZZZZZZZZ9.
 
        PROCEDURE DIVISION.
        MAIN.
@@ -42,6 +54,30 @@
                     STOP RUN RETURNING 2
                  END-IF
                  PERFORM NORMALIZE-ACCOUNT-TYPE
+              WHEN "normalize-provider-account-type"
+                 IF WS-ARG-COUNT NOT = 2
+                    DISPLAY "ERROR|INVALID_ARGUMENTS"
+                    STOP RUN RETURNING 2
+                 END-IF
+                 PERFORM NORMALIZE-PROVIDER-ACCOUNT-TYPE
+              WHEN "normalize-provider-amount"
+                 IF WS-ARG-COUNT NOT = 2
+                    DISPLAY "ERROR|INVALID_ARGUMENTS"
+                    STOP RUN RETURNING 2
+                 END-IF
+                 PERFORM NORMALIZE-PROVIDER-AMOUNT
+              WHEN "validate-provider-consent"
+                 IF WS-ARG-COUNT NOT = 3
+                    DISPLAY "ERROR|INVALID_ARGUMENTS"
+                    STOP RUN RETURNING 2
+                 END-IF
+                 PERFORM VALIDATE-PROVIDER-CONSENT
+              WHEN "validate-read-only-scope"
+                 IF WS-ARG-COUNT NOT = 2
+                    DISPLAY "ERROR|INVALID_ARGUMENTS"
+                    STOP RUN RETURNING 2
+                 END-IF
+                 PERFORM VALIDATE-READ-ONLY-SCOPE
               WHEN "normalize-credit-card"
                  IF WS-ARG-COUNT NOT = 4
                     DISPLAY "ERROR|INVALID_ARGUMENTS"
@@ -75,6 +111,123 @@
                  STOP RUN RETURNING 3
            END-EVALUATE
            DISPLAY "OK|" TRIM(WS-NORMALIZED-TYPE).
+
+       NORMALIZE-PROVIDER-ACCOUNT-TYPE.
+           ACCEPT WS-ACCOUNT-TYPE FROM ARGUMENT-VALUE
+           MOVE FUNCTION UPPER-CASE(TRIM(WS-ACCOUNT-TYPE))
+             TO WS-ACCOUNT-TYPE
+           EVALUATE TRIM(WS-ACCOUNT-TYPE)
+              WHEN "SVGS" WHEN "SAVINGS" WHEN "DEPOSIT"
+                 MOVE "savings" TO WS-NORMALIZED-TYPE
+              WHEN "CASH"
+                 MOVE "cash" TO WS-NORMALIZED-TYPE
+              WHEN "CARD" WHEN "CREDITCARD" WHEN "CREDIT-CARD"
+                 MOVE "credit-card" TO WS-NORMALIZED-TYPE
+              WHEN "INVE" WHEN "INVESTMENT" WHEN "BROKERAGE"
+              WHEN "TRAS"
+                 MOVE "investment" TO WS-NORMALIZED-TYPE
+              WHEN OTHER
+                 MOVE "checking" TO WS-NORMALIZED-TYPE
+           END-EVALUATE
+           DISPLAY "OK|" TRIM(WS-NORMALIZED-TYPE).
+
+       NORMALIZE-PROVIDER-AMOUNT.
+           ACCEPT WS-DECIMAL-TEXT FROM ARGUMENT-VALUE
+           MOVE FUNCTION TEST-NUMVAL(TRIM(WS-DECIMAL-TEXT))
+             TO WS-TEST-NUMVAL
+           IF WS-TEST-NUMVAL NOT = 0
+              DISPLAY "ERROR|INVALID_PROVIDER_AMOUNT"
+              STOP RUN RETURNING 3
+           END-IF
+
+           IF FUNCTION INDEX(TRIM(WS-DECIMAL-TEXT), ".") > 0
+              MOVE SPACES TO WS-WHOLE WS-FRACTION
+              UNSTRING TRIM(WS-DECIMAL-TEXT)
+                 DELIMITED BY "."
+                 INTO WS-WHOLE WS-FRACTION
+              END-UNSTRING
+              MOVE 0 TO WS-FRACTION-LENGTH
+              INSPECT WS-FRACTION
+                 TALLYING WS-FRACTION-LENGTH
+                 FOR CHARACTERS BEFORE INITIAL SPACE
+              IF WS-FRACTION-LENGTH > 2
+                 DISPLAY "ERROR|INVALID_PROVIDER_AMOUNT"
+                 STOP RUN RETURNING 3
+              END-IF
+           END-IF
+
+           MOVE FUNCTION NUMVAL(TRIM(WS-DECIMAL-TEXT))
+             TO WS-DECIMAL-AMOUNT
+           COMPUTE WS-CENTS = WS-DECIMAL-AMOUNT * 100
+           MOVE WS-CENTS TO WS-TEXT-CENTS
+           DISPLAY "OK|" TRIM(WS-TEXT-CENTS).
+
+       VALIDATE-PROVIDER-CONSENT.
+           ACCEPT WS-PROVIDER FROM ARGUMENT-VALUE
+           ACCEPT WS-PROVIDER-STATUS FROM ARGUMENT-VALUE
+           MOVE FUNCTION LOWER-CASE(TRIM(WS-PROVIDER))
+             TO WS-PROVIDER
+           MOVE FUNCTION UPPER-CASE(TRIM(WS-PROVIDER-STATUS))
+             TO WS-PROVIDER-STATUS
+
+           IF TRIM(WS-PROVIDER) = "gocardless"
+              EVALUATE TRIM(WS-PROVIDER-STATUS)
+                 WHEN "LN"
+                    MOVE "ready" TO WS-CONSENT-STATE
+                 WHEN "EX" WHEN "RJ" WHEN "SU"
+                    MOVE "expired" TO WS-CONSENT-STATE
+                 WHEN OTHER
+                    MOVE "pending" TO WS-CONSENT-STATE
+              END-EVALUATE
+           ELSE
+              EVALUATE TRIM(WS-PROVIDER-STATUS)
+                 WHEN "ACTIVE" WHEN "AUTHORIZED" WHEN "READY"
+                    MOVE "ready" TO WS-CONSENT-STATE
+                 WHEN "EXPIRED" WHEN "REVOKED" WHEN "REJECTED"
+                    MOVE "expired" TO WS-CONSENT-STATE
+                 WHEN OTHER
+                    MOVE "pending" TO WS-CONSENT-STATE
+              END-EVALUATE
+           END-IF
+           DISPLAY "OK|" TRIM(WS-CONSENT-STATE).
+
+       VALIDATE-READ-ONLY-SCOPE.
+           ACCEPT WS-SCOPE FROM ARGUMENT-VALUE
+           MOVE FUNCTION LOWER-CASE(TRIM(WS-SCOPE)) TO WS-SCOPE
+
+           IF FUNCTION INDEX(WS-SCOPE, "payment") > 0
+              DISPLAY "ERROR|MONEY_MOVEMENT_SCOPE_FORBIDDEN"
+              STOP RUN RETURNING 4
+           END-IF
+           IF FUNCTION INDEX(WS-SCOPE, "payout") > 0
+              DISPLAY "ERROR|MONEY_MOVEMENT_SCOPE_FORBIDDEN"
+              STOP RUN RETURNING 4
+           END-IF
+           IF FUNCTION INDEX(WS-SCOPE, "transfer") > 0
+              DISPLAY "ERROR|MONEY_MOVEMENT_SCOPE_FORBIDDEN"
+              STOP RUN RETURNING 4
+           END-IF
+           IF FUNCTION INDEX(WS-SCOPE, "order") > 0
+              DISPLAY "ERROR|MONEY_MOVEMENT_SCOPE_FORBIDDEN"
+              STOP RUN RETURNING 4
+           END-IF
+           IF FUNCTION INDEX(WS-SCOPE, "mandate") > 0
+              DISPLAY "ERROR|MONEY_MOVEMENT_SCOPE_FORBIDDEN"
+              STOP RUN RETURNING 4
+           END-IF
+           IF FUNCTION INDEX(WS-SCOPE, "debit") > 0
+              DISPLAY "ERROR|MONEY_MOVEMENT_SCOPE_FORBIDDEN"
+              STOP RUN RETURNING 4
+           END-IF
+
+           IF FUNCTION INDEX(WS-SCOPE, "balance") = 0
+              AND FUNCTION INDEX(WS-SCOPE, "detail") = 0
+              AND FUNCTION INDEX(WS-SCOPE, "transaction") = 0
+              AND FUNCTION INDEX(WS-SCOPE, "report") = 0
+              DISPLAY "ERROR|READ_ONLY_SCOPE_REQUIRED"
+              STOP RUN RETURNING 4
+           END-IF
+           DISPLAY "OK|read-only".
 
        NORMALIZE-CREDIT-CARD.
            ACCEPT WS-TEXT-AMOUNT FROM ARGUMENT-VALUE
