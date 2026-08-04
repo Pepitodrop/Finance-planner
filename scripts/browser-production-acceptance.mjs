@@ -242,7 +242,7 @@ async function runAcceptance() {
       return inputs.length
     })()`)
     await clickButton(client, sessionId, vaultMode === 'setup' ? 'Verschlüsselung aktivieren' : 'Entsperren')
-    await waitFor(client, sessionId, 'document.body?.innerText.includes("Finanzübersicht")', 'authenticated finance dashboard')
+    await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-dashboard-ready=true]"))', 'authenticated finance dashboard')
 
     report.checks.serviceWorker = await evaluate(client, sessionId, `(async () => {
       if (!('serviceWorker' in navigator)) return { supported: false, ready: false }
@@ -290,7 +290,7 @@ async function runAcceptance() {
     assert.deepEqual(report.checks.desktopAccessibility.duplicateIds, [])
     assert.equal(report.checks.desktopAccessibility.horizontalOverflow, false)
 
-    await clickButton(client, sessionId, 'Manuelle Buchung')
+    await clickButton(client, sessionId, 'Add transaction')
     await waitFor(client, sessionId, 'Boolean(document.querySelector("[role=dialog][aria-modal=true]"))', 'transaction dialog')
     report.checks.dialog = await evaluate(client, sessionId, `(() => {
       const dialog = document.querySelector('[role=dialog][aria-modal=true]')
@@ -313,7 +313,7 @@ async function runAcceptance() {
     assert.equal(submitted, true)
     await waitFor(client, sessionId, `document.body?.innerText.includes(${JSON.stringify(TRANSACTION_DESCRIPTION)})`, 'new transaction')
 
-    await clickButton(client, sessionId, 'Manuelle Buchung')
+    await clickButton(client, sessionId, 'Add transaction')
     await waitFor(client, sessionId, 'Boolean(document.querySelector("[role=dialog]"))', 'second transaction dialog')
     await evaluate(client, sessionId, `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
     await waitFor(client, sessionId, '!document.querySelector("[role=dialog]")', 'Escape closing transaction dialog')
@@ -402,7 +402,7 @@ async function runAcceptance() {
 
     await client.send('Emulation.clearDeviceMetricsOverride', {}, sessionId)
     await client.send('Page.reload', { ignoreCache: false }, sessionId)
-    await waitFor(client, sessionId, 'document.body?.innerText.includes("Finanzübersicht")', 'online reload before offline test')
+    await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-dashboard-ready=true]"))', 'online reload before offline test')
     await client.send('Network.emulateNetworkConditions', {
       offline: true,
       latency: 0,
