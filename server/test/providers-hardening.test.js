@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFile } from 'node:fs/promises'
-import { decimalToCents, jsonFetch, retryDelayMs, syncGoCardless, syncWindow } from '../src/providers.js'
+import { decimalToCents, jsonFetch, retryDelayMs, startPayPal, syncGoCardless, syncWindow } from '../src/providers.js'
 
 test('converts provider decimal strings to integer cents without floating-point rounding', () => {
   assert.equal(decimalToCents('12.34'), 1234)
@@ -59,6 +59,37 @@ test('rejects expired or revoked GoCardless consent before account synchronizati
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+test('PayPal start fails closed unless a provider-hosted partner flow is configured', async () => {
+  const common = {
+    state: 'single-use-state',
+    redirectUri: 'https://finance.example.com/connections/paypal/callback',
+  }
+
+  await assert.rejects(
+    startPayPal({
+      ...common,
+      env: { PAYPAL_CLIENT_ID: 'client', PAYPAL_CLIENT_SECRET: 'secret', PAYPAL_ENV: 'live' },
+    }),
+    /partner onboarding is not configured/,
+  )
+
+  const started = await startPayPal({
+    ...common,
+    env: {
+      PAYPAL_CLIENT_ID: 'client',
+      PAYPAL_CLIENT_SECRET: 'secret',
+      PAYPAL_PARTNER_MERCHANT_ID: 'partner-merchant',
+      PAYPAL_ENV: 'live',
+    },
+  })
+  const redirect = new URL(started.redirectUrl)
+  assert.equal(redirect.protocol, 'https:')
+  assert.equal(redirect.hostname, 'www.paypal.com')
+  assert.equal(redirect.pathname, '/bizsignup/partner/entry')
+  assert.equal(redirect.searchParams.get('state'), common.state)
+  assert.equal(started.credential.mode, 'partner')
 })
 
 test('bank connectors enforce consent, incremental, pagination and reconciliation controls', async () => {
