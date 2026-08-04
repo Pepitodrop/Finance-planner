@@ -28,8 +28,13 @@ export async function provisionTestAccount({ store, email, name, now = new Date(
   let created = false
 
   await store.mutate((data) => {
-    const existing = data.users[userId] || store.findByEmail(normalizedEmail)
-    const user = existing || {
+    const byId = data.users[userId]
+    const byEmail = store.findByEmail(normalizedEmail)
+    if (byEmail && byEmail.id !== userId) {
+      throw new Error('A non-test account already uses TEST_ACCOUNT_EMAIL.')
+    }
+
+    const user = byId || {
       id: userId,
       email: normalizedEmail,
       name: normalizedName,
@@ -37,8 +42,7 @@ export async function provisionTestAccount({ store, email, name, now = new Date(
       createdAt: timestamp,
     }
 
-    created = !existing
-    user.id = userId
+    created = !byId
     user.email = normalizedEmail
     user.name = normalizedName
     user.passkeys ||= []
