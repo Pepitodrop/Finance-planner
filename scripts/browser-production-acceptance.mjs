@@ -410,6 +410,7 @@ async function accountsAssertions(client, sessionId, expectedMode = 'overview') 
 
 async function captureAccountsEvidence(client, sessionId, width, height) {
   await setAccountsViewport(client, sessionId, width, height)
+  await waitFor(client,sessionId,`document.querySelectorAll('.accounts-list li').length>=6`,'Accounts fixture rows')
   const assertions=await accountsAssertions(client,sessionId)
   assert.deepEqual(assertions.viewport,{width,height});assert.equal(assertions.root,true);assert.equal(assertions.language,'en');assert.equal(assertions.current,1);assert.match(assertions.currentText||'',/Accounts/);assert.equal(assertions.overflow,false);assert.equal(assertions.modal,false);assert.ok(assertions.accountRows>=6);assert.equal(assertions.summaryReconciles,true);assert.equal(assertions.empty,false);assert.equal(assertions.bottomNav,true)
   const path=join(ARTIFACT_DIR,`accounts-${width}x${height}.png`);const screenshot=await client.send('Page.captureScreenshot',{format:'png',fromSurface:true,captureBeyondViewport:false},sessionId);await writeFile(path,screenshot.data,'base64');return{path,...assertions}
@@ -661,19 +662,17 @@ async function runAcceptance() {
     await waitFor(client, sessionId, '!document.querySelector(".automatic-analysis")', 'automatic analysis status dismissal')
     await waitFor(client, sessionId, '!document.querySelector(".mobile-connectivity-status, .mobile-install-card, .passkey-enrolment, .platform-action-bar")', 'clean Dashboard runtime state')
 
+    report.checks.dashboardScreenshots = []
+    for (const [width, height] of [[1440, 900], [1024, 768], [390, 844], [360, 800]]) {
+      report.checks.dashboardScreenshots.push(await captureDashboardEvidence(client, sessionId, width, height))
+    }
+    report.checks.runtimeSurfaceStress = await captureRuntimeSurfaceStressEvidence(client, sessionId)
     report.checks.accountsFixtureActivation = await evaluate(client, sessionId, `(() => {
       if (typeof window.__financePlannerAcceptanceState !== 'function') return false
       window.__financePlannerAcceptanceState('accounts')
       return true
     })()`)
     assert.equal(report.checks.accountsFixtureActivation, true)
-    await waitFor(client, sessionId, `document.body.innerText.includes('Everyday checking account')`, 'Accounts acceptance fixtures')
-
-    report.checks.dashboardScreenshots = []
-    for (const [width, height] of [[1440, 900], [1024, 768], [390, 844], [360, 800]]) {
-      report.checks.dashboardScreenshots.push(await captureDashboardEvidence(client, sessionId, width, height))
-    }
-    report.checks.runtimeSurfaceStress = await captureRuntimeSurfaceStressEvidence(client, sessionId)
     report.checks.accountsScreenshots = []
     for (const [width,height] of [[1440,900],[1024,768],[390,844],[360,800]]) report.checks.accountsScreenshots.push(await captureAccountsEvidence(client,sessionId,width,height))
     report.checks.accountDetail = await captureAccountDetailEvidence(client,sessionId,false)
