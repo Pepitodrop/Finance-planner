@@ -393,7 +393,9 @@ async function captureTransactionsEvidence(client, sessionId, width, height) {
 
 async function setAccountsViewport(client, sessionId, width, height) {
   await client.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width <= 768, screenWidth: width, screenHeight: height }, sessionId)
-  await clickButton(client, sessionId, 'Accounts')
+  await waitFor(client,sessionId,`(async()=>{await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));return innerWidth===${width}&&innerHeight===${height}})()`,'settled Accounts navigation viewport')
+  const navigated=await evaluate(client,sessionId,`(()=>{const visible=element=>{const style=getComputedStyle(element),rect=element.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&rect.width>0&&rect.height>0};const target=[...document.querySelectorAll('nav button[aria-label="Accounts"]')].find(visible);if(!target)return false;target.click();return true})()`)
+  assert.equal(navigated,true,'Visible Accounts navigation control not found')
   await waitFor(client, sessionId, `(async()=>{await document.fonts.ready;await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));return innerWidth===${width}&&innerHeight===${height}&&Boolean(document.querySelector('[data-accounts-ready=true]'))})()`, `Accounts ${width}x${height}`)
 }
 
