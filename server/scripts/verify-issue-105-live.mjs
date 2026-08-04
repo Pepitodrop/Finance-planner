@@ -42,10 +42,12 @@ for (const provider of ['paypal', 'gocardless']) {
 if (process.env.VERIFY_GOOGLE_SUBSCRIPTIONS === 'true') {
   const started = await request('/api/subscriptions/google/start', {
     method: 'POST',
-    body: JSON.stringify({ redirectUri: `${origin}/api/subscriptions/google/callback` }),
+    body: JSON.stringify({ redirectUri: `${origin}/connections?provider=google-subscriptions` }),
   })
   assert.equal(started.response.status, 200, `Google subscription start failed: ${JSON.stringify(started.payload)}`)
-  assert.equal(new URL(started.payload.redirectUrl).origin, 'https://accounts.google.com')
+  const redirect = new URL(started.payload.redirectUrl)
+  assert.equal(redirect.origin, 'https://accounts.google.com')
+  assert.equal(new URL(redirect.searchParams.get('redirect_uri')).toString(), `${origin}/api/subscriptions/google/callback`)
   console.log(JSON.stringify({ provider: 'google-subscriptions', stage: 'authorization-start', verified: true }))
 }
 
