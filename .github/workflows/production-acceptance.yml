@@ -118,6 +118,7 @@ jobs:
             artifacts/dashboard-1024x768.png
             artifacts/dashboard-390x844.png
             artifacts/dashboard-360x800.png
+            artifacts/runtime-surfaces-390x844.png
             artifacts/backend-resilience.json
             artifacts/operational-metrics.prom
             artifacts/production-load-acceptance.json

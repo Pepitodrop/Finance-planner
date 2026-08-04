@@ -38,3 +38,15 @@ export async function probeSameOrigin(
     clearTimeout(timeout)
   }
 }
+
+export async function confirmServiceHealth(
+  probe: () => Promise<boolean>,
+  wait: (milliseconds: number) => Promise<unknown> = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  attempts = 2,
+) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (await probe()) return true
+    if (attempt < attempts - 1) await wait(350 * (attempt + 1))
+  }
+  return false
+}

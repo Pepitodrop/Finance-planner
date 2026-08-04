@@ -1,0 +1,171 @@
+/* Coordinated global runtime surfaces. Imported after legacy layers so these
+   rules own positioning without changing feature-page composition. */
+
+.mobile-runtime {
+  position: static;
+  display: contents;
+  pointer-events: auto;
+}
+
+.mobile-connectivity-status,
+.mobile-runtime__banner {
+  position: relative;
+  z-index: var(--fp-z-base);
+  inset: auto;
+  width: min(calc(100% - (2 * var(--fp-gutter-mobile))), var(--fp-app-canvas-max));
+  max-width: none;
+  margin: var(--fp-space-3) auto 0;
+  box-sizing: border-box;
+  border: var(--fp-border);
+  border-radius: var(--fp-radius-control);
+  box-shadow: var(--fp-shadow-raised);
+}
+
+.mobile-connectivity-status {
+  color: var(--fp-color-text-primary);
+  background: color-mix(in srgb, var(--fp-color-warning) 18%, var(--fp-color-surface-elevated));
+  border-color: color-mix(in srgb, var(--fp-color-warning) 52%, transparent);
+}
+
+.mobile-connectivity-status button {
+  color: var(--fp-color-canvas);
+  background: var(--fp-color-warning);
+}
+
+.mobile-runtime__banner {
+  color: var(--fp-color-text-primary);
+  background: var(--fp-color-surface-elevated);
+  text-align: left;
+}
+
+.mobile-install-card,
+.passkey-enrolment {
+  position: fixed;
+  z-index: var(--fp-z-status);
+  right: max(var(--fp-space-4), var(--fp-safe-right));
+  bottom: calc(var(--fp-space-4) + var(--fp-touch-target) + var(--fp-space-3) + var(--fp-safe-bottom));
+  left: auto;
+  width: min(26rem, calc(100vw - (2 * var(--fp-space-4))));
+  max-width: none;
+  max-height: min(42dvh, 22rem);
+  margin: 0;
+  padding: var(--fp-space-4);
+  overflow-y: auto;
+  border: var(--fp-border);
+  border-radius: var(--fp-radius-panel);
+  color: var(--fp-color-text-primary);
+  background: var(--fp-color-surface-elevated);
+  box-shadow: var(--fp-shadow-overlay), var(--fp-illumination);
+  backdrop-filter: none;
+}
+
+.passkey-enrolment {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+}
+
+.passkey-enrolment button,
+.mobile-install-card button {
+  min-height: var(--fp-touch-target);
+  border-radius: var(--fp-radius-control);
+}
+
+.automatic-analysis {
+  z-index: var(--fp-z-status);
+  right: max(var(--fp-space-4), var(--fp-safe-right));
+  bottom: calc(var(--fp-space-4) + var(--fp-touch-target) + var(--fp-space-3) + var(--fp-safe-bottom));
+  width: min(24rem, calc(100vw - (2 * var(--fp-space-4))));
+  border: var(--fp-border);
+  border-radius: var(--fp-radius-control);
+  background: var(--fp-color-surface-elevated);
+  box-shadow: var(--fp-shadow-raised);
+  backdrop-filter: none;
+}
+
+.cloud-sync-status {
+  z-index: var(--fp-z-status);
+  left: calc(var(--fp-sidebar-width) + var(--fp-space-4));
+  bottom: var(--fp-space-4);
+  border: var(--fp-border);
+  background: var(--fp-color-surface-elevated);
+  box-shadow: var(--fp-shadow-raised);
+  backdrop-filter: none;
+}
+
+.undo-toast,
+.save-announcement {
+  z-index: var(--fp-z-status);
+  bottom: calc(var(--fp-space-4) + var(--fp-touch-target) + var(--fp-space-3) + var(--fp-safe-bottom));
+}
+
+body:has([aria-modal="true"]) .runtime-optional-surface {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+@media (min-width: 769px) and (max-width: 1023px) {
+  .cloud-sync-status {
+    left: calc(var(--fp-sidebar-width-compact) + var(--fp-space-4));
+  }
+}
+
+@media (max-width: 768px) {
+  .mobile-connectivity-status,
+  .mobile-runtime__banner {
+    width: calc(100% - (2 * var(--fp-gutter-mobile)));
+  }
+
+  .mobile-connectivity-status {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mobile-install-card,
+  .passkey-enrolment {
+    right: max(var(--fp-gutter-mobile), var(--fp-safe-right));
+    bottom: calc(var(--fp-mobile-fixed-bottom) + var(--fp-touch-target) + var(--fp-space-4));
+    left: max(var(--fp-gutter-mobile), var(--fp-safe-left));
+    width: auto;
+    max-height: min(38dvh, 19rem);
+  }
+
+  .passkey-enrolment {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .passkey-enrolment > span {
+    grid-column: 1 / -1;
+  }
+
+  .automatic-analysis,
+  .cloud-sync-status,
+  .undo-toast,
+  .save-announcement {
+    right: max(var(--fp-gutter-mobile), var(--fp-safe-right));
+    bottom: calc(var(--fp-mobile-fixed-bottom) + var(--fp-touch-target) + var(--fp-space-5));
+    left: max(var(--fp-gutter-mobile), var(--fp-safe-left));
+    width: auto;
+    max-width: none;
+  }
+
+  .app-main-content {
+    padding-bottom: calc(var(--fp-mobile-fixed-bottom) + var(--fp-touch-target) + var(--fp-space-6));
+  }
+}
+
+@media (forced-colors: active) {
+  .runtime-surface,
+  .app-navigation__security,
+  .app-more-sheet__security {
+    border: 1px solid CanvasText;
+    forced-color-adjust: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .runtime-surface,
+  .runtime-security-action {
+    transition: none;
+  }
+}

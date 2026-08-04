@@ -14,9 +14,12 @@ import {
   shouldShowIosInstallGuide,
   type StorageHealth,
 } from './mobile-health'
+import { RUNTIME_SURFACE_PRIORITY } from './runtime-surfaces/runtimeSurfacePolicy'
+import { runtimeSurfaceRegistration, useRuntimeSurface } from './runtime-surfaces/runtimeSurfaceContext'
 
 const DISMISSAL_KEY = 'finance-planner-install-dismissed-until'
 const STORAGE_DISMISSAL_KEY = 'finance-planner-storage-dismissed-until'
+const INSTALL_OFFER_DELAY_MS = 30_000
 const EMPTY_STORAGE_HEALTH: StorageHealth = {
   supported: false,
   persisted: false,
@@ -41,6 +44,7 @@ export function MobileRuntime() {
   const [updateReady, setUpdateReady] = useState(false)
   const [installing, setInstalling] = useState(false)
   const [protectingStorage, setProtectingStorage] = useState(false)
+  const [installOfferEligible, setInstallOfferEligible] = useState(false)
 
   const standalone = useMemo(() => isStandaloneDisplay(
     window.matchMedia('(display-mode: standalone)').matches,
@@ -57,10 +61,11 @@ export function MobileRuntime() {
   const canInstall = shouldOfferInstall({
     standalone,
     promptAvailable: Boolean(installPrompt),
+    offerEligible: installOfferEligible,
     dismissedUntil,
     now,
   })
-  const showIosGuide = shouldShowIosInstallGuide({
+  const showIosGuide = installOfferEligible && shouldShowIosInstallGuide({
     standalone,
     promptAvailable: Boolean(installPrompt),
     dismissedUntil,
@@ -73,6 +78,17 @@ export function MobileRuntime() {
     && storageDismissedUntil <= now
     && !canInstall
     && !showIosGuide
+
+  const showOffline = useRuntimeSurface(runtimeSurfaceRegistration('offline', !online, RUNTIME_SURFACE_PRIORITY.critical, { exclusive: true, blocksLower: true }))
+  const showStorageCritical = useRuntimeSurface(runtimeSurfaceRegistration('storage-critical', storageHealth.pressure === 'critical', RUNTIME_SURFACE_PRIORITY.critical, { exclusive: true, blocksLower: true }))
+  const showUpdate = useRuntimeSurface(runtimeSurfaceRegistration('update', updateReady, RUNTIME_SURFACE_PRIORITY.userAction, { exclusive: true, blocksLower: true }))
+  const showInstall = useRuntimeSurface(runtimeSurfaceRegistration('install', canInstall || showIosGuide, RUNTIME_SURFACE_PRIORITY.recommendationInstall, { exclusive: true, blocksLower: true }))
+  const showStorageProtection = useRuntimeSurface(runtimeSurfaceRegistration('storage-protection', shouldOfferStorageProtection, RUNTIME_SURFACE_PRIORITY.optional, { exclusive: true, blocksLower: true }))
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setInstallOfferEligible(true), INSTALL_OFFER_DELAY_MS)
+    return () => window.clearTimeout(timer)
+  }, [])
 
   useEffect(() => {
     document.documentElement.classList.toggle('mobile-standalone', standalone)
@@ -156,6 +172,7 @@ export function MobileRuntime() {
       await installPrompt.prompt()
       const choice = await installPrompt.userChoice
       if (choice.outcome === 'accepted') setInstallPrompt(null)
+      else dismissInstall()
     } finally {
       setInstalling(false)
     }
@@ -186,31 +203,42 @@ export function MobileRuntime() {
     }
   }
 
+  useEffect(() => {
+    if (!showInstall && !showStorageProtection) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (showInstall) dismissInstall()
+      else dismissStorageProtection()
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [showInstall, showStorageProtection])
+
   return (
-    <div className="mobile-runtime" aria-live="polite">
-      {!online && (
-        <div className="mobile-runtime__banner" role="status">
+    <div className="mobile-runtime">
+      {showOffline && (
+        <div className="mobile-runtime__banner runtime-surface runtime-surface--critical" role="status" aria-live="polite">
           Offline-Modus. Deine lokal gespeicherten Finanzdaten bleiben verfügbar.
         </div>
       )}
-      {storageHealth.pressure === 'critical' && (
-        <div className="mobile-runtime__banner" role="alert">
+      {showStorageCritical && (
+        <div className="mobile-runtime__banner runtime-surface runtime-surface--critical" role="alert">
           Der Gerätespeicher ist fast voll. Speicherplatz freigeben, um fehlgeschlagene lokale Speicherungen zu vermeiden.
         </div>
       )}
-      {storageHealth.pressure === 'warning' && (
-        <div className="mobile-runtime__banner mobile-runtime__banner--warning" role="status">
+      {storageHealth.pressure === 'warning' && !showStorageCritical && (
+        <div className="mobile-runtime__banner mobile-runtime__banner--warning runtime-surface runtime-surface--informational" role="status" aria-live="polite">
           Der Gerätespeicher wird knapp. Bald Speicherplatz freigeben.
         </div>
       )}
-      {updateReady && (
-        <div className="mobile-runtime__banner mobile-runtime__banner--action" role="status">
+      {showUpdate && (
+        <div className="mobile-runtime__banner mobile-runtime__banner--action runtime-surface runtime-surface--action" role="status" aria-live="polite">
           <span>Eine sicherere, neuere Version ist verfügbar.</span>
           <button type="button" onClick={() => requestServiceWorkerActivation(registration)}>Jetzt aktualisieren</button>
         </div>
       )}
-      {canInstall && (
-        <section className="mobile-install-card" role="region" aria-label="Finance Planner installieren">
+      {showInstall && canInstall && (
+        <section className="mobile-install-card runtime-surface runtime-surface--prompt runtime-optional-surface" role="region" aria-label="Finance Planner installieren">
           <div>
             <strong>Finance Planner installieren</strong>
             <p>Wie eine App öffnen, den Vollbildmodus nutzen und die Offline-Hülle verfügbar halten.</p>
@@ -221,8 +249,8 @@ export function MobileRuntime() {
           </div>
         </section>
       )}
-      {showIosGuide && (
-        <section className="mobile-install-card" role="region" aria-label="Finance Planner auf iPhone oder iPad installieren">
+      {showInstall && showIosGuide && (
+        <section className="mobile-install-card runtime-surface runtime-surface--prompt runtime-optional-surface" role="region" aria-label="Finance Planner auf iPhone oder iPad installieren">
           <div>
             <strong>Finance Planner zum Home-Bildschirm hinzufügen</strong>
             <p>In Safari auf „Teilen“ tippen, dann „Zum Home-Bildschirm“ wählen. Das aktiviert die eigenständige App-Ansicht.</p>
@@ -232,8 +260,8 @@ export function MobileRuntime() {
           </div>
         </section>
       )}
-      {shouldOfferStorageProtection && (
-        <section className="mobile-install-card" role="region" aria-label="Lokal gespeicherte Finanzdaten schützen">
+      {showStorageProtection && (
+        <section className="mobile-install-card runtime-surface runtime-surface--prompt runtime-optional-surface" role="region" aria-label="Lokal gespeicherte Finanzdaten schützen">
           <div>
             <strong>Lokale Daten vor automatischer Bereinigung schützen</strong>
             <p>Den Browser bitten, den verschlüsselten lokalen Speicher dieser App bei der Gerätebereinigung zu behalten.</p>

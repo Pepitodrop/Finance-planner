@@ -13,6 +13,7 @@ import { MobileRuntime } from '../MobileRuntime'
 import { TestEnrollmentPage } from '../TestEnrollmentPage'
 import { VaultGate } from '../VaultGate'
 import { WebMobileHardening } from '../WebMobileHardening'
+import { RuntimeSurfaceCoordinator } from '../runtime-surfaces/RuntimeSurfaceCoordinator'
 import { CloudSyncStatus } from '../features/sync/CloudSyncStatus'
 import '../styles.css'
 import '../design-foundation.css'
@@ -40,6 +41,7 @@ import '../reference-page-compositions.css'
 import '../glossy-finance.css'
 import './app-shell.css'
 import '../features/dashboard/dashboard.css'
+import '../runtime-surfaces/runtime-surfaces.css'
 
 const enrollmentRoute = window.location.pathname === '/test-enrollment'
 
@@ -47,6 +49,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>
       {enrollmentRoute ? <TestEnrollmentPage /> : <>
+        <RuntimeSurfaceCoordinator>
         <WebMobileHardening />
         <FrontendExperience />
         <MobileProductionRuntime />
@@ -54,7 +57,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <MobileConnectivityStatus />
         <MobileEnhancements />
         <MobileExperience />
-        <AuthGate>{(user) => <VaultGate key={user.id} userId={user.id}><><App userId={user.id} userName={user.name} /><CloudSyncStatus /><AutomaticTransactionAnalysis /></></VaultGate>}</AuthGate>
+        <AuthGate>{(user) => <VaultGate key={user.id} userId={user.id}>{(lock) => <><App userId={user.id} userName={user.name} onLockVault={lock}/><CloudSyncStatus /><AutomaticTransactionAnalysis /></>}</VaultGate>}</AuthGate>
+        </RuntimeSurfaceCoordinator>
       </>}
     </ErrorBoundary>
   </React.StrictMode>,

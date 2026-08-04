@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { AlertTriangle, CloudOff, Database, LoaderCircle, RefreshCw } from 'lucide-react'
 import { getCloudSyncStatus, resolveCloudConflict, subscribeCloudSyncStatus, type CloudSyncStatus as SyncStatus } from '../../storage'
 import { shouldDisplayCloudSyncStatus } from './cloudSyncPresentation'
+import { RUNTIME_SURFACE_PRIORITY } from '../../runtime-surfaces/runtimeSurfacePolicy'
+import { runtimeSurfaceRegistration, useRuntimeSurface } from '../../runtime-surfaces/runtimeSurfaceContext'
 
 export function CloudSyncStatus() {
   const [status, setStatus] = useState<SyncStatus>(() => getCloudSyncStatus())
@@ -24,7 +26,16 @@ export function CloudSyncStatus() {
     }
   }
 
-  if (!shouldDisplayCloudSyncStatus(status.phase)) return null
+  const display = shouldDisplayCloudSyncStatus(status.phase)
+  const critical = status.phase === 'conflict' || status.phase === 'error'
+  const visible = useRuntimeSurface(runtimeSurfaceRegistration(
+    'cloud-sync',
+    display,
+    critical ? RUNTIME_SURFACE_PRIORITY.critical : RUNTIME_SURFACE_PRIORITY.informational,
+    { blocksLower: true },
+  ))
+
+  if (!visible) return null
 
   const Icon = status.phase === 'syncing' ? LoaderCircle
     : status.phase === 'offline' || status.phase === 'local' ? CloudOff
@@ -36,7 +47,7 @@ export function CloudSyncStatus() {
         : status.phase === 'error' ? 'Speicherfehler'
           : 'Lokaler Speicher'
 
-  return <aside className={`cloud-sync-status ${status.phase}`} role={status.phase === 'conflict' || status.phase === 'error' ? 'alert' : 'status'} aria-live="polite">
+  return <aside className={`cloud-sync-status runtime-surface ${critical ? 'runtime-surface--critical' : 'runtime-surface--informational'} ${status.phase}`} role={critical ? 'alert' : 'status'} aria-live="polite">
     <Icon className={status.phase === 'syncing' ? 'spin' : ''} size={17}/>
     <div><strong>{title}</strong><span>{status.message}</span></div>
     {status.phase === 'conflict' && <div className="cloud-sync-actions"><button type="button" disabled={busy} onClick={() => void resolve('server')}><RefreshCw size={14}/> Serverstand</button><button type="button" disabled={busy} onClick={() => void resolve('local')}><Database size={14}/> Lokalen Stand</button></div>}
