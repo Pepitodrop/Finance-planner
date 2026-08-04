@@ -16,7 +16,7 @@ describe('production deployment contract', () => {
     expect(server).not.toMatch(/RUN npm install/)
   })
 
-  it('ships both authoritative COBOL executables and fails closed for banking rules', () => {
+  it('ships, requires, and health-checks both authoritative COBOL executables', () => {
     const server = read('Dockerfile.server')
 
     expect(server).toContain('core/cobol/transaction_rules.cob')
@@ -27,6 +27,7 @@ describe('production deployment contract', () => {
     expect(server).toContain('COPY --from=build /app/build/banking-core ./build/banking-core')
     expect(server).toContain('COBOL_BANKING_BINARY=/app/build/banking-core')
     expect(server).toContain('COBOL_BANKING_REQUIRED=true')
+    expect(server).toContain('/app/build/banking-core normalize-account-type checking')
   })
 
   it('forwards documented authentication, passkey and provider settings into the connector', () => {
