@@ -96,6 +96,27 @@ test('is idempotent and preserves existing passkeys', async () => {
   assert.equal(shared.data.users[first.userId].createdAt, '2026-08-04T12:00:00.000Z')
 })
 
+test('rejects an email already assigned to a non-test account', async () => {
+  const shared = createSharedStore()
+  shared.data.users['google:existing'] = {
+    id: 'google:existing',
+    email: 'demo@example.test',
+    name: 'Existing User',
+    passkeys: [],
+  }
+  const store = new MemoryAuthStore(shared)
+  await store.load()
+
+  await assert.rejects(
+    provisionTestAccount({
+      store,
+      email: 'demo@example.test',
+      name: 'Runtime Demo',
+    }),
+    /non-test account already uses/,
+  )
+})
+
 test('fails closed when the account cannot be reloaded', async () => {
   const shared = createSharedStore()
   const store = new MemoryAuthStore(shared)
