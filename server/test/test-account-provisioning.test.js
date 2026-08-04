@@ -95,3 +95,17 @@ test('is idempotent and preserves existing passkeys', async () => {
   assert.deepEqual(shared.data.users[first.userId].passkeys, [{ id: 'credential-1' }])
   assert.equal(shared.data.users[first.userId].createdAt, '2026-08-04T12:00:00.000Z')
 })
+
+test('fails closed when the account cannot be reloaded', async () => {
+  const shared = createSharedStore()
+  const store = new MemoryAuthStore(shared)
+
+  await assert.rejects(
+    verifyProvisionedTestAccount({
+      store,
+      email: 'missing@example.test',
+      expectedUserId: testAccountUserId('missing@example.test'),
+    }),
+    /persistence verification failed/,
+  )
+})
