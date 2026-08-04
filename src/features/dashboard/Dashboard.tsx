@@ -65,7 +65,7 @@ export function Dashboard({ state, userName, onAddTransaction, onEditTransaction
   const categoryTotalCents = model.categories.reduce((sum, category) => sum + category.amountCents, 0)
   const projectedEndCents = Math.round((model.projection.at(-1)?.balance ?? model.totalBalanceCents / 100) * 100)
 
-  return <div className="dashboard-page" data-dashboard-ready="true">
+  return <div className="dashboard-page" data-dashboard-ready="true" lang="en">
     <header className="dashboard-toolbar">
       <div>
         <h1>Dashboard</h1>

@@ -2,11 +2,12 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 const APP_URL = process.env.ACCEPTANCE_APP_URL || 'http://127.0.0.1:4173'
 const ARTIFACT_PATH = resolve(process.env.ACCEPTANCE_ARTIFACT_PATH || 'artifacts/browser-production-acceptance.json')
+const ARTIFACT_DIR = dirname(ARTIFACT_PATH)
 const VAULT_PASSWORD = 'Acceptance-Vault-Password-2026!'
 const TRANSACTION_DESCRIPTION = 'Production acceptance coffee'
 const DEADLINE_MS = 45_000
@@ -193,6 +194,79 @@ async function setInput(client, sessionId, selector, value) {
   assert.equal(changed, true, `Input not found: ${selector}`)
 }
 
+async function captureDashboardEvidence(client, sessionId, width, height) {
+  const mobile = width <= 768
+  await client.send('Emulation.setDeviceMetricsOverride', {
+    width,
+    height,
+    deviceScaleFactor: 1,
+    mobile,
+    screenWidth: width,
+    screenHeight: height,
+  }, sessionId)
+  await evaluate(client, sessionId, `(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' })
+    document.querySelector('main#main-content')?.scrollTo({ top: 0, left: 0, behavior: 'instant' })
+  })()`)
+  await waitFor(client, sessionId, `(async () => {
+    await document.fonts.ready
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    const chartSignature = () => [...document.querySelectorAll('[data-dashboard-ready=true] svg path')].map((path) => path.getAttribute('d') || '').join('|')
+    const before = chartSignature()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    return innerWidth === ${width} && innerHeight === ${height} && Boolean(document.querySelector('[data-dashboard-ready=true]')) && before.length > 0 && before === chartSignature()
+  })()`, `settled ${width}x${height} Dashboard`)
+
+  const assertions = await evaluate(client, sessionId, `(() => {
+    const visible = (element) => {
+      if (!(element instanceof Element)) return false
+      const style = getComputedStyle(element)
+      const rect = element.getBoundingClientRect()
+      return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0
+    }
+    const visibleCurrent = [...document.querySelectorAll('nav [aria-current="page"]')].filter(visible)
+    const visibleButton = (name) => [...document.querySelectorAll('button')].some((button) => button.textContent?.trim().includes(name) && visible(button))
+    const visibleHeading = (name) => [...document.querySelectorAll('h2')].some((heading) => heading.textContent?.trim() === name && visible(heading))
+    const dashboard = document.querySelector('[data-dashboard-ready="true"]')
+    return {
+      dashboardExists: Boolean(dashboard),
+      dashboardLanguage: dashboard?.getAttribute('lang'),
+      currentNavigationItems: visibleCurrent.length,
+      currentDestination: visibleCurrent[0]?.textContent?.trim(),
+      horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+      modalOpen: Boolean(document.querySelector('[role="dialog"][aria-modal="true"]')),
+      viewport: { width: innerWidth, height: innerHeight },
+      addTransactionVisible: visibleButton('Add transaction'),
+      projectionExists: visibleHeading('Balance projection'),
+      accountsExists: visibleHeading('Accounts'),
+      goalsExists: visibleHeading('Goals'),
+      recentTransactionsExists: visibleHeading('Recent transactions'),
+    }
+  })()`)
+  assert.equal(assertions.dashboardExists, true)
+  assert.equal(assertions.dashboardLanguage, 'en')
+  assert.equal(assertions.currentNavigationItems, 1)
+  assert.match(assertions.currentDestination || '', /Dashboard/)
+  assert.equal(assertions.horizontalOverflow, false)
+  assert.equal(assertions.modalOpen, false)
+  assert.deepEqual(assertions.viewport, { width, height })
+  assert.equal(assertions.addTransactionVisible, true)
+  assert.equal(assertions.projectionExists, true)
+  assert.equal(assertions.accountsExists, true)
+  assert.equal(assertions.goalsExists, true)
+  assert.equal(assertions.recentTransactionsExists, true)
+
+  await mkdir(ARTIFACT_DIR, { recursive: true })
+  const path = join(ARTIFACT_DIR, `dashboard-${width}x${height}.png`)
+  const screenshot = await client.send('Page.captureScreenshot', {
+    format: 'png',
+    fromSurface: true,
+    captureBeyondViewport: false,
+  }, sessionId)
+  await writeFile(path, screenshot.data, 'base64')
+  return { path, ...assertions }
+}
+
 async function runAcceptance() {
   const launched = await launchChrome()
   const { client } = launched
@@ -243,6 +317,19 @@ async function runAcceptance() {
     })()`)
     await clickButton(client, sessionId, vaultMode === 'setup' ? 'Verschlüsselung aktivieren' : 'Entsperren')
     await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-dashboard-ready=true]"))', 'authenticated finance dashboard')
+
+    report.checks.dashboardScreenshots = []
+    for (const [width, height] of [[1440, 900], [1024, 768], [390, 844], [360, 800]]) {
+      report.checks.dashboardScreenshots.push(await captureDashboardEvidence(client, sessionId, width, height))
+    }
+    await client.send('Emulation.setDeviceMetricsOverride', {
+      width: 1440,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+      screenWidth: 1440,
+      screenHeight: 900,
+    }, sessionId)
 
     report.checks.serviceWorker = await evaluate(client, sessionId, `(async () => {
       if (!('serviceWorker' in navigator)) return { supported: false, ready: false }
@@ -430,13 +517,13 @@ async function runAcceptance() {
 
     assert.deepEqual(browserErrors, [], `Uncaught browser errors: ${browserErrors.join(' | ')}`)
     report.passed = true
-    await mkdir(resolve(ARTIFACT_PATH, '..'), { recursive: true })
+    await mkdir(ARTIFACT_DIR, { recursive: true })
     await writeFile(ARTIFACT_PATH, `${JSON.stringify(report, null, 2)}\n`)
     console.log(`Browser production acceptance passed. Evidence: ${ARTIFACT_PATH}`)
   } catch (error) {
     report.passed = false
     report.failure = error instanceof Error ? error.stack || error.message : String(error)
-    await mkdir(resolve(ARTIFACT_PATH, '..'), { recursive: true })
+    await mkdir(ARTIFACT_DIR, { recursive: true })
     await writeFile(ARTIFACT_PATH, `${JSON.stringify(report, null, 2)}\n`)
     throw error
   } finally {

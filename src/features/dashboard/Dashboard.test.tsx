@@ -31,6 +31,11 @@ function renderDashboard(state = populatedState) {
 describe('Dashboard', () => {
   afterEach(cleanup)
 
+  it('declares an English language boundary for the redesigned feature', () => {
+    renderDashboard()
+    expect(document.querySelector('[data-dashboard-ready="true"]')).toHaveAttribute('lang', 'en')
+  })
+
   it('renders canonical English structure and genuine summary values without fabricated trends', () => {
     renderDashboard()
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
