@@ -71,6 +71,55 @@ export function categoryBreakdown(transactions: Transaction[]) {
     .sort((a, b) => b.value - a.value)
 }
 
-export function recurringPayments(transactions: Transaction[]) {
-  return detectRecurringPayments(transactions).map((candidate) => candidate.transaction)
+export interface RecurringSeries {
+  id: string
+  description: string
+  category: string
+  accountId: string
+  type: Transaction['type']
+  amountCents: number
+  occurrenceCount: number
+  firstDate: string
+  lastDate: string
+}
+
+function recurringKey(transaction: Transaction): string {
+  const normalizedDescription = transaction.description
+    .toLocaleLowerCase('de-DE')
+    .replace(/\b(?:gmbh|ag|se|kg|ug|mbh)\b/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+  return [normalizedDescription, transaction.accountId, transaction.type, transaction.amountCents].join('|')
+}
+
+export function recurringPayments(transactions: Transaction[]): RecurringSeries[] {
+  const detectedIds = new Set(detectRecurringPayments(transactions).map((candidate) => candidate.transaction.id))
+  const candidates = transactions.filter((transaction) => transaction.recurring || detectedIds.has(transaction.id))
+  const grouped = new Map<string, Transaction[]>()
+
+  for (const transaction of candidates) {
+    const key = recurringKey(transaction)
+    const entries = grouped.get(key) ?? []
+    entries.push(transaction)
+    grouped.set(key, entries)
+  }
+
+  return [...grouped.entries()]
+    .map(([id, entries]) => {
+      const sorted = [...entries].sort((a, b) => a.date.localeCompare(b.date))
+      const representative = sorted.at(-1)!
+      return {
+        id,
+        description: representative.description,
+        category: representative.category,
+        accountId: representative.accountId,
+        type: representative.type,
+        amountCents: Math.round(sorted.reduce((sum, item) => sum + item.amountCents, 0) / sorted.length),
+        occurrenceCount: sorted.length,
+        firstDate: sorted[0].date,
+        lastDate: representative.date,
+      }
+    })
+    .filter((series) => series.occurrenceCount > 1)
+    .sort((a, b) => b.amountCents - a.amountCents || a.description.localeCompare(b.description, 'de-DE'))
 }
