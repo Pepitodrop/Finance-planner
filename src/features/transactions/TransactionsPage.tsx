@@ -37,6 +37,7 @@ interface TransactionsPageProps {
   onEdit: (transaction: Transaction) => void;
   onDelete: (transactionId: string) => void;
   referenceDate?: Date;
+  requestedAccountId?: string | null;
 }
 
 const PAGE_SIZE = 10;
@@ -196,6 +197,7 @@ export function TransactionsPage({
   onEdit,
   onDelete,
   referenceDate = new Date(),
+  requestedAccountId = null,
 }: TransactionsPageProps) {
   const [filters, setFilters] = useState<TransactionFilters>(
     DEFAULT_TRANSACTION_FILTERS,
@@ -248,6 +250,10 @@ export function TransactionsPage({
   const scopeLabel = transactionPeriodLabel(filters.date);
 
   useEffect(() => setPage(1), [filters]);
+  useEffect(() => {
+    if (!requestedAccountId) return;
+    setFilters((current) => ({ ...current, account: requestedAccountId }));
+  }, [requestedAccountId]);
   useEffect(
     () => setPage((current) => Math.min(current, pageCount)),
     [pageCount],
