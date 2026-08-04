@@ -397,7 +397,7 @@ async function captureTransactionFinalRowEvidence(client, sessionId) {
   await client.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: true, screenWidth: width, screenHeight: height }, sessionId)
   await clickButton(client, sessionId, 'Transactions')
   await waitFor(client, sessionId, `Boolean(document.querySelector('[data-transactions-ready=true] .transactions-mobile-list li:last-child'))`, 'final mobile transaction')
-  await evaluate(client, sessionId, `document.querySelector('.transactions-mobile-list li:last-child')?.scrollIntoView({ block: 'end' })`)
+  await evaluate(client, sessionId, `window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' })`)
   await waitFor(client, sessionId, `(async () => {
     await document.fonts.ready
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
