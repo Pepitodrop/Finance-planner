@@ -1,3 +1,4 @@
+import { CobolBankingCore } from './cobol-banking-core.js'
 import { projectSavingsBalance } from './cobol-engine.js'
 import { getActiveDatabasePool } from './database.js'
 import { HttpError } from './runtime-security.js'
@@ -37,7 +38,35 @@ async function readCloudStateBody(request) {
   }
 }
 
-export function createFinanceRouter({ env = process.env, send, body, userId, projectSavings = projectSavingsBalance }) {
+function validateManualCreditCardInput(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new HttpError(400, 'invalid_credit_card_input', 'Credit-card input must be an object.')
+  }
+  const allowed = new Set(['providerBalanceCents', 'creditLimitCents', 'pendingAmountCents'])
+  for (const key of Object.keys(input)) {
+    if (!allowed.has(key)) throw new HttpError(400, 'invalid_credit_card_input', `Unexpected credit-card field: ${key}`)
+  }
+  const providerBalanceCents = input.providerBalanceCents
+  const creditLimitCents = input.creditLimitCents ?? 0
+  const pendingAmountCents = input.pendingAmountCents ?? 0
+  if (!Number.isSafeInteger(providerBalanceCents)) {
+    throw new HttpError(400, 'invalid_credit_card_input', 'The outstanding balance must use integer cents.')
+  }
+  if (!Number.isSafeInteger(creditLimitCents) || creditLimitCents < 0) {
+    throw new HttpError(400, 'invalid_credit_card_input', 'The credit limit must be a non-negative integer-cent value.')
+  }
+  if (!Number.isSafeInteger(pendingAmountCents) || pendingAmountCents < 0) {
+    throw new HttpError(400, 'invalid_credit_card_input', 'The pending amount must be a non-negative integer-cent value.')
+  }
+  return { providerBalanceCents, creditLimitCents, pendingAmountCents }
+}
+
+export function createFinanceRouter({ env = process.env, send, body, userId, projectSavings = projectSavingsBalance, bankingCore } = {}) {
+  const authoritativeBankingCore = bankingCore || new CobolBankingCore({
+    binary: env.COBOL_BANKING_BINARY,
+    required: env.COBOL_BANKING_REQUIRED === 'true',
+  })
+
   return async function handleFinance(request, response, url) {
     if (url.pathname === '/api/finance/state') {
       const user = userId(request)
@@ -64,6 +93,18 @@ export function createFinanceRouter({ env = process.env, send, body, userId, pro
         return true
       }
       return false
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/finance/normalize-credit-card') {
+      userId(request)
+      const input = validateManualCreditCardInput(await body(request))
+      const normalized = await authoritativeBankingCore.normalizeCreditCard(input)
+      send(response, 200, {
+        ...input,
+        ...normalized,
+        calculationEngine: 'cobol',
+      })
+      return true
     }
 
     if (request.method !== 'POST' || url.pathname !== '/api/finance/project-savings') return false
