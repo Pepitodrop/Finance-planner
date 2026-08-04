@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { classifyConnectivity, probeSameOrigin } from './mobile-connectivity'
+import { classifyConnectivity, confirmServiceHealth, probeSameOrigin } from './mobile-connectivity'
 
 describe('classifyConnectivity', () => {
   it('reports offline when the browser reports no network', () => {
@@ -54,5 +54,21 @@ describe('probeSameOrigin', () => {
   it('fails closed when the request errors', async () => {
     const fetcher = vi.fn(async () => { throw new Error('network unavailable') }) as unknown as typeof fetch
     await expect(probeSameOrigin(fetcher, 'https://planner.example')).resolves.toBe(false)
+  })
+})
+
+describe('confirmServiceHealth', () => {
+  it('does not promote one transient startup failure to a persistent outage', async () => {
+    const probe = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    const wait = vi.fn().mockResolvedValue(undefined)
+    await expect(confirmServiceHealth(probe, wait)).resolves.toBe(true)
+    expect(probe).toHaveBeenCalledTimes(2)
+    expect(wait).toHaveBeenCalledOnce()
+  })
+
+  it('reports an outage after the bounded confirmation attempts fail', async () => {
+    const probe = vi.fn().mockResolvedValue(false)
+    await expect(confirmServiceHealth(probe, async () => undefined)).resolves.toBe(false)
+    expect(probe).toHaveBeenCalledTimes(2)
   })
 })

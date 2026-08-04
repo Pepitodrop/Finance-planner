@@ -14,10 +14,11 @@ describe('mobile runtime policy', () => {
 
   it('offers installation only when a prompt exists and dismissal expired', () => {
     const now = Date.now()
-    expect(shouldOfferInstall({ standalone: false, promptAvailable: true, dismissedUntil: 0, now })).toBe(true)
-    expect(shouldOfferInstall({ standalone: true, promptAvailable: true, dismissedUntil: 0, now })).toBe(false)
-    expect(shouldOfferInstall({ standalone: false, promptAvailable: false, dismissedUntil: 0, now })).toBe(false)
-    expect(shouldOfferInstall({ standalone: false, promptAvailable: true, dismissedUntil: now + 1, now })).toBe(false)
+    expect(shouldOfferInstall({ standalone: false, promptAvailable: true, offerEligible: true, dismissedUntil: 0, now })).toBe(true)
+    expect(shouldOfferInstall({ standalone: true, promptAvailable: true, offerEligible: true, dismissedUntil: 0, now })).toBe(false)
+    expect(shouldOfferInstall({ standalone: false, promptAvailable: false, offerEligible: true, dismissedUntil: 0, now })).toBe(false)
+    expect(shouldOfferInstall({ standalone: false, promptAvailable: true, offerEligible: false, dismissedUntil: 0, now })).toBe(false)
+    expect(shouldOfferInstall({ standalone: false, promptAvailable: true, offerEligible: true, dismissedUntil: now + 1, now })).toBe(false)
   })
 
   it('uses a bounded install-prompt dismissal window', () => {

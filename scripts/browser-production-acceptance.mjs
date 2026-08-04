@@ -228,6 +228,14 @@ async function captureDashboardEvidence(client, sessionId, width, height) {
     const visibleButton = (name) => [...document.querySelectorAll('button')].some((button) => button.textContent?.trim().includes(name) && visible(button))
     const visibleHeading = (name) => [...document.querySelectorAll('h2')].some((heading) => heading.textContent?.trim() === name && visible(heading))
     const dashboard = document.querySelector('[data-dashboard-ready="true"]')
+    const addTransaction = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim().includes('Add transaction') && visible(button))
+    const mobileNavigation = [...document.querySelectorAll('nav')].find((navigation) => navigation.classList.contains('app-mobile-navigation') && visible(navigation))
+    const unobscured = (element) => {
+      if (!element) return false
+      const rect = element.getBoundingClientRect()
+      const topmost = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+      return Boolean(topmost && (topmost === element || element.contains(topmost)))
+    }
     return {
       dashboardExists: Boolean(dashboard),
       dashboardLanguage: dashboard?.getAttribute('lang'),
@@ -235,8 +243,12 @@ async function captureDashboardEvidence(client, sessionId, width, height) {
       currentDestination: visibleCurrent[0]?.textContent?.trim(),
       horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
       modalOpen: Boolean(document.querySelector('[role="dialog"][aria-modal="true"]')),
+      criticalConnectivityWarning: Boolean(document.querySelector('.mobile-connectivity-status')),
+      optionalPrompt: Boolean(document.querySelector('.mobile-install-card, .passkey-enrolment, .platform-action-bar')),
+      backgroundAnalysis: Boolean(document.querySelector('.automatic-analysis')),
       viewport: { width: innerWidth, height: innerHeight },
-      addTransactionVisible: visibleButton('Add transaction'),
+      addTransactionVisible: visibleButton('Add transaction') && unobscured(addTransaction),
+      mobileNavigationUnobscured: !${mobile} || unobscured(mobileNavigation),
       projectionExists: visibleHeading('Balance projection'),
       accountsExists: visibleHeading('Accounts'),
       goalsExists: visibleHeading('Goals'),
@@ -249,8 +261,12 @@ async function captureDashboardEvidence(client, sessionId, width, height) {
   assert.match(assertions.currentDestination || '', /Dashboard/)
   assert.equal(assertions.horizontalOverflow, false)
   assert.equal(assertions.modalOpen, false)
+  assert.equal(assertions.criticalConnectivityWarning, false)
+  assert.equal(assertions.optionalPrompt, false)
+  assert.equal(assertions.backgroundAnalysis, false)
   assert.deepEqual(assertions.viewport, { width, height })
   assert.equal(assertions.addTransactionVisible, true)
+  assert.equal(assertions.mobileNavigationUnobscured, true)
   assert.equal(assertions.projectionExists, true)
   assert.equal(assertions.accountsExists, true)
   assert.equal(assertions.goalsExists, true)
@@ -264,6 +280,78 @@ async function captureDashboardEvidence(client, sessionId, width, height) {
     captureBeyondViewport: false,
   }, sessionId)
   await writeFile(path, screenshot.data, 'base64')
+  return { path, ...assertions }
+}
+
+async function captureRuntimeSurfaceStressEvidence(client, sessionId) {
+  const width = 390
+  const height = 844
+  await client.send('Emulation.setDeviceMetricsOverride', {
+    width,
+    height,
+    deviceScaleFactor: 1,
+    mobile: true,
+    screenWidth: width,
+    screenHeight: height,
+  }, sessionId)
+  await client.send('Network.emulateNetworkConditions', {
+    offline: true,
+    latency: 0,
+    downloadThroughput: 0,
+    uploadThroughput: 0,
+    connectionType: 'none',
+  }, sessionId)
+  await evaluate(client, sessionId, `window.dispatchEvent(new Event('offline'))`)
+  await waitFor(client, sessionId, `document.body?.innerText.includes('Offline-Modus')`, 'offline runtime surface')
+  await waitFor(client, sessionId, `(async () => {
+    await document.fonts.ready
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    return innerWidth === ${width} && innerHeight === ${height}
+  })()`, 'settled runtime-surface stress viewport')
+
+  const assertions = await evaluate(client, sessionId, `(() => {
+    const visible = (element) => {
+      if (!(element instanceof Element)) return false
+      const style = getComputedStyle(element)
+      const rect = element.getBoundingClientRect()
+      return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0
+    }
+    const navigation = [...document.querySelectorAll('nav')].find((item) => item.classList.contains('app-mobile-navigation') && visible(item))
+    const surface = [...document.querySelectorAll('.mobile-runtime__banner')].find((item) => item.textContent?.includes('Offline-Modus') && visible(item))
+    const dashboard = document.querySelector('[data-dashboard-ready="true"]')
+    const navigationRect = navigation?.getBoundingClientRect()
+    const surfaceRect = surface?.getBoundingClientRect()
+    const topmost = navigationRect ? document.elementFromPoint(navigationRect.left + navigationRect.width / 2, navigationRect.top + navigationRect.height / 2) : null
+    return {
+      viewport: { width: innerWidth, height: innerHeight },
+      dashboardExists: Boolean(dashboard),
+      offlineSurfaceVisible: Boolean(surface),
+      surfaceClearsNavigation: Boolean(surfaceRect && navigationRect && surfaceRect.bottom <= navigationRect.top),
+      mobileNavigationUnobscured: Boolean(navigation && topmost && (topmost === navigation || navigation.contains(topmost))),
+      optionalPrompt: Boolean(document.querySelector('.mobile-install-card, .passkey-enrolment, .platform-action-bar')),
+      horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+    }
+  })()`)
+  assert.deepEqual(assertions.viewport, { width, height })
+  assert.equal(assertions.dashboardExists, true)
+  assert.equal(assertions.offlineSurfaceVisible, true)
+  assert.equal(assertions.surfaceClearsNavigation, true)
+  assert.equal(assertions.mobileNavigationUnobscured, true)
+  assert.equal(assertions.optionalPrompt, false)
+  assert.equal(assertions.horizontalOverflow, false)
+
+  const path = join(ARTIFACT_DIR, `runtime-surfaces-${width}x${height}.png`)
+  const screenshot = await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false }, sessionId)
+  await writeFile(path, screenshot.data, 'base64')
+  await client.send('Network.emulateNetworkConditions', {
+    offline: false,
+    latency: 0,
+    downloadThroughput: -1,
+    uploadThroughput: -1,
+    connectionType: 'wifi',
+  }, sessionId)
+  await evaluate(client, sessionId, `window.dispatchEvent(new Event('online'))`)
+  await waitFor(client, sessionId, `!document.body?.innerText.includes('Offline-Modus')`, 'online recovery after runtime-surface stress')
   return { path, ...assertions }
 }
 
@@ -300,6 +388,10 @@ async function runAcceptance() {
       return { ok: response.ok, status: response.status }
     })()`)
     assert.deepEqual(localSession, { ok: true, status: 200 })
+    await evaluate(client, sessionId, `(() => {
+      localStorage.setItem('finance-planner-passkey-prompt-dismissed-v1', 'true')
+      localStorage.setItem('finance-planner-install-dismissed-until', String(Date.now() + 24 * 60 * 60 * 1000))
+    })()`)
     await client.send('Page.reload', { ignoreCache: true }, sessionId)
     await waitFor(client, sessionId, 'document.body?.innerText.includes("Sicheren Datenspeicher einrichten") || document.body?.innerText.includes("Finance Planner entsperren")', 'vault gate')
 
@@ -318,10 +410,21 @@ async function runAcceptance() {
     await clickButton(client, sessionId, vaultMode === 'setup' ? 'Verschlüsselung aktivieren' : 'Entsperren')
     await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-dashboard-ready=true]"))', 'authenticated finance dashboard')
 
+    report.checks.backendHealth = await evaluate(client, sessionId, `(async () => {
+      const response = await fetch('/health/live', { cache: 'no-store', credentials: 'same-origin' })
+      const payload = await response.json().catch(() => null)
+      return { ok: response.ok, status: response.status, serviceStatus: payload?.status }
+    })()`)
+    assert.deepEqual(report.checks.backendHealth, { ok: true, status: 200, serviceStatus: 'ok' })
+    await waitFor(client, sessionId, 'Boolean(document.querySelector(".automatic-analysis"))', 'automatic analysis completion status')
+    await waitFor(client, sessionId, '!document.querySelector(".automatic-analysis")', 'automatic analysis status dismissal')
+    await waitFor(client, sessionId, '!document.querySelector(".mobile-connectivity-status, .mobile-install-card, .passkey-enrolment, .platform-action-bar")', 'clean Dashboard runtime state')
+
     report.checks.dashboardScreenshots = []
     for (const [width, height] of [[1440, 900], [1024, 768], [390, 844], [360, 800]]) {
       report.checks.dashboardScreenshots.push(await captureDashboardEvidence(client, sessionId, width, height))
     }
+    report.checks.runtimeSurfaceStress = await captureRuntimeSurfaceStressEvidence(client, sessionId)
     await client.send('Emulation.setDeviceMetricsOverride', {
       width: 1440,
       height: 900,
