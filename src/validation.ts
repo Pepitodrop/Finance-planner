@@ -60,11 +60,11 @@ export function validateTransactionInput(input: {
   amount: number
   date: string
 }): string | null {
-  if (!input.accountId) return 'Bitte wähle ein Konto aus.'
-  if (input.description.trim().length < 2) return 'Die Beschreibung ist zu kurz.'
-  if (input.description.length > 160) return 'Die Beschreibung darf höchstens 160 Zeichen enthalten.'
-  if (input.category.trim().length < 2) return 'Bitte gib eine gültige Kategorie ein.'
-  if (!Number.isFinite(input.amount) || input.amount <= 0 || input.amount > 100_000_000) return 'Bitte gib einen gültigen positiven Betrag ein.'
-  if (!input.date || Number.isNaN(Date.parse(input.date))) return 'Bitte gib ein gültiges Datum ein.'
+  if (!input.accountId) return 'Select an account.'
+  if (input.description.trim().length < 2) return 'Enter a description of at least two characters.'
+  if (input.description.length > 160) return 'Description must not exceed 160 characters.'
+  if (input.category.trim().length < 2) return 'Enter a valid category.'
+  if (!Number.isFinite(input.amount) || input.amount <= 0 || input.amount > 100_000_000) return 'Enter a valid positive amount.'
+  if (!input.date || Number.isNaN(Date.parse(input.date))) return 'Enter a valid date.'
   return null
 }

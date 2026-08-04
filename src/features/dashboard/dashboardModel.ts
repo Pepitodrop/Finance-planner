@@ -79,6 +79,4 @@ export function buildDashboardViewModel(state: AppState, referenceDate = new Dat
   }
 }
 
-export function isDetectedTransfer(transaction: Transaction): boolean {
-  return /transfer|umbuch|übertrag/i.test(`${transaction.category} ${transaction.description}`)
-}
+export { isDetectedTransfer } from '../../transactionClassification'

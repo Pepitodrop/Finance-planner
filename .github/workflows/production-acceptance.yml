@@ -119,6 +119,13 @@ jobs:
             artifacts/dashboard-390x844.png
             artifacts/dashboard-360x800.png
             artifacts/runtime-surfaces-390x844.png
+            artifacts/transactions-1440x900.png
+            artifacts/transactions-1024x768.png
+            artifacts/transactions-430x932.png
+            artifacts/transactions-390x844.png
+            artifacts/transactions-360x800.png
+            artifacts/transactions-filters-390x844.png
+            artifacts/transactions-final-row-390x844.png
             artifacts/backend-resilience.json
             artifacts/operational-metrics.prom
             artifacts/production-load-acceptance.json
