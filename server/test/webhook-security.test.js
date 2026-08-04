@@ -112,13 +112,25 @@ test('configured automatic monitoring still requires durable PostgreSQL storage'
   assert.ok(result.blockers.includes('postgres_persistence_required'))
 })
 
-test('PayPal owner-account monitoring requires only application reporting credentials', () => {
+test('PayPal owner-account monitoring requires application credentials and an explicit owner user', () => {
+  const missingOwner = bankProductionCapabilities({
+    NODE_ENV: 'production',
+    PUBLIC_DEPLOYMENT: 'true',
+    PAYPAL_CLIENT_ID: 'client',
+    PAYPAL_CLIENT_SECRET: 'secret',
+    PAYPAL_CONNECTION_MODE: 'owner',
+  }, { driver: 'postgres' })
+  assert.equal(missingOwner.configuredProviders.paypal, false)
+  assert.equal(missingOwner.ready, false)
+  assert.ok(missingOwner.blockers.includes('paypal_owner_user_required'))
+
   const owner = bankProductionCapabilities({
     NODE_ENV: 'production',
     PUBLIC_DEPLOYMENT: 'true',
     PAYPAL_CLIENT_ID: 'client',
     PAYPAL_CLIENT_SECRET: 'secret',
     PAYPAL_CONNECTION_MODE: 'owner',
+    PAYPAL_OWNER_USER_ID: 'owner-user',
   }, { driver: 'postgres' })
   assert.equal(owner.paypalMode, 'owner')
   assert.equal(owner.configuredProviders.paypal, true)
