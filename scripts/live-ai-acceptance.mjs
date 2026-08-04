@@ -1,4 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises'
+import { hostedAiCapabilities } from '../server/src/ai-capabilities.js'
 
 const endpoint = 'https://router.huggingface.co/v1/chat/completions'
 const token = String(process.env.HF_TOKEN || '').trim()
@@ -13,6 +14,7 @@ const evidence = {
   schemaVersion: 1,
   checkedAt: new Date().toISOString(),
   provider: 'hugging-face-inference-providers',
+  configuration: hostedAiCapabilities(process.env),
   status: 'pending',
   financial: { model: financialModel, revision: financialRevision, status: 'pending' },
   receipt: { model: receiptModel, status: 'pending', syntheticImage: true },
@@ -59,6 +61,8 @@ try {
     console.log('Hosted AI acceptance is blocked by credentials; evidence was recorded.')
     process.exit(0)
   }
+
+  if (!evidence.configuration.ready) throw new Error('Hosted AI production configuration is not valid.')
 
   const financial = await inference({
     model: financialModel,
