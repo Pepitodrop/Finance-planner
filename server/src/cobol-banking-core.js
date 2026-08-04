@@ -3,7 +3,7 @@ import { access } from 'node:fs/promises'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
-const INTEGER = /^-?\d{1,16}$/
+const COBOL_INTEGER = /^[+-]?\d{1,16}$/
 const ACCOUNT_TYPES = new Set(['checking', 'savings', 'cash', 'investment', 'credit-card'])
 const CONSENT_STATES = new Set(['ready', 'pending', 'expired'])
 
@@ -18,6 +18,16 @@ export class CobolBankingCoreError extends Error {
 function safeInteger(value, field) {
   if (!Number.isSafeInteger(value)) throw new CobolBankingCoreError(`${field} must be a safe integer.`, 'invalid_money')
   return value
+}
+
+function parseCobolInteger(value, field) {
+  // Edited COBOL numeric pictures may contain display padding between a sign
+  // and the digits. Removing display-only whitespace does not alter the value.
+  const normalized = String(value).replace(/\s+/g, '')
+  if (!COBOL_INTEGER.test(normalized)) {
+    throw new CobolBankingCoreError(`Malformed ${field} returned by COBOL.`, 'malformed_cobol_output')
+  }
+  return safeInteger(Number(normalized), field)
 }
 
 export function normalizeCreditCardFallback({ providerBalanceCents, creditLimitCents = 0, pendingAmountCents = 0 }) {
@@ -145,8 +155,8 @@ export class CobolBankingCore {
   async normalizeProviderAmount(value) {
     const result = await this.execute(['normalize-provider-amount', String(value)])
     if (!result) return normalizeProviderAmountFallback(value)
-    if (result.length !== 1 || !INTEGER.test(result[0])) throw new CobolBankingCoreError('Malformed provider amount returned by COBOL.', 'malformed_cobol_output')
-    return safeInteger(Number(result[0]), 'providerAmountCents')
+    if (result.length !== 1) throw new CobolBankingCoreError('Malformed provider amount returned by COBOL.', 'malformed_cobol_output')
+    return parseCobolInteger(result[0], 'provider amount')
   }
 
   async validateProviderConsent(provider, status) {
@@ -172,8 +182,8 @@ export class CobolBankingCore {
       String(input.pendingAmountCents || 0),
     ])
     if (!result) return fallback
-    if (result.length !== 4 || result.some((value) => !INTEGER.test(value))) throw new CobolBankingCoreError('Malformed credit-card result returned by COBOL.', 'malformed_cobol_output')
-    const [amountOwedCents, ledgerBalanceCents, availableCreditCents, pendingAmountCents] = result.map(Number)
+    if (result.length !== 4) throw new CobolBankingCoreError('Malformed credit-card result returned by COBOL.', 'malformed_cobol_output')
+    const [amountOwedCents, ledgerBalanceCents, availableCreditCents, pendingAmountCents] = result.map((value, index) => parseCobolInteger(value, ['amount owed', 'ledger balance', 'available credit', 'pending amount'][index]))
     for (const [field, value] of Object.entries({ amountOwedCents, ledgerBalanceCents, availableCreditCents, pendingAmountCents })) safeInteger(value, field)
     if (amountOwedCents < 0 || ledgerBalanceCents > 0 || availableCreditCents < 0 || pendingAmountCents < 0) throw new CobolBankingCoreError('Invalid credit-card invariants returned by COBOL.', 'malformed_cobol_output')
     return { amountOwedCents, ledgerBalanceCents, availableCreditCents: input.creditLimitCents > 0 ? availableCreditCents : undefined, pendingAmountCents }
