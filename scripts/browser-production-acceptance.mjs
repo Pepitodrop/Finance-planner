@@ -423,7 +423,10 @@ async function captureAccountDetailEvidence(client,sessionId,credit=false){
   assert.equal(assertions.overflow,false);assert.equal(assertions.detail,credit?'credit-card':'checking');assert.equal(assertions.current,1)
   const optional=await evaluate(client,sessionId,`({owed:Boolean(document.body.innerText.includes('Amount owed')),available:Boolean(document.body.innerText.includes('Available credit')),transactions:Boolean(document.querySelector('.accounts-transactions'))})`)
   assert.equal(optional.transactions,true);if(credit){assert.equal(optional.owed,true);assert.equal(optional.available,true)}
-  const path=join(ARTIFACT_DIR,credit?'credit-card-details-390x844.png':'account-details-390x844.png');const screenshot=await client.send('Page.captureScreenshot',{format:'png',fromSurface:true,captureBeyondViewport:false},sessionId);await writeFile(path,screenshot.data,'base64');return{path,...assertions,...optional}
+  const path=join(ARTIFACT_DIR,credit?'credit-card-details-390x844.png':'account-details-390x844.png');const screenshot=await client.send('Page.captureScreenshot',{format:'png',fromSurface:true,captureBeyondViewport:false},sessionId);await writeFile(path,screenshot.data,'base64')
+  await evaluate(client,sessionId,`document.querySelector('.accounts-back')?.click()`)
+  await waitFor(client,sessionId,`Boolean(document.querySelector('.accounts-summary'))`,'Accounts overview restored after detail capture')
+  return{path,...assertions,...optional}
 }
 
 async function captureAccountsEmptyEvidence(client,sessionId){
@@ -657,6 +660,14 @@ async function runAcceptance() {
     await waitFor(client, sessionId, 'Boolean(document.querySelector(".automatic-analysis"))', 'automatic analysis completion status')
     await waitFor(client, sessionId, '!document.querySelector(".automatic-analysis")', 'automatic analysis status dismissal')
     await waitFor(client, sessionId, '!document.querySelector(".mobile-connectivity-status, .mobile-install-card, .passkey-enrolment, .platform-action-bar")', 'clean Dashboard runtime state')
+
+    report.checks.accountsFixtureActivation = await evaluate(client, sessionId, `(() => {
+      if (typeof window.__financePlannerAcceptanceState !== 'function') return false
+      window.__financePlannerAcceptanceState('accounts')
+      return true
+    })()`)
+    assert.equal(report.checks.accountsFixtureActivation, true)
+    await waitFor(client, sessionId, `document.body.innerText.includes('Everyday checking account')`, 'Accounts acceptance fixtures')
 
     report.checks.dashboardScreenshots = []
     for (const [width, height] of [[1440, 900], [1024, 768], [390, 844], [360, 800]]) {

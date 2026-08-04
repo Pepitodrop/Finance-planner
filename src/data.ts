@@ -39,4 +39,4 @@ export const accountsAcceptanceState: AppState = {
   goals: normalInitialState.goals,
 }
 
-export const initialState: AppState = import.meta.env.VITE_ACCEPTANCE_FIXTURES === 'true' ? accountsAcceptanceState : normalInitialState
+export const initialState: AppState = normalInitialState
