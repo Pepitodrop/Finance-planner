@@ -11,11 +11,34 @@ export interface GoogleSubscriptionRecord {
   status: SubscriptionStatus
 }
 
+export interface GoogleSubscriptionCapability {
+  enabled: boolean
+  source: 'gmail' | 'custom' | 'invalid'
+  configured: boolean
+  ready: boolean
+  connected?: boolean
+  reason?: string
+  requiredScopes?: string[]
+  limitations: string[]
+  lastSyncAt?: string
+}
+
 export interface GoogleSubscriptionConnection {
   connected: boolean
+  source?: 'gmail' | 'custom'
   lastSyncAt?: string
   subscriptions: GoogleSubscriptionRecord[]
+  limitations?: string[]
+  capability?: GoogleSubscriptionCapability
   unavailableReason?: string
+}
+
+export interface GoogleSubscriptionDisconnectResult {
+  disconnected: boolean
+  revoked: boolean
+  deletedImportedData: boolean
+  deletedSubscriptionCount: number
+  cloudStateUpdated: boolean
 }
 
 function normalizeText(value: string): string {
@@ -45,6 +68,8 @@ export function normalizeGoogleSubscriptions(records: GoogleSubscriptionRecord[]
   const unique = new Map<string, Subscription>()
   for (const record of records) {
     if (!record.externalId || !Number.isSafeInteger(record.amountCents) || record.amountCents < 0 || record.currency !== 'EUR') continue
+    if (!['weekly', 'monthly', 'quarterly', 'yearly'].includes(record.billingInterval)) continue
+    if (!['active', 'paused', 'cancelled', 'expired'].includes(record.status)) continue
     unique.set(record.externalId, {
       id: `google:${record.externalId}`,
       externalId: record.externalId,
@@ -70,22 +95,41 @@ export function reconcileGoogleSubscriptions(state: AppState, imported: Subscrip
 }
 
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(url, { ...init, credentials: 'include', headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers } })
+  const response = await fetch(url, {
+    ...init,
+    credentials: 'include',
+    cache: 'no-store',
+    headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
+  })
   const payload = await response.json().catch(() => ({})) as T & { error?: { message?: string } }
   if (!response.ok) throw new Error(payload.error?.message || `Google-Abonnement-Anfrage fehlgeschlagen (${response.status}).`)
   return payload
 }
 
+export function getGoogleSubscriptionCapability(): Promise<GoogleSubscriptionCapability> {
+  return request('/api/subscriptions/google/capability')
+}
+
 export async function startGoogleSubscriptionConnection(returnUrl = window.location.href): Promise<void> {
-  const result = await request<{ redirectUrl?: string }>('/api/subscriptions/google/start', { method: 'POST', body: JSON.stringify({ redirectUri: returnUrl }) })
-  if (!result.redirectUrl?.startsWith('https://')) throw new Error('Google lieferte keine sichere Weiterleitungsadresse.')
-  window.location.assign(result.redirectUrl)
+  const callback = new URL(returnUrl)
+  callback.hash = ''
+  for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'connected']) callback.searchParams.delete(key)
+  const result = await request<{ redirectUrl?: string }>('/api/subscriptions/google/start', {
+    method: 'POST',
+    body: JSON.stringify({ redirectUri: callback.toString() }),
+  })
+  if (!result.redirectUrl) throw new Error('Google lieferte keine Autorisierungsadresse.')
+  const authorization = new URL(result.redirectUrl)
+  if (authorization.protocol !== 'https:' || authorization.origin !== 'https://accounts.google.com') {
+    throw new Error('Google lieferte keine gültige Autorisierungsadresse.')
+  }
+  window.location.assign(authorization.toString())
 }
 
 export async function syncGoogleSubscriptions(): Promise<GoogleSubscriptionConnection> {
-  return request<GoogleSubscriptionConnection>('/api/subscriptions/google/sync', { method: 'POST' })
+  return request('/api/subscriptions/google/sync', { method: 'POST', body: '{}' })
 }
 
-export async function disconnectGoogleSubscriptions(deleteImportedData = false): Promise<void> {
-  await request<{ disconnected: boolean }>('/api/subscriptions/google', { method: 'DELETE', body: JSON.stringify({ deleteImportedData }) })
+export function disconnectGoogleSubscriptions(deleteImportedData = false): Promise<GoogleSubscriptionDisconnectResult> {
+  return request('/api/subscriptions/google', { method: 'DELETE', body: JSON.stringify({ deleteImportedData }) })
 }
