@@ -10,6 +10,7 @@ import { createBudgetRouter } from './budget-router.js'
 import { createConnectorStore } from './database.js'
 import { createRateLimiters } from './distributed-rate-limiter.js'
 import { createFinanceRouter } from './finance-router.js'
+import { createGoogleSubscriptionsRouter } from './google-subscriptions-router.js'
 import { OperationalMetrics } from './operational-metrics.js'
 import { startGoCardless, startPayPal, syncGoCardless, syncPayPal } from './providers.js'
 import { HttpError, SlidingWindowRateLimiter, classifyError, clientIp, requestId, validateProductionConfig } from './runtime-security.js'
@@ -142,7 +143,7 @@ function cors(request, response) {
 
 async function rateLimit(request, response, pathname) {
   const remote = env.TRUST_PROXY === 'true' ? clientIp(request) : request.socket?.remoteAddress || 'unknown'
-  const sensitive = /^\/api\/(auth|session|connectors|finance|ai)/.test(pathname)
+  const sensitive = /^\/api\/(auth|session|connectors|subscriptions|finance|ai)/.test(pathname)
   const limiter = sensitive ? sensitiveLimiter : generalLimiter
   const result = await limiter.consume(`${remote}:${sensitive ? 'sensitive' : 'general'}`)
   response.setHeader('RateLimit-Limit', limiter.limit)
@@ -278,6 +279,7 @@ const handleAuth = await createAuthRouter({
 const handleFinance = createFinanceRouter({ env, send, body, userId })
 const handleBudget = createBudgetRouter({ env, send, body, userId, stateStore: userStateStore, profileStore: budgetProfileStore })
 const handleAi = createAiRouter({ env, send, body, userId, loadBehaviorEvents })
+const handleGoogleSubscriptions = createGoogleSubscriptionsRouter({ env, origin, sessionSecret, store, send, body, userId })
 
 const server = createServer(async (request, response) => {
   const startedAt = Date.now()
@@ -317,6 +319,7 @@ const server = createServer(async (request, response) => {
     }
     const webhook = url.pathname.match(/^\/api\/connectors\/webhooks\/(gocardless|finapi|paypal)$/)
     if (request.method === 'POST' && webhook) return await handleWebhook(webhook[1], request, response)
+    if (await handleGoogleSubscriptions(request, response, url)) return
     if (await handleAuth(request, response, url)) return
     if (await handleFinance(request, response, url)) return
     if (await handleBudget(request, response, url)) return
