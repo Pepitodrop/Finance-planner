@@ -4,17 +4,30 @@ import test from 'node:test'
 
 const serverSource = await readFile(new URL('../src/server.js', import.meta.url), 'utf8')
 
-test('connector setup authenticates before disclosing provider availability or configuration', () => {
+test('connector setup authenticates and authorizes before provider capability disclosure', () => {
   const startFunction = serverSource.slice(
     serverSource.indexOf('async function start(provider, request, response)'),
     serverSource.indexOf('async function buildSyncPayload'),
   )
   const authentication = startFunction.indexOf('const user = userId(request)')
   const providerLookup = startFunction.indexOf('const adapter = providerAdapter(provider)')
-  const capabilityDescription = startFunction.indexOf('const description = adapter.describe()')
+  const authorization = startFunction.indexOf('const description = authorizeProviderUser(adapter, user, env)')
+  const availabilityCheck = startFunction.indexOf('if (!description.available)')
   assert.ok(authentication >= 0)
   assert.ok(authentication < providerLookup)
-  assert.ok(authentication < capabilityDescription)
+  assert.ok(providerLookup < authorization)
+  assert.ok(authorization < availabilityCheck)
+})
+
+test('every stored owner-account connection is re-authorized before synchronization', () => {
+  const syncFunction = serverSource.slice(
+    serverSource.indexOf('async function buildSyncPayload(user)'),
+    serverSource.indexOf('function syncIdempotencyKey'),
+  )
+  const authorization = syncFunction.indexOf('authorizeProviderUser(adapter, user, env)')
+  const synchronization = syncFunction.indexOf('await adapter.sync(stored)')
+  assert.ok(authorization >= 0)
+  assert.ok(authorization < synchronization)
 })
 
 test('connector deletion authenticates before validating a provider identifier', () => {
