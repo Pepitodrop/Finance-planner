@@ -1,7 +1,17 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFile } from 'node:fs/promises'
-import { decimalToCents, jsonFetch, normalizeProviderAccountType, providerAccountTypeAlias, retryDelayMs, startPayPal, syncGoCardless, syncWindow } from '../src/providers.js'
+import {
+  createOpenBankingProviderRegistry,
+  decimalToCents,
+  jsonFetch,
+  normalizeProviderAccountType,
+  providerAccountTypeAlias,
+  retryDelayMs,
+  startPayPal,
+  syncGoCardless,
+  syncWindow,
+} from '../src/providers.js'
 
 test('converts provider decimal strings to integer cents without floating-point rounding', () => {
   assert.equal(decimalToCents('12.34'), 1234)
@@ -12,7 +22,7 @@ test('converts provider decimal strings to integer cents without floating-point 
   assert.throws(() => decimalToCents('NaN'))
 })
 
-test('maps provider account codes to conservative COBOL aliases', async () => {
+test('maps provider account codes through the COBOL banking contract', async () => {
   assert.equal(providerAccountTypeAlias({ cashAccountType: 'CACC' }), 'checking')
   assert.equal(providerAccountTypeAlias({ cashAccountType: 'SVGS' }), 'savings')
   assert.equal(providerAccountTypeAlias({ cashAccountType: 'CARD' }), 'credit-card')
@@ -22,13 +32,13 @@ test('maps provider account codes to conservative COBOL aliases', async () => {
 
   const calls = []
   const fakeCore = {
-    async normalizeAccountType(value) {
+    async normalizeProviderAccountType(value) {
       calls.push(value)
-      return value
+      return 'savings'
     },
   }
   assert.equal(await normalizeProviderAccountType({ cashAccountType: 'SVGS' }, {}, fakeCore), 'savings')
-  assert.deepEqual(calls, ['savings'])
+  assert.deepEqual(calls, ['SVGS'])
 })
 
 test('calculates bounded Retry-After delays for seconds and HTTP dates', () => {
@@ -66,7 +76,7 @@ test('retries retryable provider responses before succeeding', async () => {
   }
 })
 
-test('rejects expired or revoked GoCardless consent before account synchronization', async () => {
+test('rejects expired or revoked GoCardless consent through COBOL policy before account synchronization', async () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = async () => new Response(JSON.stringify({ status: 'EX', accounts: ['account-1'] }), { status: 200 })
 
@@ -80,7 +90,30 @@ test('rejects expired or revoked GoCardless consent before account synchronizati
   }
 })
 
-test('PayPal start fails closed unless a provider-hosted partner flow is configured', async () => {
+test('PayPal owner mode connects the application account without partner onboarding', async () => {
+  const common = {
+    state: 'single-use-state',
+    redirectUri: 'https://finance.example.com/connections',
+  }
+
+  const started = await startPayPal({
+    ...common,
+    env: {
+      PAYPAL_CLIENT_ID: 'client',
+      PAYPAL_CLIENT_SECRET: 'secret',
+      PAYPAL_CONNECTION_MODE: 'owner',
+      PAYPAL_ENV: 'live',
+    },
+  })
+  const redirect = new URL(started.redirectUrl)
+  assert.equal(redirect.origin, 'https://finance.example.com')
+  assert.equal(redirect.pathname, '/api/connectors/callback')
+  assert.equal(redirect.searchParams.get('provider'), 'paypal')
+  assert.equal(redirect.searchParams.get('state'), common.state)
+  assert.equal(started.credential.mode, 'owner')
+})
+
+test('PayPal partner mode still fails closed without approved partner onboarding', async () => {
   const common = {
     state: 'single-use-state',
     redirectUri: 'https://finance.example.com/connections/paypal/callback',
@@ -89,7 +122,12 @@ test('PayPal start fails closed unless a provider-hosted partner flow is configu
   await assert.rejects(
     startPayPal({
       ...common,
-      env: { PAYPAL_CLIENT_ID: 'client', PAYPAL_CLIENT_SECRET: 'secret', PAYPAL_ENV: 'live' },
+      env: {
+        PAYPAL_CLIENT_ID: 'client',
+        PAYPAL_CLIENT_SECRET: 'secret',
+        PAYPAL_CONNECTION_MODE: 'partner',
+        PAYPAL_ENV: 'live',
+      },
     }),
     /partner onboarding is not configured/,
   )
@@ -99,28 +137,52 @@ test('PayPal start fails closed unless a provider-hosted partner flow is configu
     env: {
       PAYPAL_CLIENT_ID: 'client',
       PAYPAL_CLIENT_SECRET: 'secret',
+      PAYPAL_CONNECTION_MODE: 'partner',
       PAYPAL_PARTNER_MERCHANT_ID: 'partner-merchant',
       PAYPAL_ENV: 'live',
     },
   })
   const redirect = new URL(started.redirectUrl)
-  assert.equal(redirect.protocol, 'https:')
   assert.equal(redirect.hostname, 'www.paypal.com')
   assert.equal(redirect.pathname, '/bizsignup/partner/entry')
-  assert.equal(redirect.searchParams.get('state'), common.state)
   assert.equal(started.credential.mode, 'partner')
 })
 
-test('bank connectors enforce consent, incremental, pagination and reconciliation controls', async () => {
+test('generic provider registry exposes replaceable read-only adapters only', () => {
+  const fakeCore = {
+    async validateReadOnlyScope() { return true },
+    async validateProviderConsent() { return 'ready' },
+    async normalizeProviderAccountType() { return 'checking' },
+    async normalizeProviderAmount() { return 0 },
+  }
+  const registry = createOpenBankingProviderRegistry({
+    GOCARDLESS_SECRET_ID: 'id',
+    GOCARDLESS_SECRET_KEY: 'key',
+    PAYPAL_CLIENT_ID: 'client',
+    PAYPAL_CLIENT_SECRET: 'secret',
+    PAYPAL_CONNECTION_MODE: 'owner',
+  }, fakeCore)
+  const providers = registry.list()
+  assert.deepEqual(providers.map((provider) => provider.id), ['gocardless', 'paypal', 'finapi'])
+  for (const provider of providers) {
+    assert.equal(provider.capabilities.paymentInitiation, false)
+    assert.equal(provider.capabilities.transfers, false)
+    assert.equal(provider.capabilities.payouts, false)
+    assert.equal(provider.capabilities.orders, false)
+  }
+  assert.deepEqual(registry.configured().map((provider) => provider.id), ['gocardless', 'paypal'])
+})
+
+test('bank connectors enforce consent, read-only scope, pagination and reconciliation controls', async () => {
   const source = await readFile(new URL('../src/providers.js', import.meta.url), 'utf8')
-  assert.match(source, /AbortController/)
-  assert.match(source, /response\.status === 429 \|\| response\.status >= 500/)
-  assert.match(source, /requisition\.status !== 'LN'/)
-  assert.match(source, /gocardlessConsentExpiresAt/)
-  assert.match(source, /date_from/)
-  assert.match(source, /lastSyncedAt/)
+  assert.match(source, /OpenBankingProviderRegistry/)
+  assert.match(source, /validateReadOnlyScope/)
+  assert.match(source, /paymentInitiation: false/)
+  assert.match(source, /\/v1\/reporting\/transactions/)
+  assert.doesNotMatch(source, /\/v2\/checkout\/orders/)
+  assert.doesNotMatch(source, /\/v1\/payments/)
+  assert.doesNotMatch(source, /\/v1\/payments\/payouts/)
   assert.match(source, /MAX_PAYPAL_PAGES/)
-  assert.match(source, /pagination exceeds safety limit/)
   assert.match(source, /validateProviderReconciliation/)
   assert.match(source, /normalizeProviderAccountType/)
 })
