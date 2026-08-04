@@ -34,7 +34,7 @@ GnuCOBOL is authoritative for banking-domain decisions:
 - provider account/transaction reconciliation and duplicate-count acceptance;
 - credit-card normalization.
 
-Node.js is limited to generic HTTP/TLS transport, OAuth redirects, bounded provider JSON parsing, encrypted persistence, sessions, retry orchestration, and operational controls. Node may collect provider rows and count unique identifiers, but the COBOL core decides whether the resulting account, transaction, duplicate, and date-window invariants are acceptable.
+Node.js is limited to generic HTTP/TLS transport, OAuth redirects, bounded provider JSON parsing, encrypted persistence, sessions, retry orchestration, user authorization, and operational controls. Node may collect provider rows and count unique identifiers, but the COBOL core decides whether the resulting account, transaction, duplicate, and date-window invariants are acceptable.
 
 Provider responses are not accepted into Finance Planner state until the COBOL banking core validates the relevant financial, consent, scope, and reconciliation semantics. Provider banking operations do not use JavaScript financial fallbacks.
 
@@ -50,9 +50,11 @@ Production images set `COBOL_BANKING_REQUIRED=true`, so these decisions fail clo
 
 `PAYPAL_CONNECTION_MODE=owner` monitors the PayPal Business account associated with the configured REST application through reporting APIs. It verifies reporting access during setup, reads the EUR account balance from the balance-reporting endpoint, and requests transaction information plus balance-affecting records only. It does not require partner onboarding and does not expose payment APIs.
 
+Owner mode must also set `PAYPAL_OWNER_USER_ID` to the exact authenticated Finance Planner user ID permitted to access that application-owned PayPal account. Setup and every synchronization fail closed for all other users, preventing one deployment's PayPal REST credentials from exposing the same account to unrelated Finance Planner accounts.
+
 `PAYPAL_CONNECTION_MODE=partner` retains the provider-hosted partner onboarding path and requires `PAYPAL_PARTNER_MERCHANT_ID` plus webhook verification.
 
-When the variable is omitted, Finance Planner selects partner mode only when a partner merchant ID is present; otherwise it uses owner mode.
+When the mode variable is omitted, Finance Planner selects partner mode only when a partner merchant ID is present; otherwise it selects owner mode, which remains unavailable until `PAYPAL_OWNER_USER_ID` is configured.
 
 ## Security invariant
 
