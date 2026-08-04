@@ -9,6 +9,7 @@ import {
 import { validateAccountDeletionInput } from './account-deletion.js'
 import { AuthStore } from './auth-store.js'
 import { createSession, verifySession } from './security.js'
+import { verifyTestPassword } from './test-password-auth.js'
 
 const b64 = (value) => Buffer.from(value).toString('base64url')
 const unb64 = (value) => new Uint8Array(Buffer.from(value, 'base64url'))
@@ -97,6 +98,21 @@ export async function createAuthRouter({ env, origin, sessionSecret, send, verif
 
     if (request.method === 'POST' && url.pathname === '/api/auth/logout') {
       send(response, 200, { authenticated: false }, { 'Set-Cookie': cookie('fp_session', '', origin, 0) })
+      return true
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/auth/test-password/login') {
+      const configuredEmail = String(env.TEST_ACCOUNT_EMAIL || '').trim().toLowerCase()
+      const configuredHash = String(env.TEST_ACCOUNT_PASSWORD_HASH || '')
+      if (!configuredEmail || !configuredHash) throw new Error('Test password login is not configured.')
+      const input = await jsonBody(request)
+      const submittedEmail = String(input.email || '').trim().toLowerCase()
+      const passwordValid = verifyTestPassword(input.password, configuredHash)
+      await store.load()
+      const user = store.findByEmail(submittedEmail)
+      if (!passwordValid || submittedEmail !== configuredEmail || !user || !String(user.id).startsWith('test:')) throw new Error('Invalid email or password.')
+      const session = createSession(user.id, sessionSecret, sessionTtlSeconds)
+      send(response, 200, { authenticated: true, user: { id: user.id, email: user.email, name: user.name, passkeyCount: user.passkeys?.length || 0 } }, { 'Set-Cookie': cookie('fp_session', session, origin, sessionTtlSeconds) })
       return true
     }
 
