@@ -37,7 +37,7 @@ async function inference(body, timeoutMs) {
       signal: controller.signal,
     })
     const text = await response.text()
-    if (!response.ok) throw new Error(`Hugging Face returned ${response.status}${text ? `: ${text.slice(0, 240)}` : ''}`)
+    if (!response.ok) throw new Error(`Hugging Face returned status ${response.status}.`)
     let payload
     try { payload = JSON.parse(text) } catch { throw new Error('Hugging Face returned malformed response JSON') }
     const content = payload?.choices?.[0]?.message?.content
@@ -145,7 +145,7 @@ try {
   console.log('Hosted financial and receipt inference acceptance passed.')
 } catch (error) {
   evidence.status = evidence.status === 'blocked_by_credentials' ? evidence.status : 'failed'
-  evidence.error = error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500)
+  evidence.error = error instanceof Error ? error.message.slice(0, 500) : 'Hosted AI acceptance failed.'
   await persist()
   console.error(evidence.error)
   process.exit(1)
