@@ -3,42 +3,39 @@ import test from 'node:test'
 import { readFile } from 'node:fs/promises'
 import {
   createOpenBankingProviderRegistry,
-  decimalToCents,
   jsonFetch,
   normalizeProviderAccountType,
-  providerAccountTypeAlias,
   retryDelayMs,
   startPayPal,
   syncGoCardless,
+  syncPayPal,
   syncWindow,
 } from '../src/providers.js'
 
-test('converts provider decimal strings to integer cents without floating-point rounding', () => {
-  assert.equal(decimalToCents('12.34'), 1234)
-  assert.equal(decimalToCents('-0.01'), -1)
-  assert.equal(decimalToCents('100'), 10000)
-  assert.equal(decimalToCents('1.2'), 120)
-  assert.throws(() => decimalToCents('1.234'))
-  assert.throws(() => decimalToCents('NaN'))
-})
+function fakeBankingCore() {
+  return {
+    async validateReadOnlyScope() { return true },
+    async validateProviderConsent() { return 'ready' },
+    async normalizeProviderAccountType(value) { return value === 'CASH' ? 'cash' : 'checking' },
+    async normalizeProviderAmount(value) {
+      const values = { '123.45': 12_345, '5.00': 500, '-2.50': -250 }
+      if (!(String(value) in values)) throw new Error(`Unexpected test amount: ${value}`)
+      return values[String(value)]
+    },
+  }
+}
 
-test('maps provider account codes through the COBOL banking contract', async () => {
-  assert.equal(providerAccountTypeAlias({ cashAccountType: 'CACC' }), 'checking')
-  assert.equal(providerAccountTypeAlias({ cashAccountType: 'SVGS' }), 'savings')
-  assert.equal(providerAccountTypeAlias({ cashAccountType: 'CARD' }), 'credit-card')
-  assert.equal(providerAccountTypeAlias({ cashAccountType: 'CASH' }), 'cash')
-  assert.equal(providerAccountTypeAlias({ cashAccountType: 'TRAS' }), 'investment')
-  assert.equal(providerAccountTypeAlias({ cashAccountType: 'unknown-provider-value' }), 'checking')
-
+test('maps provider account codes only through the COBOL banking contract', async () => {
   const calls = []
-  const fakeCore = {
+  const core = {
     async normalizeProviderAccountType(value) {
       calls.push(value)
       return 'savings'
     },
   }
-  assert.equal(await normalizeProviderAccountType({ cashAccountType: 'SVGS' }, {}, fakeCore), 'savings')
+  assert.equal(await normalizeProviderAccountType({ cashAccountType: 'SVGS' }, {}, core), 'savings')
   assert.deepEqual(calls, ['SVGS'])
+  await assert.rejects(normalizeProviderAccountType({ cashAccountType: 'SVGS' }, {}, {}), /COBOL banking core/)
 })
 
 test('calculates bounded Retry-After delays for seconds and HTTP dates', () => {
@@ -76,13 +73,27 @@ test('retries retryable provider responses before succeeding', async () => {
   }
 })
 
+test('provider errors do not expose upstream response bodies', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(JSON.stringify({ detail: 'secret upstream body' }), { status: 400 })
+  try {
+    await assert.rejects(
+      jsonFetch('https://provider.invalid/test', {}, { retries: 0, timeoutMs: 1_000 }),
+      (error) => /HTTP 400/.test(error.message) && !/secret upstream body/.test(error.message),
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('rejects expired or revoked GoCardless consent through COBOL policy before account synchronization', async () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = async () => new Response(JSON.stringify({ status: 'EX', accounts: ['account-1'] }), { status: 200 })
+  const core = { async validateProviderConsent() { return 'expired' } }
 
   try {
     await assert.rejects(
-      syncGoCardless({ requisitionId: 'req-1', token: { access: 'token' } }, { PROVIDER_RETRIES: '0' }),
+      syncGoCardless({ requisitionId: 'req-1', token: { access: 'token' } }, { PROVIDER_RETRIES: '0' }, core),
       /GoCardless consent expired or was revoked: EX/,
     )
   } finally {
@@ -90,33 +101,107 @@ test('rejects expired or revoked GoCardless consent through COBOL policy before 
   }
 })
 
-test('PayPal owner mode connects the application account without partner onboarding', async () => {
-  const common = {
-    state: 'single-use-state',
-    redirectUri: 'https://finance.example.com/connections',
+test('PayPal owner mode verifies reporting access without partner onboarding', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    requests.push(url)
+    if (url.endsWith('/v1/oauth2/token')) return new Response(JSON.stringify({ access_token: 'token' }), { status: 200 })
+    if (url.includes('/v1/reporting/balances')) {
+      return new Response(JSON.stringify({
+        account_id: 'PAYPALACCOUNT',
+        balances: [{ currency: 'EUR', total_balance: { currency_code: 'EUR', value: '123.45' } }],
+      }), { status: 200 })
+    }
+    throw new Error(`Unexpected URL: ${url}`)
   }
 
-  const started = await startPayPal({
-    ...common,
-    env: {
+  try {
+    const common = {
+      state: 'single-use-state',
+      redirectUri: 'https://finance.example.com/connections',
+    }
+    const started = await startPayPal({
+      ...common,
+      core: fakeBankingCore(),
+      env: {
+        PAYPAL_CLIENT_ID: 'client',
+        PAYPAL_CLIENT_SECRET: 'secret',
+        PAYPAL_CONNECTION_MODE: 'owner',
+        PAYPAL_ENV: 'live',
+      },
+    })
+    const redirect = new URL(started.redirectUrl)
+    assert.equal(redirect.origin, 'https://finance.example.com')
+    assert.equal(redirect.pathname, '/api/connectors/callback')
+    assert.equal(redirect.searchParams.get('provider'), 'paypal')
+    assert.equal(redirect.searchParams.get('state'), common.state)
+    assert.equal(started.credential.mode, 'owner')
+    assert.ok(requests.some((url) => url.includes('/v1/reporting/balances')))
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('PayPal synchronization uses the reporting balance instead of summing the sync window', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    requests.push(url)
+    if (url.endsWith('/v1/oauth2/token')) return new Response(JSON.stringify({ access_token: 'token' }), { status: 200 })
+    if (url.includes('/v1/reporting/balances')) {
+      return new Response(JSON.stringify({
+        account_id: 'PAYPALACCOUNT',
+        as_of_time: '2026-08-04T18:00:00Z',
+        balances: [{ currency: 'EUR', total_balance: { currency_code: 'EUR', value: '123.45' } }],
+      }), { status: 200 })
+    }
+    if (url.includes('/v1/reporting/transactions')) {
+      return new Response(JSON.stringify({
+        total_pages: 1,
+        transaction_details: [{
+          transaction_info: {
+            transaction_id: 'TX-1',
+            transaction_event_code: 'T0001',
+            transaction_status: 'S',
+            transaction_subject: 'Test transaction',
+            transaction_initiation_date: '2026-08-03T10:00:00Z',
+            transaction_amount: { currency_code: 'EUR', value: '5.00' },
+          },
+        }],
+      }), { status: 200 })
+    }
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+
+  try {
+    const env = {
       PAYPAL_CLIENT_ID: 'client',
       PAYPAL_CLIENT_SECRET: 'secret',
       PAYPAL_CONNECTION_MODE: 'owner',
       PAYPAL_ENV: 'live',
-    },
-  })
-  const redirect = new URL(started.redirectUrl)
-  assert.equal(redirect.origin, 'https://finance.example.com')
-  assert.equal(redirect.pathname, '/api/connectors/callback')
-  assert.equal(redirect.searchParams.get('provider'), 'paypal')
-  assert.equal(redirect.searchParams.get('state'), common.state)
-  assert.equal(started.credential.mode, 'owner')
+      PROVIDER_RETRIES: '0',
+      ALLOW_JS_FINANCE_FALLBACK: 'true',
+      NODE_ENV: 'test',
+    }
+    const synced = await syncPayPal({ mode: 'owner' }, env, fakeBankingCore())
+    assert.equal(synced.accounts[0].balanceCents, 12_345)
+    assert.equal(synced.transactions[0].amountCents, 500)
+    const transactionUrl = new URL(requests.find((url) => url.includes('/v1/reporting/transactions')))
+    assert.equal(transactionUrl.searchParams.get('fields'), 'transaction_info')
+    assert.equal(transactionUrl.searchParams.get('balance_affecting_records_only'), 'Y')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
 test('PayPal partner mode still fails closed without approved partner onboarding', async () => {
   const common = {
     state: 'single-use-state',
     redirectUri: 'https://finance.example.com/connections/paypal/callback',
+    core: fakeBankingCore(),
   }
 
   await assert.rejects(
@@ -149,19 +234,13 @@ test('PayPal partner mode still fails closed without approved partner onboarding
 })
 
 test('generic provider registry exposes replaceable read-only adapters only', () => {
-  const fakeCore = {
-    async validateReadOnlyScope() { return true },
-    async validateProviderConsent() { return 'ready' },
-    async normalizeProviderAccountType() { return 'checking' },
-    async normalizeProviderAmount() { return 0 },
-  }
   const registry = createOpenBankingProviderRegistry({
     GOCARDLESS_SECRET_ID: 'id',
     GOCARDLESS_SECRET_KEY: 'key',
     PAYPAL_CLIENT_ID: 'client',
     PAYPAL_CLIENT_SECRET: 'secret',
     PAYPAL_CONNECTION_MODE: 'owner',
-  }, fakeCore)
+  }, fakeBankingCore())
   const providers = registry.list()
   assert.deepEqual(providers.map((provider) => provider.id), ['gocardless', 'paypal', 'finapi'])
   for (const provider of providers) {
@@ -173,12 +252,24 @@ test('generic provider registry exposes replaceable read-only adapters only', ()
   assert.deepEqual(registry.configured().map((provider) => provider.id), ['gocardless', 'paypal'])
 })
 
-test('bank connectors enforce consent, read-only scope, pagination and reconciliation controls', async () => {
+test('server dispatches connector lifecycle through the generic registry', async () => {
+  const serverSource = await readFile(new URL('../src/server.js', import.meta.url), 'utf8')
+  assert.match(serverSource, /createOpenBankingProviderRegistry/)
+  assert.match(serverSource, /providerRegistry\.get/)
+  assert.match(serverSource, /providerRegistry\.list/)
+  assert.doesNotMatch(serverSource, /provider === 'gocardless'/)
+  assert.doesNotMatch(serverSource, /provider === 'paypal'/)
+})
+
+test('bank connectors enforce consent, minimal reporting fields and no payment APIs', async () => {
   const source = await readFile(new URL('../src/providers.js', import.meta.url), 'utf8')
   assert.match(source, /OpenBankingProviderRegistry/)
   assert.match(source, /validateReadOnlyScope/)
   assert.match(source, /paymentInitiation: false/)
   assert.match(source, /\/v1\/reporting\/transactions/)
+  assert.match(source, /\/v1\/reporting\/balances/)
+  assert.match(source, /fields', 'transaction_info'/)
+  assert.doesNotMatch(source, /fields', 'all'/)
   assert.doesNotMatch(source, /\/v2\/checkout\/orders/)
   assert.doesNotMatch(source, /\/v1\/payments/)
   assert.doesNotMatch(source, /\/v1\/payments\/payouts/)
