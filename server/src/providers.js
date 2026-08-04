@@ -255,7 +255,9 @@ async function paypalAccessToken(env) {
 
 export async function startPayPal({ env, state, redirectUri }) {
   if (!env.PAYPAL_CLIENT_ID || !env.PAYPAL_CLIENT_SECRET) throw new Error('PayPal credentials are not configured.')
-  if (!env.PAYPAL_PARTNER_MERCHANT_ID) return { redirectUrl: `${redirectUri}${redirectUri.includes('?') ? '&' : '?'}connector=paypal&state=${encodeURIComponent(state)}`, credential: { mode: 'owner-reporting' } }
+  if (!env.PAYPAL_PARTNER_MERCHANT_ID) {
+    throw new Error('PayPal user authorization is unavailable because partner onboarding is not configured. Set PAYPAL_PARTNER_MERCHANT_ID before enabling this connector.')
+  }
   const base = env.PAYPAL_ENV === 'live' ? 'https://www.paypal.com' : 'https://www.sandbox.paypal.com'
   const url = new URL(`${base}/bizsignup/partner/entry`)
   url.searchParams.set('partnerId', env.PAYPAL_PARTNER_MERCHANT_ID)
