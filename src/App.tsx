@@ -4,6 +4,7 @@ import { AiPanel } from './AiPanel'
 import type { AiSuggestion } from './ai'
 import { learnBehavior } from './behavior'
 import { ConnectionsPanel } from './ConnectionsPanel'
+import type { ConnectionsAcceptanceMode } from './features/connections/connectionsAcceptanceFixtures'
 import { DataTools } from './DataTools'
 import { accountsAcceptanceState, initialState, planningAcceptanceState } from './data'
 import { FinanceAssistant } from './FinanceAssistant'
@@ -22,6 +23,8 @@ import type { DestinationId } from './app/navigation'
 
 interface AppProps { userId: string; userName?: string; onLockVault?: () => void }
 
+const CONNECTIONS_ACCEPTANCE_MODES: ConnectionsAcceptanceMode[] = ['empty', 'populated', 'institution-selector', 'institution-search', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'checking', 'sync-selection', 'attention', 'manual', 'statement-preview']
+
 function App({ userId, userName, onLockVault }: AppProps) {
   const [state, setState] = useState<AppState>(() => loadState())
   const [tab, setTab] = useState<DestinationId>('dashboard')
@@ -33,6 +36,7 @@ function App({ userId, userName, onLockVault }: AppProps) {
   const [requestedTransactionAccount, setRequestedTransactionAccount] = useState<string | null>(null)
   const [accountsAcceptanceMode, setAccountsAcceptanceMode] = useState<'accounts' | 'empty' | 'detail' | 'credit' | null>(null)
   const [planningAcceptanceMode, setPlanningAcceptanceMode] = useState<'goals' | 'goals-empty' | 'goal-editor' | 'recurring' | 'recurring-empty' | 'budget-consent' | 'budget-result' | null>(null)
+  const [connectionsAcceptanceMode, setConnectionsAcceptanceMode] = useState<ConnectionsAcceptanceMode | null>(null)
 
   useEffect(() => saveState(state), [state])
   useEffect(() => {
@@ -41,6 +45,7 @@ function App({ userId, userName, onLockVault }: AppProps) {
     target.__financePlannerAcceptanceState = (mode) => {
       if (['accounts','empty','detail','credit'].includes(mode)) setAccountsAcceptanceMode(mode as 'accounts' | 'empty' | 'detail' | 'credit')
       if (['goals','goals-empty','goal-editor','recurring','recurring-empty','budget-consent','budget-result'].includes(mode)) setPlanningAcceptanceMode(mode as typeof planningAcceptanceMode)
+      if (CONNECTIONS_ACCEPTANCE_MODES.includes(mode as ConnectionsAcceptanceMode)) setConnectionsAcceptanceMode(mode as ConnectionsAcceptanceMode)
     }
     return () => { delete target.__financePlannerAcceptanceState }
   }, [])
@@ -184,7 +189,7 @@ function App({ userId, userName, onLockVault }: AppProps) {
       {tab === 'accounts' && <AccountsPage key={accountsAcceptanceMode ?? 'live'} accounts={accountsPresentationState.accounts} transactions={accountsPresentationState.transactions} initialSelectedAccountId={accountsAcceptanceMode === 'detail' ? 'accept-checking' : accountsAcceptanceMode === 'credit' ? 'accept-card' : undefined} onOpenConnections={() => setTab('connections')} onViewTransactions={viewAccountTransactions}/>}
       {tab === 'goals' && <SavingsGoals key={planningAcceptanceMode ?? 'live'} state={planningPresentationState} onChange={setState} initialEditorOpen={planningAcceptanceMode === 'goal-editor'}/>}
       {tab === 'recurring' && <RecurringPaymentsPage transactions={planningPresentationState.transactions} onAddTransaction={openNewTransaction} onViewTransactions={() => navigate('transactions')}/>}
-      {tab === 'connections' && <ConnectionsPanel state={state} onApply={setState}/>} 
+      {tab === 'connections' && <ConnectionsPanel key={connectionsAcceptanceMode ?? 'live'} state={state} onApply={setState} acceptanceMode={connectionsAcceptanceMode ?? undefined}/>}
       {tab === 'ai' && <AiPanel transactions={state.transactions} onApply={applyAiSuggestion}/>} 
       {tab === 'assistant' && <FinanceAssistant state={state} budgetAcceptanceMode={planningAcceptanceMode === 'budget-result' ? 'result' : planningAcceptanceMode === 'budget-consent' ? 'consent' : undefined}/>}
       {tab === 'receipt' && <ReceiptReview/>}
