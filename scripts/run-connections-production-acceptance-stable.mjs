@@ -67,12 +67,17 @@ try {
         `expectedText: bodyText.toLocaleLowerCase('en').includes(${expectedTextLowerLiteral}),`,
       )
       .replace(
+        '  assert.deepEqual(assertions.viewport, { width, height })',
+        "  console.log(`Connections assertion snapshot ${mode} ${width}x${height}: ${JSON.stringify(assertions)}`)\n  assert.deepEqual(assertions.viewport, { width, height })",
+      )
+      .replace(
         "  throw new Error(`Timed out waiting for ${description}. Last value: ${JSON.stringify(lastValue)}`)",
         "  const diagnostics = await evaluate(client, sessionId, `(() => ({ href: location.href, storedMode: localStorage.getItem('finance-planner-connections-acceptance-mode'), hasBridge: typeof window.__financePlannerAcceptanceState === 'function', root: Boolean(document.querySelector('[data-connections-ready=true]')), overview: Boolean(document.querySelector('.connections-overview')), empty: Boolean(document.querySelector('.connections-empty')), text: document.body.innerText.slice(0, 1200) }))()`).catch((reason) => ({ diagnosticError: String(reason) }))\n  throw new Error(`Timed out waiting for ${description}. Last value: ${JSON.stringify(lastValue)}. Diagnostics: ${JSON.stringify(diagnostics)}`)",
       )
     assert.notEqual(patched, source, `Failed to isolate Connections mode: ${mode}`)
     assert.ok(patched.includes('finance-planner-connections-acceptance-mode'), `Failed to persist Connections fixture mode: ${mode}`)
     assert.ok(patched.includes(`toLocaleLowerCase('en').includes(${expectedTextLowerLiteral})`), `Failed to embed Connections text assertion: ${mode}`)
+    assert.ok(patched.includes('Connections assertion snapshot'), `Failed to add Connections assertion diagnostics: ${mode}`)
     assert.equal(patched.includes('String(expectedText)'), false, `Leaked runner variable into browser assertion: ${mode}`)
     const scriptPath = join(workspace, `connections-${mode}.mjs`)
     await writeFile(scriptPath, patched)
