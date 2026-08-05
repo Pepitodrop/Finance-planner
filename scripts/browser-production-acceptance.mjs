@@ -620,6 +620,38 @@ async function captureRuntimeSurfaceStressEvidence(client, sessionId) {
   return { path, ...assertions }
 }
 
+async function navigateToPlanningDestination(client, sessionId, label) {
+  const clicked = await evaluate(client, sessionId, `(() => {
+    const visible=e=>{if(!(e instanceof Element))return false;const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0}
+    const direct=[...document.querySelectorAll('nav button')].find(b=>b.getAttribute('aria-label')===${JSON.stringify(label)}&&visible(b))
+    if(direct){direct.click();return 'direct'}
+    const more=[...document.querySelectorAll('nav button')].find(b=>b.textContent?.includes('More')&&visible(b));if(!more)return false;more.click();return 'more'
+  })()`)
+  assert.ok(clicked, `Planning destination unavailable: ${label}`)
+  if (clicked === 'more') { await waitFor(client,sessionId,'Boolean(document.querySelector("#app-more-sheet"))','planning More sheet'); await clickButton(client,sessionId,label === 'Recurring payments' ? 'Recurring' : label === 'Finance assistant' ? 'Finance Assistant' : label) }
+}
+
+async function capturePlanningEvidence(client, sessionId, { feature, mode, width, height, filename, finalRow=false, editor=false }) {
+  await client.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<=768,screenWidth:width,screenHeight:height},sessionId)
+  const label=feature==='goals'?'Savings goals':feature==='recurring'?'Recurring payments':'Finance assistant'
+  await navigateToPlanningDestination(client,sessionId,label)
+  const fixture=await evaluate(client,sessionId,`typeof window.__financePlannerAcceptanceState==='function'&&(window.__financePlannerAcceptanceState(${JSON.stringify(mode)}),true)`)
+  assert.equal(fixture,true,'Planning acceptance fixture hook unavailable')
+  const selector=feature==='budget'?'[data-feature=budget-planner][lang=en]':`[data-feature=${feature}][lang=en]`
+  await waitFor(client,sessionId,`(async()=>{await document.fonts.ready;await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));return innerWidth===${width}&&innerHeight===${height}&&Boolean(document.querySelector(${JSON.stringify(selector)}))})()`,`${feature} ${width}x${height}`)
+  if(!finalRow) await evaluate(client,sessionId,`(()=>{if(${JSON.stringify(feature)}!=='budget'){window.scrollTo({top:0,behavior:'instant'});return}const root=document.querySelector(${JSON.stringify(selector)});const result=root?.querySelector('.learning-budget-allocations')?.closest('.panel');(${JSON.stringify(mode)}==='budget-result'?result:root)?.scrollIntoView({block:'start',behavior:'instant'})})()`)
+  if(finalRow) await evaluate(client,sessionId,'window.scrollTo({top:document.documentElement.scrollHeight,behavior:"instant"})')
+  await evaluate(client,sessionId,'new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+  const assertions=await evaluate(client,sessionId,`(()=>{const visible=e=>{if(!(e instanceof Element))return false;const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0};const root=document.querySelector(${JSON.stringify(selector)}),nav=document.querySelector('.app-mobile-navigation'),current=[...document.querySelectorAll('nav [aria-current=page]')].filter(visible),last=root?.querySelector('li:last-child, button:last-child'),lr=last?.getBoundingClientRect(),nr=nav?.getBoundingClientRect(),dialog=document.querySelector('.goal-dialog[role=dialog]');return{viewport:{width:innerWidth,height:innerHeight},language:root?.getAttribute('lang'),current:current.length,currentText:current[0]?.textContent?.trim(),overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth+1,navVisible:innerWidth>768||visible(nav),navOpaque:innerWidth>768||!['transparent','rgba(0, 0, 0, 0)'].includes(getComputedStyle(nav).backgroundColor),finalClear:!${finalRow}||Boolean(lr&&nr&&lr.bottom<=nr.top),dialog:Boolean(dialog),dialogInteractive:!dialog||!dialog.closest('[inert]'),firstFocused:!dialog||document.activeElement===dialog.querySelector('input'),consents:${JSON.stringify(feature)}!=='budget'||[...root.querySelectorAll('input[type=checkbox]')].slice(0,3).map(i=>i.checked),result:${JSON.stringify(feature)}!=='budget'||Boolean(root.querySelector('.learning-budget-allocations'))}})()`)
+  assert.deepEqual(assertions.viewport,{width,height});assert.equal(assertions.language,'en');assert.equal(assertions.current,1);assert.equal(assertions.overflow,false);assert.equal(assertions.navVisible,true);assert.equal(assertions.navOpaque,true);assert.equal(assertions.finalClear,true)
+  if(editor){assert.equal(assertions.dialog,true);assert.equal(assertions.dialogInteractive,true);assert.equal(assertions.firstFocused,true)}
+  if(feature==='goals')assert.match(assertions.currentText||'',/Goals/)
+  if(feature!=='goals'&&width<=768)assert.match(assertions.currentText||'',/More/)
+  if(feature==='budget'&&mode==='budget-consent')assert.deepEqual(assertions.consents,[false,false,false])
+  if(feature==='budget'&&mode==='budget-result')assert.equal(assertions.result,true)
+  const path=join(ARTIFACT_DIR,filename);const image=await client.send('Page.captureScreenshot',{format:'png',fromSurface:true,captureBeyondViewport:false},sessionId);await writeFile(path,image.data,'base64');return{path,...assertions}
+}
+
 async function runAcceptance() {
   const launched = await launchChrome()
   const { client } = launched
@@ -704,6 +736,19 @@ async function runAcceptance() {
     }
     report.checks.transactionsFilterSheet = await captureTransactionFiltersEvidence(client, sessionId)
     report.checks.transactionsFinalRow = await captureTransactionFinalRowEvidence(client, sessionId)
+    report.checks.planningScreenshots = []
+    for (const [width,height] of [[1440,900],[1024,768],[390,844],[360,800]]) report.checks.planningScreenshots.push(await capturePlanningEvidence(client,sessionId,{feature:'goals',mode:'goals',width,height,filename:`goals-${width}x${height}.png`}))
+    report.checks.planningScreenshots.push(await capturePlanningEvidence(client,sessionId,{feature:'goals',mode:'goals-empty',width:390,height:844,filename:'goals-empty-390x844.png'}))
+    report.checks.planningScreenshots.push(await capturePlanningEvidence(client,sessionId,{feature:'goals',mode:'goal-editor',width:390,height:844,filename:'goal-editor-390x844.png',editor:true}))
+    report.checks.planningScreenshots.push(await capturePlanningEvidence(client,sessionId,{feature:'goals',mode:'goals',width:390,height:844,filename:'goals-final-row-390x844.png',finalRow:true}))
+    for (const [width,height] of [[1440,900],[1024,768],[390,844],[360,800]]) report.checks.planningScreenshots.push(await capturePlanningEvidence(client,sessionId,{feature:'recurring',mode:'recurring',width,height,filename:`recurring-${width}x${height}.png`}))
+    report.checks.planningScreenshots.push(await capturePlanningEvidence(client,sessionId,{feature:'recurring',mode:'recurring-empty',width:390,height:844,filename:'recurring-empty-390x844.png'}))
+    report.checks.planningScreenshots.push(await capturePlanningEvidence(client,sessionId,{feature:'recurring',mode:'recurring',width:390,height:844,filename:'recurring-final-row-390x844.png',finalRow:true}))
+    for (const [width,height] of [[1440,900],[1024,768],[390,844],[360,800]]) report.checks.planningScreenshots.push(await capturePlanningEvidence(client,sessionId,{feature:'budget',mode:'budget-consent',width,height,filename:`budget-consent-${width}x${height}.png`}))
+    for (const [width,height] of [[1440,900],[1024,768],[390,844],[360,800]]) report.checks.planningScreenshots.push(await capturePlanningEvidence(client,sessionId,{feature:'budget',mode:'budget-result',width,height,filename:`budget-result-${width}x${height}.png`}))
+    report.checks.planningScreenshots.push(await capturePlanningEvidence(client,sessionId,{feature:'budget',mode:'budget-result',width:390,height:844,filename:'budget-result-final-row-390x844.png',finalRow:true}))
+    await navigateToPlanningDestination(client, sessionId, 'Dashboard')
+    await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-dashboard-ready=true]"))', 'Dashboard after planning evidence')
     await client.send('Emulation.setDeviceMetricsOverride', {
       width: 1440,
       height: 900,
@@ -855,18 +900,20 @@ async function runAcceptance() {
     await clickButton(client, sessionId, 'More')
     await waitFor(client, sessionId, 'Boolean(document.querySelector("#app-more-sheet"))', 'mobile More sheet for Finance Assistant')
     await clickButton(client, sessionId, 'Finance Assistant')
-    await waitFor(client, sessionId, 'document.body?.innerText.includes("Lernender Monatsbudgetplan")', 'learning budget assistant')
+    await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-feature=budget-planner][lang=en]"))', 'learning budget assistant')
     report.checks.smartBudget = await evaluate(client, sessionId, `(() => ({
-      persistentLearning: document.body.innerText.includes('Persistentes Verhaltenslernen'),
-      explicitLearningConsent: [...document.querySelectorAll('label')].some((label) => label.textContent?.includes('persönliches Lernprofil')),
-      explicitHostedConsent: [...document.querySelectorAll('label')].some((label) => label.textContent?.includes('Hugging-Face-Modell')),
-      explicitLocationConsent: [...document.querySelectorAll('label')].some((label) => label.textContent?.includes('IP-Adresse')),
+      deterministicBoundary: document.body.innerText.includes('Deterministic planning'),
+      explicitLearningConsent: [...document.querySelectorAll('label')].some((label) => label.textContent?.includes('Behavior learning')),
+      explicitHostedConsent: [...document.querySelectorAll('label')].some((label) => label.textContent?.includes('External AI for this run')),
+      explicitLocationConsent: [...document.querySelectorAll('label')].some((label) => label.textContent?.includes('Approximate location for this run')),
+      consentsInitiallyFalse: [...document.querySelectorAll('[data-feature=budget-planner] input[type=checkbox]')].every((input) => !input.checked),
     }))()`)
     assert.deepEqual(report.checks.smartBudget, {
-      persistentLearning: true,
+      deterministicBoundary: true,
       explicitLearningConsent: true,
       explicitHostedConsent: true,
       explicitLocationConsent: true,
+      consentsInitiallyFalse: true,
     })
 
     await client.send('Emulation.clearDeviceMetricsOverride', {}, sessionId)

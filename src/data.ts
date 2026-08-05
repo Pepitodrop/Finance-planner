@@ -39,4 +39,19 @@ export const accountsAcceptanceState: AppState = {
   goals: normalInitialState.goals,
 }
 
+export const planningAcceptanceState: AppState = {
+  accounts: accountsAcceptanceState.accounts,
+  transactions: [
+    { id:'planning-rent',accountId:'accept-checking',description:'Home rent',category:'Housing',type:'expense',amountCents:94000,date:'2026-08-01',recurring:true },
+    { id:'planning-transit',accountId:'accept-checking',description:'City mobility pass',category:'Transport',type:'expense',amountCents:4900,date:'2026-08-02',recurring:true },
+    { id:'planning-fitness',accountId:'accept-card',description:'Fitness membership with access to all locations and premium classes',category:'Health',type:'expense',amountCents:2990,date:'2026-08-03',recurring:true },
+    { id:'planning-cloud',accountId:'accept-card',description:'Cloud storage',category:'Services',type:'expense',amountCents:1199,date:'2026-08-04',recurring:true },
+  ],
+  goals: [
+    { id:'planning-emergency',name:'Emergency fund',targetCents:600000,currentCents:360000,targetDate:'2026-12-15' },
+    { id:'planning-course',name:'Professional course and certification with an intentionally long title',targetCents:350000,currentCents:65000,targetDate:'2027-04-30' },
+    { id:'planning-home',name:'Future home deposit',targetCents:2500000,currentCents:410000,targetDate:'2029-09-30' },
+  ],
+}
+
 export const initialState: AppState = normalInitialState
