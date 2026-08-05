@@ -855,18 +855,20 @@ async function runAcceptance() {
     await clickButton(client, sessionId, 'More')
     await waitFor(client, sessionId, 'Boolean(document.querySelector("#app-more-sheet"))', 'mobile More sheet for Finance Assistant')
     await clickButton(client, sessionId, 'Finance Assistant')
-    await waitFor(client, sessionId, 'document.body?.innerText.includes("Lernender Monatsbudgetplan")', 'learning budget assistant')
+    await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-feature=budget-planner][lang=en]"))', 'learning budget assistant')
     report.checks.smartBudget = await evaluate(client, sessionId, `(() => ({
-      persistentLearning: document.body.innerText.includes('Persistentes Verhaltenslernen'),
-      explicitLearningConsent: [...document.querySelectorAll('label')].some((label) => label.textContent?.includes('persönliches Lernprofil')),
-      explicitHostedConsent: [...document.querySelectorAll('label')].some((label) => label.textContent?.includes('Hugging-Face-Modell')),
-      explicitLocationConsent: [...document.querySelectorAll('label')].some((label) => label.textContent?.includes('IP-Adresse')),
+      deterministicBoundary: document.body.innerText.includes('Deterministic planning'),
+      explicitLearningConsent: [...document.querySelectorAll('label')].some((label) => label.textContent?.includes('Behavior learning')),
+      explicitHostedConsent: [...document.querySelectorAll('label')].some((label) => label.textContent?.includes('External AI for this run')),
+      explicitLocationConsent: [...document.querySelectorAll('label')].some((label) => label.textContent?.includes('Approximate location for this run')),
+      consentsInitiallyFalse: [...document.querySelectorAll('[data-feature=budget-planner] input[type=checkbox]')].every((input) => !input.checked),
     }))()`)
     assert.deepEqual(report.checks.smartBudget, {
-      persistentLearning: true,
+      deterministicBoundary: true,
       explicitLearningConsent: true,
       explicitHostedConsent: true,
       explicitLocationConsent: true,
+      consentsInitiallyFalse: true,
     })
 
     await client.send('Emulation.clearDeviceMetricsOverride', {}, sessionId)
