@@ -73,6 +73,10 @@ try {
         `expectedText: bodyText.toLocaleLowerCase('en').includes(${expectedTextLowerLiteral}),`,
       )
       .replace(
+        "  if (suffix === 'final-row') {",
+        "  await waitFor(client, sessionId, '!document.querySelector(\".automatic-analysis, .mobile-connectivity-status, .mobile-install-card, .passkey-enrolment, .platform-action-bar\")', 'clean Connections runtime state')\n\n  if (suffix === 'final-row') {",
+      )
+      .replace(
         '      mobileNavigationUnobscured: ${width <= 768} ? unobscured(mobileNavigation) : true,',
         "      mobileNavigationUnobscured: ${width <= 768} ? unobscured(mobileNavigation) : true,\n      mobileNavigationInert: mobileNavigation?.hasAttribute('inert') ?? false,",
       )
@@ -95,6 +99,7 @@ try {
     assert.notEqual(patched, source, `Failed to isolate Connections mode: ${mode}`)
     assert.ok(patched.includes('finance-planner-connections-acceptance-mode'), `Failed to persist Connections fixture mode: ${mode}`)
     assert.ok(patched.includes(`toLocaleLowerCase('en').includes(${expectedTextLowerLiteral})`), `Failed to embed Connections text assertion: ${mode}`)
+    assert.ok(patched.includes('clean Connections runtime state'), `Failed to isolate Connections visual evidence: ${mode}`)
     assert.ok(patched.includes('mobileNavigationInert'), `Failed to add modal navigation assertion: ${mode}`)
     assert.ok(patched.includes('Connections assertion snapshot'), `Failed to add Connections assertion diagnostics: ${mode}`)
     assert.equal(patched.includes('String(expectedText)'), false, `Leaked runner variable into browser assertion: ${mode}`)
