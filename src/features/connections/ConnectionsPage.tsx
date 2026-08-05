@@ -1,0 +1,751 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import {
+  AlertTriangle,
+  ArrowLeft,
+  BadgeCheck,
+  Banknote,
+  CheckCircle2,
+  ChevronRight,
+  CreditCard,
+  FileText,
+  FileUp,
+  Info,
+  Landmark,
+  Link2,
+  Lock,
+  Pencil,
+  PiggyBank,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  ShieldCheck,
+  TrendingUp,
+  Undo2,
+  Unplug,
+  Wallet,
+  X,
+} from 'lucide-react'
+import {
+  applySyncPreview,
+  buildSyncPreview,
+  consentDaysRemaining,
+  disconnectConnector,
+  selectSyncPreviewAccounts,
+  startConnector,
+  synchronizeConnections,
+  type ConnectorAccountType,
+  type ConnectorConnection,
+  type ConnectorProvider,
+  type SyncPreview,
+} from '../../connectors'
+import { applyStatementImport, buildStatementPreview, parseStatement, type StatementPreview } from '../../statementImport'
+import type { Account, AppState } from '../../types'
+import { useDialog } from '../../app/useDialog'
+import {
+  ACCOUNT_TYPE_OPTIONS,
+  ATTENTION_REASON_COPY,
+  CATEGORY_OPTIONS,
+  MAX_STATEMENT_FILE_BYTES,
+  connectionAttentionReason,
+  connectionNeedsAttention,
+  defaultAccountTypeForInstitution,
+  filterInstitutions,
+  institutionById,
+  institutionIcon,
+  nextSetupStepAfterInstitution,
+  previousSetupStepFromConfirmation,
+  summarizeAccountSelection,
+  validateManualAccount,
+  type InstitutionCategory,
+  type SetupStep,
+} from './connectionsModel'
+import { ACCEPTANCE_CONNECTIONS, ACCEPTANCE_STATEMENT_PREVIEW, ACCEPTANCE_SYNC_PREVIEWS, type ConnectionsAcceptanceMode } from './connectionsAcceptanceFixtures'
+
+interface ConnectionsPageProps { state: AppState; onApply: (state: AppState) => void; acceptanceMode?: ConnectionsAcceptanceMode }
+type Screen = 'overview' | 'checking' | 'sync-selection' | 'attention' | 'statement-preview'
+
+function formatEuro(cents: number): string {
+  return new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' }).format(cents / 100)
+}
+
+function InstitutionIcon({ institution, size = 20 }: { institution: { kind: string }; size?: number }) {
+  const kind = institutionIcon(institution as Parameters<typeof institutionIcon>[0])
+  if (kind === 'wallet') return <Wallet size={size}/>
+  if (kind === 'broker') return <TrendingUp size={size}/>
+  if (kind === 'card') return <CreditCard size={size}/>
+  if (kind === 'manual') return <Pencil size={size}/>
+  return <Landmark size={size}/>
+}
+
+export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsPageProps) {
+  const [screen, setScreen] = useState<Screen>('overview')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+  const [connections, setConnections] = useState<ConnectorConnection[]>([])
+  const [previews, setPreviews] = useState<SyncPreview[]>([])
+  const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(new Set())
+  const [statementPreview, setStatementPreview] = useState<StatementPreview | null>(null)
+  const [statementFileName, setStatementFileName] = useState('')
+  const [rollbackState, setRollbackState] = useState<AppState | null>(null)
+
+  const [setupOpen, setSetupOpen] = useState(false)
+  const [setupStep, setSetupStep] = useState<SetupStep>(1)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [category, setCategory] = useState<InstitutionCategory>('popular')
+  const [selectedInstitutionId, setSelectedInstitutionId] = useState<string | null>(null)
+  const [accountType, setAccountType] = useState<ConnectorAccountType>('checking')
+
+  const [manualOpen, setManualOpen] = useState(false)
+  const [manualName, setManualName] = useState('')
+  const [manualAccountType, setManualAccountType] = useState<ConnectorAccountType>('checking')
+  const [manualBalance, setManualBalance] = useState('')
+  const [manualLimit, setManualLimit] = useState('')
+  const [manualError, setManualError] = useState('')
+
+  const [attentionProvider, setAttentionProvider] = useState<ConnectorProvider | null>(null)
+  const [disconnectConfirming, setDisconnectConfirming] = useState(false)
+
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (import.meta.env.VITE_ACCEPTANCE_FIXTURES !== 'true' || !acceptanceMode) return
+    if (acceptanceMode === 'empty') { setScreen('overview'); setConnections([]); return }
+    if (acceptanceMode === 'populated') { setScreen('overview'); setConnections(ACCEPTANCE_CONNECTIONS); return }
+    if (acceptanceMode === 'institution-selector') { setConnections(ACCEPTANCE_CONNECTIONS); setSetupStep(1); setCategory('popular'); setSearchTerm(''); setSetupOpen(true); return }
+    if (acceptanceMode === 'institution-search') { setConnections(ACCEPTANCE_CONNECTIONS); setSetupStep(1); setCategory('popular'); setSearchTerm('bank'); setSetupOpen(true); return }
+    if (acceptanceMode === 'account-type') { setSelectedInstitutionId('ing'); setAccountType('checking'); setSetupStep(2); setSetupOpen(true); return }
+    if (acceptanceMode === 'bank-confirmation') { setSelectedInstitutionId('ing'); setSetupStep(3); setSetupOpen(true); return }
+    if (acceptanceMode === 'paypal-confirmation') { setSelectedInstitutionId('paypal'); setSetupStep(3); setSetupOpen(true); return }
+    if (acceptanceMode === 'checking') { setScreen('checking'); return }
+    if (acceptanceMode === 'sync-selection') {
+      setPreviews(ACCEPTANCE_SYNC_PREVIEWS)
+      setSelectedAccountIds(new Set(ACCEPTANCE_SYNC_PREVIEWS.flatMap((preview) => preview.accountsToCreate.map((account) => account.id))))
+      setScreen('sync-selection')
+      return
+    }
+    if (acceptanceMode === 'attention') { setConnections(ACCEPTANCE_CONNECTIONS); setAttentionProvider('finapi'); setScreen('attention'); return }
+    if (acceptanceMode === 'manual') { setManualOpen(true); return }
+    if (acceptanceMode === 'statement-preview') { setStatementFileName('finance_statement_march.csv'); setStatementPreview(ACCEPTANCE_STATEMENT_PREVIEW); setScreen('statement-preview') }
+  }, [acceptanceMode])
+
+  const selectedInstitution = selectedInstitutionId ? institutionById(selectedInstitutionId) : undefined
+  const filteredInstitutions = useMemo(() => filterInstitutions(searchTerm, category), [searchTerm, category])
+  const discoveredAccounts = useMemo(() => previews.flatMap((preview) => preview.accountsToCreate), [previews])
+  const selection = summarizeAccountSelection(discoveredAccounts.map((account) => account.id), selectedAccountIds)
+  const selectedPreviews = useMemo(() => previews.map((preview) => selectSyncPreviewAccounts(preview, selectedAccountIds)), [previews, selectedAccountIds])
+  const summary = useMemo(() => selectedPreviews.reduce((result, preview) => ({
+    transactions: result.transactions + preview.transactionsToImport.length,
+    duplicates: result.duplicates + preview.duplicateCount,
+    pending: result.pending + preview.pendingCount,
+    qualityTotal: result.qualityTotal + preview.quality.score,
+  }), { transactions: 0, duplicates: 0, pending: 0, qualityTotal: 0 }), [selectedPreviews])
+  const averageQuality = selectedPreviews.length ? Math.round(summary.qualityTotal / selectedPreviews.length) : 0
+  const qualityWarnings = [...new Set(selectedPreviews.flatMap((preview) => preview.quality.warnings))]
+  const attentionConnection = attentionProvider ? connections.find((connection) => connection.provider === attentionProvider) : undefined
+  const attentionReason = attentionConnection ? connectionAttentionReason(attentionConnection) : null
+
+  const synchronize = useCallback(async (isProviderReturn = false) => {
+    setBusy(true)
+    setError('')
+    setPreviews([])
+    setSelectedAccountIds(new Set())
+    if (isProviderReturn) setScreen('checking')
+    try {
+      const payloads = await synchronizeConnections()
+      setConnections(payloads.map((payload) => payload.connection))
+      const successful = payloads.filter((payload) => payload.connection.status !== 'error')
+      const next = successful.map((payload) => buildSyncPreview(state, payload))
+      const failed = payloads.filter((payload) => payload.connection.status === 'error')
+      const discovered = next.flatMap((preview) => preview.accountsToCreate)
+      setPreviews(next)
+      setSelectedAccountIds(new Set(discovered.map((account) => account.id)))
+      if (discovered.length) {
+        setScreen('sync-selection')
+      } else {
+        setScreen('overview')
+        setMessage(failed.length ? `No connection could be updated successfully. ${failed.length} connection(s) need attention.` : 'No new accounts were found.')
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Synchronization failed.')
+      setScreen('overview')
+    } finally {
+      setBusy(false)
+    }
+  }, [state])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const providerParam = params.get('provider')
+    const callbackError = params.get('error_description') || params.get('error')
+    const callbackCompleted = params.has('code') || params.has('state')
+    if (!providerParam && !callbackError && !callbackCompleted) return
+
+    const cleanUrl = new URL(window.location.href)
+    for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'institution']) cleanUrl.searchParams.delete(key)
+    window.history.replaceState({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`)
+
+    if (callbackError) {
+      setError(`The connection was not completed: ${callbackError}`)
+      return
+    }
+
+    setMessage('Returned from provider. Checking your connection and loading available accounts.')
+    void synchronize(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once for the initial callback URL only
+  }, [])
+
+  const connect = async (provider: ConnectorProvider) => {
+    setBusy(true)
+    setError('')
+    try {
+      await startConnector(provider, selectedInstitution ? { institutionId: selectedInstitution.id, institutionName: selectedInstitution.name, accountType } : {})
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'The connection could not be started.')
+      setBusy(false)
+    }
+  }
+
+  const refreshAll = () => void synchronize(false)
+
+  const disconnect = async (provider: ConnectorProvider) => {
+    setBusy(true)
+    setError('')
+    try {
+      await disconnectConnector(provider)
+      setConnections((current) => current.filter((connection) => connection.provider !== provider))
+      setMessage('The connection was disconnected. Transactions already imported remain in Finance Planner.')
+      setDisconnectConfirming(false)
+      setAttentionProvider(null)
+      setScreen('overview')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'The connection could not be disconnected.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const openSetup = () => {
+    setSetupStep(1)
+    setSearchTerm('')
+    setCategory('popular')
+    setSelectedInstitutionId(null)
+    setAccountType('checking')
+    setError('')
+    setSetupOpen(true)
+  }
+  const closeSetup = useCallback(() => { if (!busy) setSetupOpen(false) }, [busy])
+
+  const openManualAccount = (hintedType: ConnectorAccountType = 'checking', hintedName = '') => {
+    setManualName(hintedName)
+    setManualAccountType(hintedType)
+    setManualBalance('')
+    setManualLimit('')
+    setManualError('')
+    setSetupOpen(false)
+    setManualOpen(true)
+  }
+  const closeManualAccount = useCallback(() => { if (!busy) setManualOpen(false) }, [busy])
+
+  const chooseInstitution = (id: string) => {
+    const institution = institutionById(id)
+    if (!institution) return
+    if (institution.provider === 'manual') {
+      openManualAccount(defaultAccountTypeForInstitution(institution), institution.name === 'Virtuelles / manuelles Konto' ? '' : institution.name)
+      return
+    }
+    setSelectedInstitutionId(id)
+    setAccountType(defaultAccountTypeForInstitution(institution))
+    setSetupStep(nextSetupStepAfterInstitution(institution))
+  }
+
+  const saveManualAccount = () => {
+    const result = validateManualAccount({ name: manualName, accountType: manualAccountType, balanceInput: manualBalance, creditLimitInput: manualLimit })
+    if (result.error) { setManualError(result.error); return }
+    const id = `manual:${typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Date.now()}`
+    const account: Account = manualAccountType === 'credit-card'
+      ? { id, name: manualName.trim(), type: 'credit-card', balanceCents: -result.balanceCents, currency: 'EUR', creditCard: { amountOwedCents: result.balanceCents, creditLimitCents: result.creditLimitCents, availableCreditCents: result.creditLimitCents !== undefined ? Math.max(0, result.creditLimitCents - result.balanceCents) : undefined, pendingAmountCents: 0 } }
+      : { id, name: manualName.trim(), type: manualAccountType, balanceCents: result.balanceCents, currency: 'EUR' }
+    onApply({ ...state, accounts: [...state.accounts, account] })
+    setManualOpen(false)
+    setMessage(`${account.name} was added as a manual account.`)
+  }
+
+  const toggleAccount = (accountId: string) => setSelectedAccountIds((current) => {
+    const next = new Set(current)
+    if (next.has(accountId)) next.delete(accountId); else next.add(accountId)
+    return next
+  })
+
+  const cancelSync = () => {
+    setPreviews([])
+    setSelectedAccountIds(new Set())
+    setScreen('overview')
+  }
+
+  const importPreview = () => {
+    if (!selection.selectedCount) return
+    setRollbackState(state)
+    onApply(selectedPreviews.reduce((current, preview) => applySyncPreview(current, preview), state))
+    const transactionCount = summary.transactions
+    setPreviews([])
+    setSelectedAccountIds(new Set())
+    setScreen('overview')
+    setMessage(`${transactionCount} transaction(s) and ${selection.selectedCount} selected account(s) were imported.`)
+  }
+
+  const readStatement = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    setError('')
+    setMessage('')
+    setStatementPreview(null)
+    try {
+      if (file.size > MAX_STATEMENT_FILE_BYTES) throw new Error('The file is larger than 5 MB.')
+      const parsed = parseStatement(await file.text(), file.name)
+      setStatementFileName(file.name)
+      setStatementPreview(buildStatementPreview(state, parsed))
+      setScreen('statement-preview')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'The statement could not be read.')
+    }
+  }
+  const importStatement = () => {
+    if (!statementPreview) return
+    setRollbackState(state)
+    onApply(applyStatementImport(state, statementPreview))
+    setMessage(`${statementPreview.transactions.length} transaction(s) imported; ${statementPreview.duplicates} duplicate(s) skipped.`)
+    setStatementPreview(null)
+    setScreen('overview')
+  }
+  const cancelStatement = () => { setStatementPreview(null); setScreen('overview') }
+  const rollback = () => { if (!rollbackState) return; onApply(rollbackState); setRollbackState(null); setMessage('The last import was fully reversed.') }
+
+  const openAttention = (provider: ConnectorProvider) => { setAttentionProvider(provider); setDisconnectConfirming(false); setScreen('attention') }
+  const closeAttention = () => { setAttentionProvider(null); setDisconnectConfirming(false); setScreen('overview') }
+
+  const setupDialogRef = useDialog<HTMLDivElement>({ open: setupOpen, onClose: closeSetup })
+  const manualDialogRef = useDialog<HTMLDivElement>({ open: manualOpen, onClose: closeManualAccount })
+
+  return <section className="connections-feature" lang="en" data-connections-ready="true" aria-labelledby="connections-title">
+    {screen === 'overview' && <OverviewScreen
+      connections={connections}
+      busy={busy}
+      onConnect={openSetup}
+      onRefresh={refreshAll}
+      onOpenAttention={openAttention}
+      onOpenManual={() => openManualAccount()}
+      onImportStatement={() => fileInputRef.current?.click()}
+    />}
+
+    {screen === 'checking' && <CheckingScreen/>}
+
+    {screen === 'sync-selection' && <SyncSelectionScreen
+      accounts={discoveredAccounts}
+      selectedAccountIds={selectedAccountIds}
+      onToggle={toggleAccount}
+      selection={selection}
+      transactionsAvailable={summary.transactions}
+      duplicates={summary.duplicates}
+      pending={summary.pending}
+      quality={averageQuality}
+      warnings={qualityWarnings}
+      onCancel={cancelSync}
+      onImport={importPreview}
+    />}
+
+    {screen === 'attention' && attentionConnection && <AttentionScreen
+      connection={attentionConnection}
+      reason={attentionReason}
+      busy={busy}
+      confirming={disconnectConfirming}
+      onBack={closeAttention}
+      onReconnect={() => void connect(attentionConnection.provider)}
+      onDisconnectRequest={() => setDisconnectConfirming(true)}
+      onDisconnectCancel={() => setDisconnectConfirming(false)}
+      onDisconnectConfirm={() => void disconnect(attentionConnection.provider)}
+    />}
+
+    {screen === 'statement-preview' && statementPreview && <StatementPreviewScreen
+      preview={statementPreview}
+      fileName={statementFileName}
+      onCancel={cancelStatement}
+      onChooseAnother={() => { setStatementPreview(null); setScreen('overview'); fileInputRef.current?.click() }}
+      onImport={importStatement}
+    />}
+
+    <label className="connections-hidden-file">
+      <input ref={fileInputRef} type="file" accept=".csv,.xml,.camt,text/csv,application/xml,text/xml" onChange={readStatement}/>
+    </label>
+
+    {rollbackState && screen === 'overview' && <button type="button" className="secondary connections-rollback" onClick={rollback}><RotateCcw size={17}/>Undo last import</button>}
+    {message && screen === 'overview' && <p className="status-message success-message" role="status">{message}</p>}
+    {error && screen === 'overview' && <p className="status-message error-message" role="alert">{error}</p>}
+
+    {setupOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeSetup() }}>
+      <section className="modal connections-setup-modal" role="dialog" aria-modal="true" aria-labelledby="connections-setup-title" ref={setupDialogRef} lang="en">
+        {/* Content renders before the header in DOM order (visually reordered via CSS) so the
+            dialog's initial-focus logic lands on the first useful control (e.g. the search field)
+            instead of racing against native autoFocus, which fires during commit, before the
+            dialog's own effect can capture "focus before open" for later restoration. */}
+        <div className="connections-setup-content">
+          {setupStep === 1 && <InstitutionStep
+            searchTerm={searchTerm}
+            onSearch={setSearchTerm}
+            category={category}
+            onCategory={setCategory}
+            institutions={filteredInstitutions}
+            onChoose={chooseInstitution}
+          />}
+
+          {setupStep === 2 && selectedInstitution && <AccountTypeStep
+            institution={selectedInstitution}
+            accountType={accountType}
+            onChoose={(next) => { setAccountType(next); setSetupStep(3) }}
+          />}
+
+          {setupStep === 3 && selectedInstitution && <RedirectConfirmationStep
+            institution={selectedInstitution}
+            busy={busy}
+            onCancel={closeSetup}
+            onConfirm={() => void connect(selectedInstitution.provider as ConnectorProvider)}
+          />}
+        </div>
+
+        <div className="connections-setup-header">
+          <button type="button" className="connections-icon-button" aria-label="Back" disabled={setupStep === 1 || busy} onClick={() => setSetupStep(setupStep === 3 ? previousSetupStepFromConfirmation(selectedInstitution) : 1)}><ArrowLeft size={18}/></button>
+          <p className="connections-step-label">Step {setupStep} of 3</p>
+          <button type="button" className="connections-icon-button" aria-label="Close" disabled={busy} onClick={closeSetup}><X size={18}/></button>
+        </div>
+        <div className="connections-setup-progress" aria-hidden="true"><span className="active"/><span className={setupStep >= 2 ? 'active' : ''}/><span className={setupStep === 3 ? 'active' : ''}/></div>
+      </section>
+    </div>}
+
+    {manualOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeManualAccount() }}>
+      <section className="modal connections-manual-modal" role="dialog" aria-modal="true" aria-labelledby="connections-manual-title" ref={manualDialogRef} lang="en">
+        <div className="connections-manual-handle" aria-hidden="true"/>
+        <div className="connections-setup-header">
+          <button type="button" className="connections-icon-button" aria-label="Back" disabled={busy} onClick={closeManualAccount}><ArrowLeft size={18}/></button>
+          <h2 id="connections-manual-title">Add manual account</h2>
+          <span/>
+        </div>
+        <label className="connections-field"><span>Account name</span><input value={manualName} onChange={(event) => setManualName(event.target.value)} placeholder="Everyday credit card"/></label>
+        <label className="connections-field"><span>Account type</span>
+          <select value={manualAccountType} onChange={(event) => setManualAccountType(event.target.value as ConnectorAccountType)}>
+            {ACCOUNT_TYPE_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+          </select>
+        </label>
+        <label className="connections-field"><span>Current balance</span><div className="connections-currency-input"><input inputMode="decimal" value={manualBalance} onChange={(event) => setManualBalance(event.target.value)} placeholder="0.00"/><span>EUR</span></div></label>
+        {manualAccountType === 'credit-card' && <label className="connections-field"><span>Credit limit (optional)</span><div className="connections-currency-input"><input inputMode="decimal" value={manualLimit} onChange={(event) => setManualLimit(event.target.value)} placeholder="0.00"/><span>EUR</span></div></label>}
+        <label className="connections-field"><span>Currency</span><div className="connections-currency-input connections-currency-locked"><span>EUR &ndash; Euro</span><Lock size={16}/></div></label>
+        <div className="connections-privacy-box"><ShieldCheck size={17}/><span>Finance Planner never requests card number, expiry, CVC, PIN or login credentials.</span></div>
+        {manualError && <p className="status-message error-message" role="alert">{manualError}</p>}
+        <div className="connections-modal-actions">
+          <button type="button" className="primary" onClick={saveManualAccount}>Save account</button>
+          <button type="button" className="secondary" onClick={closeManualAccount}>Cancel</button>
+        </div>
+      </section>
+    </div>}
+  </section>
+}
+
+interface OverviewScreenProps {
+  connections: ConnectorConnection[]
+  busy: boolean
+  onConnect: () => void
+  onRefresh: () => void
+  onOpenAttention: (provider: ConnectorProvider) => void
+  onOpenManual: () => void
+  onImportStatement: () => void
+}
+
+function OverviewScreen({ connections, busy, onConnect, onRefresh, onOpenAttention, onOpenManual, onImportStatement }: OverviewScreenProps) {
+  if (connections.length === 0) return <div className="connections-empty">
+    <header className="connections-header"><h1 id="connections-title">Connections</h1><p>Securely connect your financial accounts.</p></header>
+    <div className="connections-empty-hero">
+      <div className="connections-empty-icon"><ShieldCheck size={26}/></div>
+      <h2>Connect your financial accounts</h2>
+      <p>Finance Planner redirects to official provider sites and does not request your online-banking password.</p>
+      <button type="button" className="primary" onClick={onConnect}><Link2 size={17}/> Connect an account</button>
+    </div>
+    <button type="button" className="connections-option-row" onClick={onOpenManual}><span className="connections-option-icon"><Landmark size={19}/></span><span><strong>Add a manual account</strong><small>Track balances and transactions manually</small></span><ChevronRight size={18}/></button>
+    <button type="button" className="connections-option-row" onClick={onImportStatement}><span className="connections-option-icon"><FileText size={19}/></span><span><strong>Import a statement</strong><small>Upload a file from your provider</small></span><ChevronRight size={18}/></button>
+    <div className="connections-trust">
+      <p className="connections-trust-title">Why you can trust Finance Planner</p>
+      <div className="connections-trust-row"><ShieldCheck size={18}/><div><strong>Redirect-based setup</strong><span>We redirect you to official provider sites using secure connections.</span></div></div>
+      <div className="connections-trust-row"><RefreshCw size={18}/><div><strong>Reversible connection</strong><span>You can disconnect at any time. You&apos;re always in control.</span></div></div>
+      <div className="connections-trust-row"><Info size={18}/><div><strong>Provider availability may vary</strong><span>Not all providers are available in every country or region.</span></div></div>
+    </div>
+  </div>
+
+  return <div className="connections-overview">
+    <header className="connections-header"><div><h1 id="connections-title">Connections</h1><p>Manage your connected accounts and data sources.</p></div></header>
+    <div className="connections-actions">
+      <button type="button" className="primary" onClick={onConnect}><Link2 size={17}/> Connect account</button>
+      <button type="button" className="secondary" disabled={busy} onClick={onRefresh}><RefreshCw size={17}/> {busy ? 'Refreshing…' : 'Refresh all'}</button>
+    </div>
+    <p className="connections-section-label">Connected accounts</p>
+    <div className="connections-list">
+      {connections.map((connection) => {
+        const needsAttention = connectionNeedsAttention(connection)
+        const days = consentDaysRemaining(connection)
+        const reason = connectionAttentionReason(connection)
+        const detail = needsAttention
+          ? (connection.error || (reason && ATTENTION_REASON_COPY[reason].title) || 'Reauthorization required')
+          : connection.lastSyncAt
+            ? `Last sync: ${new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(connection.lastSyncAt))}`
+            : days !== null ? `Consent valid until ${new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium' }).format(new Date(connection.consentExpiresAt as string))}` : 'Connected'
+        const rowContent = <>
+          <span className="connections-row-icon">{connection.provider === 'paypal' ? <Wallet size={19}/> : <Landmark size={19}/>}</span>
+          <span className="connections-row-body">
+            <strong>{connection.displayName}</strong>
+            <span className={needsAttention ? 'connections-status connections-status--attention' : 'connections-status connections-status--ok'}>{needsAttention ? 'Connection needs attention' : 'Connected'}</span>
+            <small>{detail}</small>
+          </span>
+          <span className={needsAttention ? 'connections-badge connections-badge--attention' : 'connections-badge connections-badge--ok'} aria-hidden="true">{needsAttention ? <AlertTriangle size={16}/> : <CheckCircle2 size={16}/>}</span>
+          {needsAttention && <ChevronRight size={18} aria-hidden="true"/>}
+        </>
+        return needsAttention
+          ? <button type="button" key={connection.id} className="connections-row connections-row--attention" onClick={() => onOpenAttention(connection.provider)}>{rowContent}</button>
+          : <div key={connection.id} className="connections-row">{rowContent}</div>
+      })}
+    </div>
+    <p className="connections-section-label">Other options</p>
+    <button type="button" className="connections-option-row" onClick={onOpenManual}><span className="connections-option-icon"><Landmark size={19}/></span><span><strong>Manual account</strong><small>Add an account manually</small></span><ChevronRight size={18}/></button>
+    <button type="button" className="connections-option-row" onClick={onImportStatement}><span className="connections-option-icon"><FileText size={19}/></span><span><strong>Statement import</strong><small>Import transactions from a statement</small></span><ChevronRight size={18}/></button>
+  </div>
+}
+
+function CheckingScreen() {
+  return <div className="connections-checking" role="status" aria-live="polite">
+    <div className="connections-checking-spinner" aria-hidden="true"/>
+    <h1>Checking your connection</h1>
+    <p>We&apos;re confirming what your provider returned and loading available accounts. This does not mean your data has been imported yet.</p>
+  </div>
+}
+
+interface InstitutionStepProps {
+  searchTerm: string
+  onSearch: (value: string) => void
+  category: InstitutionCategory
+  onCategory: (category: InstitutionCategory) => void
+  institutions: ReturnType<typeof filterInstitutions>
+  onChoose: (id: string) => void
+}
+
+function InstitutionStep({ searchTerm, onSearch, category, onCategory, institutions, onChoose }: InstitutionStepProps) {
+  return <>
+    <h2 id="connections-setup-title" className="connections-setup-title">Choose your institution</h2>
+    <label className="connections-search"><Search size={18}/><input value={searchTerm} onChange={(event) => onSearch(event.target.value)} placeholder="Search institutions"/>{searchTerm && <button type="button" aria-label="Clear search" onClick={() => onSearch('')}><X size={16}/></button>}</label>
+    <div className="connections-categories" role="tablist" aria-label="Institution category">
+      {CATEGORY_OPTIONS.map((option) => <button type="button" role="tab" aria-selected={category === option.id} key={option.id} className={category === option.id ? 'active' : ''} onClick={() => onCategory(option.id)}>{option.label}</button>)}
+    </div>
+    <div className="connections-institution-list">
+      {institutions.map((institution) => <button type="button" key={institution.id} className="connections-institution-row" onClick={() => onChoose(institution.id)}>
+        <span className="connections-row-icon"><InstitutionIcon institution={institution}/></span>
+        <span className="connections-institution-name">{institution.name}</span>
+        <ChevronRight size={18}/>
+      </button>)}
+      {institutions.length === 0 && <p className="connections-empty-copy">No institution matches your search. Try a different name, BIC or bank code, or use a manual account.</p>}
+    </div>
+    <p className="connections-footnote"><Info size={15}/> Provider availability depends on your institution and region.</p>
+  </>
+}
+
+interface AccountTypeStepProps {
+  institution: { name: string; kind: string }
+  accountType: ConnectorAccountType
+  onChoose: (accountType: ConnectorAccountType) => void
+}
+
+function AccountTypeStep({ institution, accountType, onChoose }: AccountTypeStepProps) {
+  return <>
+    <div className="connections-institution-banner"><span className="connections-row-icon"><InstitutionIcon institution={institution}/></span><strong>{institution.name}</strong></div>
+    <h2 id="connections-setup-title" className="connections-setup-title">What would you like to connect?</h2>
+    <p className="connections-setup-subtitle">Choose the type of account you want to add from this institution.</p>
+    <div className="connections-account-type-list" role="radiogroup" aria-label="Account type">
+      {ACCOUNT_TYPE_OPTIONS.map((option) => {
+        const Icon = option.id === 'savings' ? PiggyBank : option.id === 'credit-card' ? CreditCard : option.id === 'investment' ? TrendingUp : Wallet
+        const selected = accountType === option.id
+        return <button type="button" key={option.id} role="radio" aria-checked={selected} className={`connections-account-type-row${selected ? ' connections-account-type-row--selected' : ''}`} onClick={() => onChoose(option.id)}>
+          <span className="connections-row-icon"><Icon size={19}/></span>
+          <span><strong>{option.label}</strong><small>{option.description}</small></span>
+          <span className={`connections-radio${selected ? ' connections-radio--checked' : ''}`} aria-hidden="true">{selected && <CheckCircle2 size={18}/>}</span>
+        </button>
+      })}
+    </div>
+    <p className="connections-footnote"><Info size={15}/> Available types depend on the institution.</p>
+  </>
+}
+
+interface RedirectConfirmationStepProps {
+  institution: { name: string; provider: string; kind: string }
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}
+
+function RedirectConfirmationStep({ institution, busy, onCancel, onConfirm }: RedirectConfirmationStepProps) {
+  if (institution.provider === 'paypal') return <div className="connections-confirmation connections-confirmation--paypal">
+    <div className="connections-confirmation-avatar"><Wallet size={30}/></div>
+    <p className="connections-confirmation-provider-name">PayPal</p>
+    <h2 id="connections-setup-title" className="connections-setup-title">Continue to PayPal</h2>
+    <p className="connections-setup-subtitle">You&apos;ll be redirected to PayPal&apos;s official site to authenticate and securely connect your account.</p>
+    <ul className="connections-confirmation-list">
+      <li><ShieldCheck size={19}/><span>Authentication happens on PayPal&apos;s site. Finance Planner does not receive your PayPal password.</span></li>
+      <li><Undo2 size={19}/><span>After you authorize, you&apos;ll return here automatically.</span></li>
+      <li><Info size={19}/><span>The data we can access depends on what PayPal supports and what you consent to.</span></li>
+    </ul>
+    <div className="connections-scope-box">
+      <p className="connections-scope-title">Scope</p>
+      <div className="connections-scope-row"><CreditCard size={17}/><span>Account information</span><span className="connections-scope-status"><BadgeCheck size={16}/> As supported</span></div>
+      <div className="connections-scope-row"><Banknote size={17}/><span>Transactions</span><span className="connections-scope-status"><BadgeCheck size={16}/> As supported</span></div>
+    </div>
+    <div className="connections-modal-actions">
+      <button type="button" className="primary" disabled={busy} onClick={onConfirm}>{busy ? 'Preparing redirect…' : 'Continue to PayPal'}</button>
+      <button type="button" className="secondary" disabled={busy} onClick={onCancel}>Cancel</button>
+    </div>
+    <p className="connections-footnote">Provider availability and supported data types may change without notice and are subject to each provider&apos;s terms.</p>
+  </div>
+
+  return <div className="connections-confirmation">
+    <div className="connections-institution-banner"><span className="connections-row-icon"><InstitutionIcon institution={institution}/></span><strong>{institution.name}</strong></div>
+    <h2 id="connections-setup-title" className="connections-setup-title">Continue to your provider</h2>
+    <ul className="connections-confirmation-list">
+      <li><ShieldCheck size={19}/><span>Authentication will take place on your provider&apos;s official site.<br/><span className="connections-muted">Finance Planner does not receive your online-banking password.</span></span></li>
+      <li><Undo2 size={19}/><span>Once complete, you&apos;ll be returned to Finance Planner.</span></li>
+    </ul>
+    <div className="connections-scope-box">
+      <p className="connections-scope-title">What you&apos;re allowing</p>
+      <div className="connections-scope-row"><CreditCard size={17}/><span>Account information</span></div>
+      <div className="connections-scope-row"><TrendingUp size={17}/><span>Balances</span></div>
+      <div className="connections-scope-row"><FileText size={17}/><span>Transactions</span></div>
+      <p className="connections-scope-footnote">Only as supported and consented.</p>
+    </div>
+    <div className="connections-modal-actions">
+      <button type="button" className="primary" disabled={busy} onClick={onConfirm}>{busy ? 'Preparing redirect…' : 'Continue securely'}</button>
+      <button type="button" className="secondary" disabled={busy} onClick={onCancel}>Cancel</button>
+    </div>
+    <p className="connections-footnote">Provider availability depends on institution. Finance Planner never stores your credentials.</p>
+  </div>
+}
+
+interface SyncSelectionScreenProps {
+  accounts: Account[]
+  selectedAccountIds: Set<string>
+  onToggle: (accountId: string) => void
+  selection: { selectedCount: number; totalCount: number }
+  transactionsAvailable: number
+  duplicates: number
+  pending: number
+  quality: number
+  warnings: string[]
+  onCancel: () => void
+  onImport: () => void
+}
+
+function SyncSelectionScreen({ accounts, selectedAccountIds, onToggle, selection, transactionsAvailable, duplicates, pending, quality, warnings, onCancel, onImport }: SyncSelectionScreenProps) {
+  return <div className="connections-sync-screen">
+    <header className="connections-subpage-header"><button type="button" className="connections-back" onClick={onCancel}><ArrowLeft size={18}/> Back</button><h1>Choose accounts</h1></header>
+    <p className="connections-setup-subtitle">We discovered the following accounts. Select the ones you want to import.</p>
+    <div className="connections-account-select-list">
+      {accounts.map((account) => <label className="connections-account-select-row" key={account.id}>
+        <input type="checkbox" checked={selectedAccountIds.has(account.id)} onChange={() => onToggle(account.id)}/>
+        <span className="connections-row-icon">{account.type === 'credit-card' ? <CreditCard size={18}/> : <Landmark size={18}/>}</span>
+        <span><strong>{account.name}</strong><small>{account.type === 'credit-card' ? 'Credit card' : account.type === 'savings' ? 'Savings' : account.type === 'investment' ? 'Investment' : 'Checking'}</small></span>
+        <span className="connections-account-select-balance"><strong>{formatEuro(account.type === 'credit-card' && account.creditCard ? -account.creditCard.amountOwedCents : account.balanceCents)}</strong><small>Current balance</small></span>
+      </label>)}
+      {accounts.length === 0 && <p className="connections-empty-copy">No accounts were discovered for the accounts you selected.</p>}
+    </div>
+    <div className="connections-summary-box">
+      <p className="connections-scope-title">Summary</p>
+      <div className="connections-summary-row"><span>Accounts selected</span><strong>{selection.selectedCount} of {selection.totalCount}</strong></div>
+      <div className="connections-summary-row"><span>Transactions available</span><strong>{transactionsAvailable}</strong></div>
+      <div className="connections-summary-row"><span>Duplicates skipped</span><strong>{duplicates}</strong></div>
+      <div className="connections-summary-row"><span>Pending excluded</span><strong>{pending}</strong></div>
+      <div className="connections-summary-row"><span>Import quality</span><strong>{selection.selectedCount ? `${quality}%` : '—'}</strong></div>
+      {warnings.length > 0 && <p className="connections-scope-footnote">{warnings.join(' ')}</p>}
+    </div>
+    <div className="connections-info-box"><Info size={17}/><span>Balances are for review only and may change. No data has been added yet.</span></div>
+    <div className="connections-modal-actions connections-modal-actions--page">
+      <button type="button" className="primary" disabled={!selection.selectedCount} onClick={onImport}>Import selected accounts</button>
+      <button type="button" className="secondary" onClick={onCancel}>Cancel</button>
+    </div>
+  </div>
+}
+
+interface AttentionScreenProps {
+  connection: ConnectorConnection
+  reason: ReturnType<typeof connectionAttentionReason>
+  busy: boolean
+  confirming: boolean
+  onBack: () => void
+  onReconnect: () => void
+  onDisconnectRequest: () => void
+  onDisconnectCancel: () => void
+  onDisconnectConfirm: () => void
+}
+
+function AttentionScreen({ connection, reason, busy, confirming, onBack, onReconnect, onDisconnectRequest, onDisconnectCancel, onDisconnectConfirm }: AttentionScreenProps) {
+  const copy = reason ? ATTENTION_REASON_COPY[reason] : null
+  return <div className="connections-attention-screen">
+    <header className="connections-subpage-header"><button type="button" className="connections-back" onClick={onBack}><ArrowLeft size={18}/> Back</button><h1>Connections</h1></header>
+    <div className="connections-attention-icon"><AlertTriangle size={28}/></div>
+    <h2 className="connections-attention-title">Connection needs attention</h2>
+    <p className="connections-setup-subtitle connections-center">We&apos;re having trouble maintaining this connection. Please reconnect to keep your data up to date.</p>
+    <div className="connections-row connections-row--static"><span className="connections-row-icon">{connection.provider === 'paypal' ? <Wallet size={19}/> : <Landmark size={19}/>}</span><span className="connections-row-body"><strong>{connection.displayName}</strong></span></div>
+
+    {copy && <section className="connections-reason-section" aria-labelledby="connections-reason-title">
+      <p id="connections-reason-title" className="connections-section-label">Reason</p>
+      <div className="connections-reason-card"><RefreshCw size={19}/><div><strong>{copy.title}</strong><span>{copy.description}</span></div></div>
+    </section>}
+    <p className="connections-setup-subtitle">Your previously imported transactions will remain in Finance Planner unless you explicitly remove this account through a supported workflow.</p>
+
+    {!confirming ? <div className="connections-modal-actions connections-modal-actions--page">
+      <button type="button" className="primary" disabled={busy} onClick={onReconnect}><RefreshCw size={17}/> Reconnect</button>
+      <button type="button" className="connections-destructive-button" disabled={busy} onClick={onDisconnectRequest}><Unplug size={17}/> Disconnect</button>
+    </div> : <div className="connections-confirm-disconnect" role="alertdialog" aria-labelledby="connections-disconnect-confirm-title">
+      <p id="connections-disconnect-confirm-title"><strong>Disconnect {connection.displayName}?</strong> Transactions already imported will stay in Finance Planner; only the live connection is removed.</p>
+      <div className="connections-modal-actions">
+        <button type="button" className="connections-destructive-button" disabled={busy} onClick={onDisconnectConfirm}>{busy ? 'Disconnecting…' : 'Yes, disconnect'}</button>
+        <button type="button" className="secondary" disabled={busy} onClick={onDisconnectCancel}>Cancel</button>
+      </div>
+    </div>}
+    <p className="connections-footnote">Connection availability and data access are provided by our approved partners and may change at any time.</p>
+  </div>
+}
+
+interface StatementPreviewScreenProps {
+  preview: StatementPreview
+  fileName: string
+  onCancel: () => void
+  onChooseAnother: () => void
+  onImport: () => void
+}
+
+function StatementPreviewScreen({ preview, fileName, onCancel, onChooseAnother, onImport }: StatementPreviewScreenProps) {
+  const reviewRequired = preview.rejected > 0 || preview.transactions.some((transaction) => transaction.category === 'Unkategorisiert')
+  return <div className="connections-statement-screen">
+    <header className="connections-subpage-header"><button type="button" className="connections-back" onClick={onCancel}><ArrowLeft size={18}/> Back</button><h1>Statement import preview</h1></header>
+    <div className="connections-file-card"><span className="connections-row-icon"><FileUp size={19}/></span><div><strong>{fileName || `${preview.format.toUpperCase()} statement`}</strong><small>Supported format: CSV / CAMT</small></div></div>
+    <div className="connections-institution-banner"><span className="connections-row-icon"><Landmark size={18}/></span><strong>{preview.account.name}</strong></div>
+    <div className="connections-stat-row">
+      <div className="connections-stat"><span>Detected transactions</span><strong>{preview.transactions.length}</strong></div>
+      <div className="connections-stat"><span>Duplicates</span><strong>{preview.duplicates}</strong></div>
+      <div className="connections-stat"><span>Rejected rows</span><strong className={preview.rejected ? 'connections-stat-warning' : ''}>{preview.rejected}</strong></div>
+      {reviewRequired && <span className="connections-review-pill">Review required</span>}
+    </div>
+    <p className="connections-section-label">Preview (first {Math.min(3, preview.transactions.length)} of {preview.transactions.length} transactions)</p>
+    <table className="connections-preview-table">
+      <thead><tr><th>Date</th><th>Description</th><th>Amount (EUR)</th></tr></thead>
+      <tbody>{preview.transactions.slice(0, 3).map((transaction) => <tr key={transaction.id}><td>{transaction.date}</td><td>{transaction.description}</td><td className={transaction.type === 'income' ? 'connections-amount-income' : 'connections-amount-expense'}>{transaction.type === 'income' ? '+' : '-'}{formatEuro(transaction.amountCents)}</td></tr>)}</tbody>
+    </table>
+    <div className="connections-info-box"><Info size={17}/><span><strong>Review before you import.</strong> Please review the transactions above. Importing happens only after your confirmation.</span></div>
+    <div className="connections-modal-actions connections-modal-actions--page">
+      <button type="button" className="primary" disabled={!preview.transactions.length} onClick={onImport}><FileUp size={16}/> Import reviewed transactions</button>
+      <button type="button" className="secondary" onClick={onChooseAnother}>Choose another file</button>
+      <button type="button" className="connections-text-button" onClick={onCancel}>Cancel</button>
+    </div>
+  </div>
+}

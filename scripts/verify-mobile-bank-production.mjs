@@ -9,7 +9,7 @@ const [main, bootstrap, runtime, connectors, panel, server, webhookSecurity, dat
   read('src/app/bootstrap.tsx'),
   read('src/MobileProductionRuntime.tsx'),
   read('src/connectors.ts'),
-  read('src/ConnectionsPanel.tsx'),
+  read('src/features/connections/ConnectionsPage.tsx'),
   read('server/src/server.js'),
   read('server/src/webhook-security.js'),
   read('server/src/database.js'),
@@ -53,10 +53,10 @@ assert.match(webhookSecurity, /webhook_processing/, 'In-flight webhook collision
 assert.match(database, /completed_at/, 'Durable webhook completion state must be queryable')
 assert.match(database, /lease_until/, 'Active webhook leases must be queryable')
 assert.match(webhookSecurity, /postgres_persistence_required/, 'Public production deployments must require durable database storage')
-assert.match(panel, /Meine Verbindungen/, 'Connection health and active connections must be visible')
-assert.match(panel, /Zustimmung/, 'Consent expiry must be shown to the user')
-assert.match(panel, /Bereits importierte Buchungen bleiben erhalten/, 'Disconnect data-retention semantics must be explicit')
-assert.match(panel, /Kein Passwort bei uns/, 'The guided setup must explain credential isolation')
-assert.match(panel, /(?:Bank)?konto verbinden/i, 'The guided setup must expose a clear primary action')
+assert.match(panel, /Connected accounts/, 'Connection health and active connections must be visible')
+assert.match(panel, /Consent valid until/, 'Consent expiry must be shown to the user')
+assert.match(panel, /Transactions already imported (?:remain|will stay) in Finance Planner/, 'Disconnect data-retention semantics must be explicit')
+assert.match(panel, /does not receive your online-banking password/, 'The guided setup must explain credential isolation')
+assert.match(panel, /Connect (?:an )?account/i, 'The guided setup must expose a clear primary action')
 
 console.log('Mobile and bank production gate passed.')
