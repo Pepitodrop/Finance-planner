@@ -28,7 +28,7 @@ jobs:
       REQUIRE_LIVE_AI_ACCEPTANCE: ${{ github.event_name == 'workflow_dispatch' && inputs.require_live_ai || false }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Verify hosted text and receipt inference
