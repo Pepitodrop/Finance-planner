@@ -82,7 +82,7 @@ jobs:
 
       - name: Upload runtime evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: external-runtime-canaries
           path: artifacts/*.json
