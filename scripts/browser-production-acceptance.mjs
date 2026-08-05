@@ -628,7 +628,7 @@ async function navigateToPlanningDestination(client, sessionId, label) {
     const more=[...document.querySelectorAll('nav button')].find(b=>b.textContent?.includes('More')&&visible(b));if(!more)return false;more.click();return 'more'
   })()`)
   assert.ok(clicked, `Planning destination unavailable: ${label}`)
-  if (clicked === 'more') { await waitFor(client,sessionId,'Boolean(document.querySelector("#app-more-sheet"))','planning More sheet'); await clickButton(client,sessionId,label === 'Recurring payments' ? 'Recurring' : label) }
+  if (clicked === 'more') { await waitFor(client,sessionId,'Boolean(document.querySelector("#app-more-sheet"))','planning More sheet'); await clickButton(client,sessionId,label === 'Recurring payments' ? 'Recurring' : label === 'Finance assistant' ? 'Finance Assistant' : label) }
 }
 
 async function capturePlanningEvidence(client, sessionId, { feature, mode, width, height, filename, finalRow=false, editor=false }) {
