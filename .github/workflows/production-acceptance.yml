@@ -89,7 +89,7 @@ jobs:
         env:
           ACCEPTANCE_APP_URL: http://127.0.0.1:4173
           CONNECTIONS_ACCEPTANCE_ARTIFACT_PATH: artifacts/connections-production-acceptance.json
-        run: node scripts/connections-production-acceptance.mjs
+        run: node scripts/run-connections-production-acceptance-stable.mjs
       - name: Verify authenticated operational metrics
         shell: bash
         run: |
