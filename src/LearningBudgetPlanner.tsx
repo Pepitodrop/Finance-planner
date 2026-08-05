@@ -59,6 +59,10 @@ export function LearningBudgetPlanner({ acceptanceMode }: { acceptanceMode?: 'co
       })
     return () => { active = false }
   }, [acceptanceMode])
+  useEffect(() => {
+    if (acceptanceMode === 'result') { setProfile(acceptanceProfile); setPlan(acceptancePlan) }
+    if (acceptanceMode === 'consent') { setProfile(null); setPlan(null); setLearningConsent(false); setExternalConsent(false); setLocationConsent(false) }
+  }, [acceptanceMode])
 
   const generatePlan = async () => {
     if (!learningConsent || loading) return
