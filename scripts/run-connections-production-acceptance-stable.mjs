@@ -49,6 +49,10 @@ try {
     const patched = source
       .replace(/const MODES = \[[\s\S]*?\n\]/, `const MODES = ${JSON.stringify([[mode, expectedText]], null, 2)}`)
       .replace("for (const mode of ['populated', 'sync-selection', 'attention', 'statement-preview']) {", `for (const mode of ${JSON.stringify(finalModes)}) {`)
+      .replace(
+        "  await evaluate(client, sessionId, `window.__financePlannerAcceptanceState(${JSON.stringify(mode)})`)\n  await ensureConnectionsDestination(client, sessionId, width)",
+        "  await ensureConnectionsDestination(client, sessionId, width)\n  await evaluate(client, sessionId, `window.__financePlannerAcceptanceState(${JSON.stringify(mode)})`)",
+      )
     assert.notEqual(patched, source, `Failed to isolate Connections mode: ${mode}`)
     const scriptPath = join(workspace, `connections-${mode}.mjs`)
     await writeFile(scriptPath, patched)
