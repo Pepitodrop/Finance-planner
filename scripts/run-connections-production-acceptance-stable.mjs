@@ -46,6 +46,7 @@ try {
   for (const [mode, expectedText] of CASES) {
     const modeArtifact = resolve(`artifacts/connections-${mode}-acceptance.json`)
     const finalModes = FINAL_ROW_MODES.has(mode) ? [mode] : []
+    const expectedTextLowerLiteral = JSON.stringify(expectedText.toLocaleLowerCase('en'))
     const patched = source
       .replace(/const MODES = \[[\s\S]*?\n\]/, `const MODES = ${JSON.stringify([[mode, expectedText]], null, 2)}`)
       .replace("for (const mode of ['populated', 'sync-selection', 'attention', 'statement-preview']) {", `for (const mode of ${JSON.stringify(finalModes)}) {`)
@@ -59,11 +60,11 @@ try {
       )
       .replace(
         'document.body.innerText.includes(${JSON.stringify(expectedText)})',
-        "document.body.innerText.toLocaleLowerCase('en').includes(String(expectedText).toLocaleLowerCase('en'))",
+        `document.body.innerText.toLocaleLowerCase('en').includes(${expectedTextLowerLiteral})`,
       )
       .replace(
         'expectedText: bodyText.includes(${JSON.stringify(expectedText)}),',
-        `expectedText: bodyText.toLocaleLowerCase('en').includes(String(expectedText).toLocaleLowerCase('en')),`,
+        `expectedText: bodyText.toLocaleLowerCase('en').includes(${expectedTextLowerLiteral}),`,
       )
       .replace(
         "  throw new Error(`Timed out waiting for ${description}. Last value: ${JSON.stringify(lastValue)}`)",
@@ -71,7 +72,8 @@ try {
       )
     assert.notEqual(patched, source, `Failed to isolate Connections mode: ${mode}`)
     assert.ok(patched.includes('finance-planner-connections-acceptance-mode'), `Failed to persist Connections fixture mode: ${mode}`)
-    assert.ok(patched.includes("toLocaleLowerCase('en').includes(String(expectedText).toLocaleLowerCase('en'))"), `Failed to normalize Connections text assertion: ${mode}`)
+    assert.ok(patched.includes(`toLocaleLowerCase('en').includes(${expectedTextLowerLiteral})`), `Failed to embed Connections text assertion: ${mode}`)
+    assert.equal(patched.includes('String(expectedText)'), false, `Leaked runner variable into browser assertion: ${mode}`)
     const scriptPath = join(workspace, `connections-${mode}.mjs`)
     await writeFile(scriptPath, patched)
 
