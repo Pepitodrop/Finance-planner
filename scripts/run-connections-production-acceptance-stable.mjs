@@ -55,7 +55,12 @@ try {
         "  await evaluate(client, sessionId, `window.__financePlannerAcceptanceState(${JSON.stringify(mode)})`)\n  await ensureConnectionsDestination(client, sessionId, width)",
         "  await ensureConnectionsDestination(client, sessionId, width)\n  await evaluate(client, sessionId, `window.__financePlannerAcceptanceState(${JSON.stringify(mode)})`)",
       )
+      .replace(
+        "  await setViewport(client, sessionId, width, height)",
+        "  await setViewport(client, sessionId, width, height)\n  await evaluate(client, sessionId, `localStorage.setItem('finance-planner-connections-acceptance-mode', ${JSON.stringify(mode)})`)",
+      )
     assert.notEqual(patched, source, `Failed to isolate Connections mode: ${mode}`)
+    assert.ok(patched.includes('finance-planner-connections-acceptance-mode'), `Failed to persist Connections fixture mode: ${mode}`)
     const scriptPath = join(workspace, `connections-${mode}.mjs`)
     await writeFile(scriptPath, patched)
 
