@@ -86,6 +86,7 @@ jobs:
           ACCEPTANCE_ARTIFACT_PATH: artifacts/browser-production-acceptance.json
         run: node scripts/run-browser-production-acceptance-stable.mjs
       - name: Run exhaustive Connections acceptance
+        if: always()
         env:
           ACCEPTANCE_APP_URL: http://127.0.0.1:4173
           CONNECTIONS_ACCEPTANCE_ARTIFACT_PATH: artifacts/connections-production-acceptance.json
