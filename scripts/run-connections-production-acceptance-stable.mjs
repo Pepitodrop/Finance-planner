@@ -67,8 +67,20 @@ try {
         `expectedText: bodyText.toLocaleLowerCase('en').includes(${expectedTextLowerLiteral}),`,
       )
       .replace(
+        '      mobileNavigationUnobscured: ${width <= 768} ? unobscured(mobileNavigation) : true,',
+        "      mobileNavigationUnobscured: ${width <= 768} ? unobscured(mobileNavigation) : true,\n      mobileNavigationInert: mobileNavigation?.hasAttribute('inert') ?? false,",
+      )
+      .replace(
+        '  assert.equal(assertions.mobileNavigationUnobscured, true)',
+        "  if (width <= 768 && setupModes.has(mode)) {\n    assert.equal(assertions.mobileNavigationUnobscured, false)\n    assert.equal(assertions.mobileNavigationInert, true)\n  } else {\n    assert.equal(assertions.mobileNavigationUnobscured, true)\n  }",
+      )
+      .replace(
         '  assert.deepEqual(assertions.viewport, { width, height })',
         "  console.log(`Connections assertion snapshot ${mode} ${width}x${height}: ${JSON.stringify(assertions)}`)\n  assert.deepEqual(assertions.viewport, { width, height })",
+      )
+      .replace(
+        '    await rm(launched.profile, { recursive: true, force: true })',
+        '    await rm(launched.profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })',
       )
       .replace(
         "  throw new Error(`Timed out waiting for ${description}. Last value: ${JSON.stringify(lastValue)}`)",
@@ -77,6 +89,7 @@ try {
     assert.notEqual(patched, source, `Failed to isolate Connections mode: ${mode}`)
     assert.ok(patched.includes('finance-planner-connections-acceptance-mode'), `Failed to persist Connections fixture mode: ${mode}`)
     assert.ok(patched.includes(`toLocaleLowerCase('en').includes(${expectedTextLowerLiteral})`), `Failed to embed Connections text assertion: ${mode}`)
+    assert.ok(patched.includes('mobileNavigationInert'), `Failed to add modal navigation assertion: ${mode}`)
     assert.ok(patched.includes('Connections assertion snapshot'), `Failed to add Connections assertion diagnostics: ${mode}`)
     assert.equal(patched.includes('String(expectedText)'), false, `Leaked runner variable into browser assertion: ${mode}`)
     const scriptPath = join(workspace, `connections-${mode}.mjs`)
