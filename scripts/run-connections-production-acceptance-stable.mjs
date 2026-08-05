@@ -46,8 +46,6 @@ try {
   for (const [mode, expectedText] of CASES) {
     const modeArtifact = resolve(`artifacts/connections-${mode}-acceptance.json`)
     const finalModes = FINAL_ROW_MODES.has(mode) ? [mode] : []
-    const modeUrl = new URL(APP_URL)
-    modeUrl.searchParams.set('connectionsAcceptanceMode', mode)
     const patched = source
       .replace(/const MODES = \[[\s\S]*?\n\]/, `const MODES = ${JSON.stringify([[mode, expectedText]], null, 2)}`)
       .replace("for (const mode of ['populated', 'sync-selection', 'attention', 'statement-preview']) {", `for (const mode of ${JSON.stringify(finalModes)}) {`)
@@ -69,7 +67,7 @@ try {
     await writeFile(scriptPath, patched)
 
     const result = await runNode(scriptPath, {
-      ACCEPTANCE_APP_URL: modeUrl.toString(),
+      ACCEPTANCE_APP_URL: APP_URL,
       CONNECTIONS_ACCEPTANCE_ARTIFACT_PATH: modeArtifact,
     })
     const report = JSON.parse(await readFile(modeArtifact, 'utf8'))
