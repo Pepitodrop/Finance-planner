@@ -72,7 +72,7 @@ try {
       )
       .replace(
         '  assert.equal(assertions.mobileNavigationUnobscured, true)',
-        "  if (width <= 768 && setupModes.has(mode)) {\n    assert.equal(assertions.mobileNavigationUnobscured, false)\n    assert.equal(assertions.mobileNavigationInert, true)\n  } else {\n    assert.equal(assertions.mobileNavigationUnobscured, true)\n  }",
+        "  const modalMode = ['institution-selector', 'institution-search', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'manual'].includes(mode)\n  if (width <= 768 && modalMode) {\n    assert.equal(assertions.mobileNavigationUnobscured, false)\n    assert.equal(assertions.mobileNavigationInert, true)\n  } else {\n    assert.equal(assertions.mobileNavigationUnobscured, true)\n  }",
       )
       .replace(
         '  assert.deepEqual(assertions.viewport, { width, height })',
