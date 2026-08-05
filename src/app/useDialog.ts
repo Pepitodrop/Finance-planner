@@ -37,12 +37,12 @@ export function useDialog<T extends HTMLElement>({ open, onClose, restoreFocus =
       // unavailable without making the dialog itself inert and unfocusable.
       let activeBranch: HTMLElement | null = dialog
       while (activeBranch && activeBranch !== mainContent) {
-        const parent = activeBranch.parentElement
-        if (!parent) break
-        for (const sibling of Array.from(parent.children)) {
+        const parentElement: HTMLElement | null = activeBranch.parentElement
+        if (!parentElement) break
+        for (const sibling of Array.from(parentElement.children)) {
           if (sibling !== activeBranch && sibling instanceof HTMLElement) markInert(sibling)
         }
-        activeBranch = parent
+        activeBranch = parentElement
       }
     } else {
       markInert(mainContent)
