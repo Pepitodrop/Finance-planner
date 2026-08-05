@@ -27,7 +27,7 @@ jobs:
       HF_RECEIPT_MODEL: Qwen/Qwen2.5-VL-7B-Instruct:fastest
       REQUIRE_LIVE_AI_ACCEPTANCE: ${{ github.event_name == 'workflow_dispatch' && inputs.require_live_ai || false }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
