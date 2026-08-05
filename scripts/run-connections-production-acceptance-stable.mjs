@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path'
 const SOURCE = resolve('scripts/connections-production-acceptance.mjs')
 const FINAL_ARTIFACT = resolve(process.env.CONNECTIONS_ACCEPTANCE_ARTIFACT_PATH || 'artifacts/connections-production-acceptance.json')
 const APP_URL = process.env.ACCEPTANCE_APP_URL || 'http://127.0.0.1:4173'
+const MAX_TRANSIENT_ATTEMPTS = 3
 const CASES = [
   ['empty', 'Connect your financial accounts'],
   ['populated', 'Connected accounts'],
@@ -28,6 +29,11 @@ function runNode(script, env) {
     const child = spawn(process.execPath, [script], { stdio: 'inherit', env: { ...process.env, ...env } })
     child.once('exit', (code, signal) => resolveRun({ code, signal }))
   })
+}
+
+function isRetryableBrowserFailure(report) {
+  const failure = String(report?.failure || '')
+  return /Inspected target navigated or closed|CDP connection (?:closed|failed)|Failed to fetch|Chrome did not publish a DevTools endpoint|CDP connection timed out/.test(failure)
 }
 
 const source = await readFile(SOURCE, 'utf8')
@@ -95,18 +101,28 @@ try {
     const scriptPath = join(workspace, `connections-${mode}.mjs`)
     await writeFile(scriptPath, patched)
 
-    const result = await runNode(scriptPath, {
-      ACCEPTANCE_APP_URL: APP_URL,
-      CONNECTIONS_ACCEPTANCE_ARTIFACT_PATH: modeArtifact,
-    })
-    const report = JSON.parse(await readFile(modeArtifact, 'utf8'))
+    let result
+    let report
+    let attempts = 0
+    for (attempts = 1; attempts <= MAX_TRANSIENT_ATTEMPTS; attempts += 1) {
+      result = await runNode(scriptPath, {
+        ACCEPTANCE_APP_URL: APP_URL,
+        CONNECTIONS_ACCEPTANCE_ARTIFACT_PATH: modeArtifact,
+      })
+      report = JSON.parse(await readFile(modeArtifact, 'utf8'))
+      const cleanupOnlyFailure = result.code !== 0 && report.passed === true && !report.failure
+      if (result.code === 0 || cleanupOnlyFailure || !isRetryableBrowserFailure(report) || attempts === MAX_TRANSIENT_ATTEMPTS) break
+      console.warn(`Retrying Connections mode ${mode} after transient browser failure (${attempts}/${MAX_TRANSIENT_ATTEMPTS}): ${report.failure}`)
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 500 * attempts))
+    }
+
     const cleanupOnlyFailure = result.code !== 0 && report.passed === true && !report.failure
     assert.ok(result.code === 0 || cleanupOnlyFailure, `Connections mode ${mode} failed with exit ${result.code ?? result.signal}: ${report.failure || 'no report failure'}`)
     assert.equal(report.passed, true, `Connections mode ${mode} did not pass: ${report.failure || 'unknown failure'}`)
     assert.ok(report.screenshots.length >= 4, `Connections mode ${mode} produced incomplete evidence.`)
     combined.screenshots.push(...report.screenshots)
     combined.browserErrors.push(...(report.browserErrors || []))
-    combined.cases.push({ mode, passed: true, screenshots: report.screenshots.length, cleanupOnlyFailure })
+    combined.cases.push({ mode, passed: true, screenshots: report.screenshots.length, cleanupOnlyFailure, attempts })
   }
 
   assert.deepEqual(combined.browserErrors, [])
