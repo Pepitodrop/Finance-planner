@@ -17,7 +17,7 @@ jobs:
   chromium:
     name: Chromium production acceptance
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     services:
       postgres:
         image: postgres:17-bookworm
@@ -85,6 +85,11 @@ jobs:
           ACCEPTANCE_APP_URL: http://127.0.0.1:4173
           ACCEPTANCE_ARTIFACT_PATH: artifacts/browser-production-acceptance.json
         run: node scripts/run-browser-production-acceptance-stable.mjs
+      - name: Run exhaustive Connections acceptance
+        env:
+          ACCEPTANCE_APP_URL: http://127.0.0.1:4173
+          CONNECTIONS_ACCEPTANCE_ARTIFACT_PATH: artifacts/connections-production-acceptance.json
+        run: node scripts/connections-production-acceptance.mjs
       - name: Verify authenticated operational metrics
         shell: bash
         run: |
@@ -143,6 +148,8 @@ jobs:
             artifacts/recurring-*.png
             artifacts/budget-consent-*.png
             artifacts/budget-result-*.png
+            artifacts/connections-production-acceptance.json
+            artifacts/connections-*.png
             artifacts/backend-resilience.json
             artifacts/operational-metrics.prom
             artifacts/production-load-acceptance.json
