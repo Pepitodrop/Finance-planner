@@ -14,7 +14,7 @@ import {
 
 function feedbackLabel(profile: BudgetProfile | null, recommendationId: string): string | null {
   const decision = profile?.feedbackSummary[recommendationId]?.lastDecision
-  return decision === 'approved' ? 'Übernommen' : decision === 'rejected' ? 'Abgelehnt' : null
+  return decision === 'approved' ? 'Approved' : decision === 'rejected' ? 'Rejected' : null
 }
 
 function locationLabel(location: BudgetProfile['location']): string {
@@ -42,14 +42,13 @@ export function LearningBudgetPlanner() {
       .then((stored) => {
         if (!active || !stored) return
         setProfile(stored)
-        setLearningConsent(true)
         setSavingsStyle(stored.preferences.savingsStyle)
         setEmergencyMonths(stored.preferences.emergencyFundMonths)
         setSustainabilityPriority(stored.preferences.sustainabilityPriority)
         setLocationConsent(false)
       })
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : 'Das Lernprofil konnte nicht geladen werden.')
+        if (active) setError(reason instanceof Error ? reason.message : 'The learning profile could not be loaded.')
       })
       .finally(() => {
         if (active) setProfileLoading(false)
@@ -75,7 +74,7 @@ export function LearningBudgetPlanner() {
       setPlan(result)
       setProfile(result.learningProfile)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Der Budgetplan konnte nicht erstellt werden.')
+      setError(reason instanceof Error ? reason.message : 'The budget plan could not be created.')
     } finally {
       setLoading(false)
     }
@@ -88,7 +87,7 @@ export function LearningBudgetPlanner() {
     try {
       setProfile(await submitBudgetFeedback(plan.planId, recommendationId, decision))
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Die Rückmeldung konnte nicht gespeichert werden.')
+      setError(reason instanceof Error ? reason.message : 'The feedback could not be saved.')
     } finally {
       setFeedbackLoading('')
     }
@@ -106,76 +105,76 @@ export function LearningBudgetPlanner() {
       setExternalConsent(false)
       setLocationConsent(false)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Das Lernprofil konnte nicht zurückgesetzt werden.')
+      setError(reason instanceof Error ? reason.message : 'The learning profile could not be reset.')
     } finally {
       setLoading(false)
     }
   }
 
-  return <section className="learning-budget" aria-labelledby="learning-budget-title">
+  return <section className="learning-budget" lang="en" data-feature="budget-planner" aria-labelledby="learning-budget-title">
     <article className="panel learning-budget-hero">
       <div>
-        <p className="eyebrow">Persistentes Verhaltenslernen</p>
-        <h2 id="learning-budget-title">Lernender Monatsbudgetplan</h2>
-        <p>Der Plan verbindet synchronisierte Transaktionen, aktive Sparziele, wiederkehrende Kosten, bestätigte Entscheidungen und optional einen groben, aus der IP-Adresse abgeleiteten Standort. Er lernt aus Zustimmung und Ablehnung, führt aber niemals Geldbewegungen aus.</p>
+        <p className="eyebrow">Deterministic planning</p>
+        <h2 id="learning-budget-title">Learning budget plan</h2>
+        <p>Finance Planner calculates the amounts from recorded finances. Optional AI can prioritize or explain only. This planner never executes payments or transfers.</p>
       </div>
-      <div className="ai-model"><BrainCircuit size={18}/><div><strong>Deterministische Planung + optionale Qwen-Priorisierung</strong><span>PostgreSQL-Lernprofil · Hugging Face nur nach Zustimmung</span></div></div>
+      <div className="ai-model"><BrainCircuit size={18}/><div><strong>Deterministic amounts</strong><span>Optional external AI only with consent for this run</span></div></div>
     </article>
 
     <div className="learning-budget-grid">
       <article className="panel">
-        <div className="panel-header"><div><p className="eyebrow">Einstellungen</p><h2>Was darf gelernt werden?</h2></div><ShieldCheck size={20}/></div>
-        <label className="checkbox"><input type="checkbox" checked={learningConsent} onChange={(event) => setLearningConsent(event.target.checked)} disabled={loading}/><span>Ich stimme zu, dass aus meiner verschlüsselten Finanzhistorie ein persönliches Lernprofil abgeleitet und verschlüsselt in PostgreSQL gespeichert wird.</span></label>
-        <label className="checkbox"><input type="checkbox" checked={externalConsent} onChange={(event) => setExternalConsent(event.target.checked)} disabled={loading}/><span>Ich stimme für diesen Lauf zu, dass ausschließlich aggregierte Budgetwerte und das abgeleitete Profil an das konfigurierte Hugging-Face-Modell gesendet werden.</span></label>
-        <label className="checkbox"><input type="checkbox" checked={locationConsent} onChange={(event) => setLocationConsent(event.target.checked)} disabled={loading}/><span>Für diesen Lauf meinen ungefähren Standort aus der IP-Adresse bestimmen. Die IP-Adresse wird nur für die Geo-IP-Abfrage verwendet, nicht im Lernprofil gespeichert und die Zustimmung wird nach dem Lauf zurückgesetzt.</span></label>
+        <div className="panel-header"><div><p className="eyebrow">Your consent</p><h2>Choose what to include</h2></div><ShieldCheck size={20}/></div>
+        <label className="checkbox"><input type="checkbox" checked={learningConsent} onChange={(event) => setLearningConsent(event.target.checked)} disabled={loading}/><span><strong>Behavior learning.</strong> Save derived preferences and feedback for future plans.</span></label>
+        <label className="checkbox"><input type="checkbox" checked={externalConsent} onChange={(event) => setExternalConsent(event.target.checked)} disabled={loading}/><span><strong>External AI for this run.</strong> Send only the allowed aggregated budget values for this run.</span></label>
+        <label className="checkbox"><input type="checkbox" checked={locationConsent} onChange={(event) => setLocationConsent(event.target.checked)} disabled={loading}/><span><strong>Approximate location for this run.</strong> Add broad cost context; precise location is not requested. This consent resets after the run.</span></label>
 
         <div className="learning-budget-location">
-          <label>Sparstil<select value={savingsStyle} onChange={(event) => setSavingsStyle(event.target.value as SavingsStyle)}><option value="conservative">Vorsichtig</option><option value="balanced">Ausgewogen</option><option value="ambitious">Ambitioniert</option></select></label>
-          <label>Notgroschen in Monaten<input type="number" min="1" max="12" value={emergencyMonths} onChange={(event) => setEmergencyMonths(Math.max(1, Math.min(12, Number(event.target.value) || 1)))}/></label>
-          <label>Nachhaltigkeitspriorität: {sustainabilityPriority}%<input type="range" min="0" max="100" step="5" value={sustainabilityPriority} onChange={(event) => setSustainabilityPriority(Number(event.target.value))}/></label>
+          <label>Savings style<select value={savingsStyle} onChange={(event) => setSavingsStyle(event.target.value as SavingsStyle)}><option value="conservative">Conservative</option><option value="balanced">Balanced</option><option value="ambitious">Ambitious</option></select></label>
+          <label>Emergency-fund months<input type="number" min="1" max="12" value={emergencyMonths} onChange={(event) => setEmergencyMonths(Math.max(1, Math.min(12, Number(event.target.value) || 1)))}/></label>
+          <label>Sustainability priority: {sustainabilityPriority}%<input aria-label="Sustainability priority" type="range" min="0" max="100" step="5" value={sustainabilityPriority} onChange={(event) => setSustainabilityPriority(Number(event.target.value))}/></label>
         </div>
 
-        <button className="primary receipt-analyze" type="button" disabled={!learningConsent || loading || profileLoading} onClick={() => void generatePlan()}>{loading ? <LoaderCircle className="spin" size={18}/> : <Target size={18}/>} {loading ? 'Budgetplan wird erstellt …' : 'Persönlichen Budgetplan erstellen'}</button>
+        <button className="primary receipt-analyze" type="button" disabled={!learningConsent || loading || profileLoading} onClick={() => void generatePlan()}>{loading ? <LoaderCircle className="spin" size={18}/> : <Target size={18}/>} {loading ? 'Creating budget plan…' : 'Create budget plan'}</button>
         {error && <p className="status-message error-message" role="alert"><AlertTriangle size={17}/>{error}</p>}
       </article>
 
       <article className="panel">
-        <div className="panel-header"><div><p className="eyebrow">Lernstatus</p><h2>Persistentes Profil</h2></div>{profile ? <CircleCheck size={20}/> : <MapPin size={20}/>}</div>
-        {profileLoading && <p className="status-message" role="status"><LoaderCircle className="spin" size={17}/> Lernprofil wird geladen …</p>}
-        {!profileLoading && !profile && <div className="receipt-empty"><BrainCircuit size={38}/><strong>Noch kein serverseitiges Lernprofil</strong><span>Nach dem ersten Plan werden nur abgeleitete Muster, Einstellungen und Rückmeldungen verschlüsselt gespeichert.</span></div>}
+        <div className="panel-header"><div><p className="eyebrow">Learning status</p><h2>Saved profile</h2></div>{profile ? <CircleCheck size={20}/> : <MapPin size={20}/>}</div>
+        {profileLoading && <p className="status-message" role="status"><LoaderCircle className="spin" size={17}/> Loading learning profile…</p>}
+        {!profileLoading && !profile && <div className="receipt-empty"><BrainCircuit size={38}/><strong>No saved learning profile</strong><span>After the first plan, only derived patterns, preferences and feedback are stored.</span></div>}
         {profile && <>
-          <div className="learning-stats"><div><strong>{Math.round(profile.confidence * 100)}%</strong><span>Konfidenz</span></div><div><strong>{profile.learnedFromTransactions}</strong><span>Transaktionen</span></div><div><strong>{profile.patterns.goalCount}</strong><span>Aktive Sparziele</span></div></div>
-          <p className="muted">Letztes Lernen: {new Date(profile.lastLearnedAt).toLocaleString('de-DE')}. Rohbeschreibungen, IP-Adressen und präzise Koordinaten werden nicht im Lernprofil gespeichert.</p>
-          {profile.location && <p className="muted">Zuletzt mit ausdrücklicher Zustimmung abgeleiteter grober Standort: {locationLabel(profile.location)}. Er wird bei einem neuen Lauf nicht automatisch verwendet.</p>}
-          <button className="secondary" type="button" onClick={() => void resetProfile()} disabled={loading}><RotateCcw size={16}/> Lernprofil zurücksetzen</button>
+          <div className="learning-stats"><div><strong>{Math.round(profile.confidence * 100)}%</strong><span>Confidence</span></div><div><strong>{profile.learnedFromTransactions}</strong><span>Transactions</span></div><div><strong>{profile.patterns.goalCount}</strong><span>Active goals</span></div></div>
+          <p className="muted">Last learned: {new Date(profile.lastLearnedAt).toLocaleString('en-GB')}. Raw descriptions, IP addresses and precise coordinates are not stored in the profile.</p>
+          {profile.location && <p className="muted">Approximate context previously derived with consent: {locationLabel(profile.location)}. It is not reused automatically.</p>}
+          <button className="secondary" type="button" onClick={() => void resetProfile()} disabled={loading}><RotateCcw size={16}/> Reset learning profile</button>
         </>}
       </article>
     </div>
 
     {plan && <>
       <article className="panel">
-        <div className="panel-header"><div><p className="eyebrow">Monatsplan</p><h2>Dein Budgetvorschlag</h2></div><span className="pill">Datenqualität: {plan.dataQuality.level === 'high' ? 'hoch' : plan.dataQuality.level === 'medium' ? 'mittel' : 'niedrig'}</span></div>
+        <div className="panel-header"><div><p className="eyebrow">Monthly plan</p><h2>Plan result</h2></div><span className="pill">Data quality: {plan.dataQuality.level}</span></div>
         <p>{plan.summary}</p>
-        {plan.locationContext && <p className="status-message" role="status"><MapPin size={17}/><span>Ungefährer IP-Standort dieses Laufs: {locationLabel(plan.locationContext)}. Die Zuordnung kann ungenau sein.</span></p>}
-        {plan.cashflowStatus === 'deficit' && <p className="status-message error-message" role="status"><AlertTriangle size={17}/><span>Monatliches Defizit: {formatMoney(plan.monthlyDeficitCents)}. Sparziel- und Notgroschenbeiträge werden nicht aus nicht vorhandenem Einkommen erzeugt.</span></p>}
+        {plan.locationContext && <p className="status-message" role="status"><MapPin size={17}/><span>Approximate location context for this run: {locationLabel(plan.locationContext)}. This may be inaccurate.</span></p>}
+        {plan.cashflowStatus === 'deficit' && <p className="status-message error-message" role="status"><AlertTriangle size={17}/><span>Monthly deficit: {formatMoney(plan.monthlyDeficitCents)}. Goal and emergency-fund allocations are not created from unavailable income.</span></p>}
         <div className="learning-budget-allocations">
-          <div><span>Einnahmen</span><strong>{formatMoney(plan.allocations.incomeCents)}</strong></div>
-          <div><span>Grundbedarf</span><strong>{formatMoney(plan.allocations.essentialCents)}</strong></div>
-          <div><span>Flexibel</span><strong>{formatMoney(plan.allocations.flexibleCents)}</strong></div>
-          <div><span>Notgroschen</span><strong>{formatMoney(plan.allocations.emergencyFundCents)}</strong></div>
-          <div><span>Aktive Sparziele</span><strong>{formatMoney(plan.allocations.savingsGoalsCents)}</strong></div>
+          <div><span>Income</span><strong>{formatMoney(plan.allocations.incomeCents)}</strong></div>
+          <div><span>Essentials</span><strong>{formatMoney(plan.allocations.essentialCents)}</strong></div>
+          <div><span>Flexible</span><strong>{formatMoney(plan.allocations.flexibleCents)}</strong></div>
+          <div><span>Emergency fund</span><strong>{formatMoney(plan.allocations.emergencyFundCents)}</strong></div>
+          <div><span>Active goals</span><strong>{formatMoney(plan.allocations.savingsGoalsCents)}</strong></div>
         </div>
-        <p className="muted">Liquider Notgroschen: {formatMoney(plan.emergencyFund.currentBalanceCents)} von {formatMoney(plan.emergencyFund.targetCents)} Zielwert · verbleibende Lücke {formatMoney(plan.emergencyFund.gapCents)}.</p>
-        <p className="muted">Quelle: {plan.ai.source === 'hugging-face-budget-explanation' ? `${plan.ai.model?.id} über Hugging Face` : 'deterministische Budget-Engine'}. Die Zusammenfassung und alle Beträge bleiben deterministisch; das Modell kann nur eine vorgegebene qualitative Betonung auswählen.</p>
+        <p className="muted">Emergency fund: {formatMoney(plan.emergencyFund.currentBalanceCents)} of {formatMoney(plan.emergencyFund.targetCents)} · remaining gap {formatMoney(plan.emergencyFund.gapCents)}.</p>
+        <p className="muted">Amounts are deterministic. Optional AI provides explanation or prioritization only and does not change these values.</p>
       </article>
 
       {plan.categoryCaps.length > 0 && <article className="panel"><div className="panel-header"><div><p className="eyebrow">Kategorien</p><h2>Monatliche Richtwerte</h2></div><Target size={20}/></div><div className="transaction-list">{plan.categoryCaps.map((category) => <div className="transaction-row" key={category.category}><div><strong>{category.category}</strong><span>{category.rationale} · bisher {formatMoney(category.historicalMonthlyCents)}</span></div><b>{formatMoney(category.recommendedCapCents)}</b></div>)}</div></article>}
 
       {plan.goalAllocations.length > 0 && <article className="panel"><div className="panel-header"><div><p className="eyebrow">Sparpläne</p><h2>Empfohlene monatliche Verteilung</h2></div><Target size={20}/></div><div className="transaction-list">{plan.goalAllocations.map((goal) => <div className="transaction-row" key={goal.goalId}><div><strong>{goal.name}</strong><span>Benötigt {formatMoney(goal.requiredMonthlyCents)} · Ziel {new Date(goal.targetDate).toLocaleDateString('de-DE')}</span></div><b>{formatMoney(goal.recommendedMonthlyCents)}</b><span className="pill">{goal.onTrack ? 'im Plan' : 'Ziel gefährdet'}</span></div>)}</div></article>}
 
-      <article className="panel"><div className="panel-header"><div><p className="eyebrow">Feedback-Schleife</p><h2>Empfehlungen bestätigen oder ablehnen</h2></div><Leaf size={20}/></div><div className="transaction-list">{plan.recommendations.map((recommendation) => {
+      <article className="panel"><div className="panel-header"><div><p className="eyebrow">Feedback</p><h2>Review recommendations</h2></div><Leaf size={20}/></div><p className="muted">Approval records feedback. It does not move money.</p><div className="transaction-list">{plan.recommendations.map((recommendation) => {
         const learnedDecision = feedbackLabel(profile, recommendation.id)
-        return <div className="transaction-row learning-budget-recommendation" key={recommendation.id}><div><strong>{recommendation.title}</strong><span>{recommendation.aiExplanation || recommendation.explanation}</span></div>{learnedDecision && <span className="pill">{learnedDecision}</span>}<div className="row-actions"><button aria-label={`${recommendation.title} übernehmen`} disabled={!learningConsent || feedbackLoading === recommendation.id} onClick={() => void decide(recommendation.id, 'approved')}>{feedbackLoading === recommendation.id ? <LoaderCircle className="spin" size={16}/> : <Check size={16}/>}</button><button aria-label={`${recommendation.title} ablehnen`} disabled={!learningConsent || feedbackLoading === recommendation.id} onClick={() => void decide(recommendation.id, 'rejected')}><X size={16}/></button></div></div>
+        return <div className="transaction-row learning-budget-recommendation" key={recommendation.id}><div><strong>{recommendation.title}</strong><span>{recommendation.aiExplanation || recommendation.explanation}</span></div>{learnedDecision && <span className="pill">{learnedDecision}</span>}<div className="row-actions"><button aria-label={`Approve ${recommendation.title}`} disabled={!learningConsent || feedbackLoading === recommendation.id} onClick={() => void decide(recommendation.id, 'approved')}>{feedbackLoading === recommendation.id ? <LoaderCircle className="spin" size={16}/> : <Check size={16}/>}</button><button aria-label={`Reject ${recommendation.title}`} disabled={!learningConsent || feedbackLoading === recommendation.id} onClick={() => void decide(recommendation.id, 'rejected')}><X size={16}/></button></div></div>
       })}</div></article>
 
       <article className="panel"><div className="panel-header"><div><p className="eyebrow">Transparenz</p><h2>Grenzen und Datenschutz</h2></div><ShieldCheck size={20}/></div><ul className="receipt-limitations">{plan.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul></article>

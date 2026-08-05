@@ -1,10 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import {
-  CalendarClock,
-  Plus,
-  Repeat2,
-  Undo2,
-} from 'lucide-react'
+import { Plus, Undo2 } from 'lucide-react'
 import { AiPanel } from './AiPanel'
 import type { AiSuggestion } from './ai'
 import { learnBehavior } from './behavior'
@@ -15,9 +10,9 @@ import { FinanceAssistant } from './FinanceAssistant'
 import { ReceiptReview } from './ReceiptReview'
 import { SavingsGoals } from './SavingsGoals'
 import { TransactionsPage } from './TransactionsPage'
-import { formatMoney, recurringPayments } from './finance'
 import { Dashboard } from './features/dashboard/Dashboard'
 import { AccountsPage } from './features/accounts/AccountsPage'
+import { RecurringPaymentsPage } from './features/recurring/RecurringPaymentsPage'
 import { loadState, resetStoredState, saveState } from './storage'
 import { addTransactionToState, deleteTransactionFromState, updateTransactionInState } from './transactionState'
 import type { AppState, Transaction, TransactionType } from './types'
@@ -54,7 +49,6 @@ function App({ userId, userName, onLockVault }: AppProps) {
     return () => document.removeEventListener('keydown', closeOnEscape)
   }, [dialogOpen])
 
-  const recurring = useMemo(() => recurringPayments(state.transactions), [state.transactions])
   const accountsPresentationState = useMemo(() => {
     if (accountsAcceptanceMode === 'accounts' || accountsAcceptanceMode === 'detail' || accountsAcceptanceMode === 'credit') return accountsAcceptanceState
     if (accountsAcceptanceMode === 'empty') return { ...accountsAcceptanceState, accounts: [], transactions: [] }
@@ -159,7 +153,7 @@ function App({ userId, userName, onLockVault }: AppProps) {
   const viewAccountTransactions = (accountId: string) => { setRequestedTransactionAccount(accountId); setTab('transactions') }
 
   return <ApplicationShell activeDestination={tab} onNavigate={navigate} onLockVault={onLockVault}>
-      {tab !== 'dashboard' && tab !== 'transactions' && tab !== 'accounts' && <header className="topbar">
+      {tab !== 'dashboard' && tab !== 'transactions' && tab !== 'accounts' && tab !== 'goals' && tab !== 'recurring' && <header className="topbar">
         <div>
           <p className="eyebrow">Persönliche Finanzen</p>
           <h1>{titles[tab]}</h1>
@@ -179,19 +173,7 @@ function App({ userId, userName, onLockVault }: AppProps) {
       />}
       {tab === 'accounts' && <AccountsPage key={accountsAcceptanceMode ?? 'live'} accounts={accountsPresentationState.accounts} transactions={accountsPresentationState.transactions} initialSelectedAccountId={accountsAcceptanceMode === 'detail' ? 'accept-checking' : accountsAcceptanceMode === 'credit' ? 'accept-card' : undefined} onOpenConnections={() => setTab('connections')} onViewTransactions={viewAccountTransactions}/>}
       {tab === 'goals' && <SavingsGoals state={state} onChange={setState}/>} 
-      {tab === 'recurring' && <section className="panel table-panel">
-        <div className="panel-header">
-          <div><p className="eyebrow">Automatisch erkannt</p><h2>Verträge & feste Zahlungen</h2></div>
-          <span className="pill"><CalendarClock size={14}/> {formatMoney(recurring.reduce((sum, item) => sum + item.amountCents, 0))} / Monat</span>
-        </div>
-        <div className="transaction-list">
-          {recurring.map((transaction) => <div className="transaction-row" key={transaction.id}>
-            <div className="transaction-icon expense"><Repeat2 size={18}/></div>
-            <div><strong>{transaction.description}</strong><span>{transaction.category} · regelmäßig</span></div>
-            <b className="negative-text">-{formatMoney(transaction.amountCents)}</b>
-          </div>)}
-        </div>
-      </section>}
+      {tab === 'recurring' && <RecurringPaymentsPage transactions={state.transactions} onAddTransaction={openNewTransaction} onViewTransactions={() => navigate('transactions')}/>}
       {tab === 'connections' && <ConnectionsPanel state={state} onApply={setState}/>} 
       {tab === 'ai' && <AiPanel transactions={state.transactions} onApply={applyAiSuggestion}/>} 
       {tab === 'assistant' && <FinanceAssistant state={state}/>} 
