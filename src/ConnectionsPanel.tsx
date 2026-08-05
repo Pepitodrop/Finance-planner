@@ -17,13 +17,15 @@ const CONNECTIONS_ACCEPTANCE_MODES: ConnectionsAcceptanceMode[] = [
   'statement-preview',
 ]
 
+const ACCEPTANCE_MODE_STORAGE_KEY = 'finance-planner-connections-acceptance-mode'
 type ConnectionsPanelProps = ComponentProps<typeof ConnectionsPage>
 
 export function ConnectionsPanel(props: ConnectionsPanelProps) {
   let acceptanceMode = props.acceptanceMode
 
   if (import.meta.env.VITE_ACCEPTANCE_FIXTURES === 'true' && typeof window !== 'undefined') {
-    const requestedMode = new URLSearchParams(window.location.search).get('connectionsAcceptanceMode')
+    const queryMode = new URLSearchParams(window.location.search).get('connectionsAcceptanceMode')
+    const requestedMode = queryMode || window.localStorage.getItem(ACCEPTANCE_MODE_STORAGE_KEY)
     if (CONNECTIONS_ACCEPTANCE_MODES.includes(requestedMode as ConnectionsAcceptanceMode)) {
       acceptanceMode = requestedMode as ConnectionsAcceptanceMode
     }
