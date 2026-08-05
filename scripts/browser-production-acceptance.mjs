@@ -434,6 +434,25 @@ async function captureAccountDetailEvidence(client,sessionId,credit=false){
   return{path,...assertions,...optional}
 }
 
+async function captureAccountDetailScrollEndEvidence(client,sessionId,credit=false){
+  const width=390,height=844
+  await setAccountsViewport(client,sessionId,width,height)
+  await evaluate(client,sessionId,`window.__financePlannerAcceptanceState?.('${credit?'credit':'detail'}')`)
+  await waitFor(client,sessionId,`Boolean(document.querySelector('[data-account-detail="${credit?'credit-card':'checking'}"]'))`,credit?'credit detail scroll state':'account detail scroll state')
+  const contextSelector=credit?'.accounts-due':'.accounts-transactions li:last-child'
+  await evaluate(client,sessionId,`document.querySelector(${JSON.stringify(contextSelector)})?.scrollIntoView({block:'center',behavior:'instant'})`)
+  const contextClear=await evaluate(client,sessionId,`(()=>{const element=document.querySelector(${JSON.stringify(contextSelector)}),nav=document.querySelector('.app-mobile-navigation'),rect=element?.getBoundingClientRect(),navRect=nav?.getBoundingClientRect();return Boolean(rect&&navRect&&rect.top>=0&&rect.bottom<=navRect.top)})()`)
+  assert.equal(contextClear,true,credit?'Payment notice cannot clear mobile navigation':'Final recent transaction cannot clear mobile navigation')
+  await evaluate(client,sessionId,`window.scrollTo({top:document.documentElement.scrollHeight,behavior:'instant'})`)
+  await waitFor(client,sessionId,`(()=>{const action=document.querySelector('.accounts-detail-actions button:last-child')?.getBoundingClientRect(),nav=document.querySelector('.app-mobile-navigation')?.getBoundingClientRect();return Boolean(action&&nav&&action.bottom<=nav.top&&action.top>=0)})()`,'final account detail action above navigation')
+  const assertions=await evaluate(client,sessionId,`(()=>{const visible=element=>{if(!(element instanceof Element))return false;const style=getComputedStyle(element),rect=element.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&rect.width>0&&rect.height>0};const root=document.querySelector('[data-accounts-ready=true]'),nav=document.querySelector('.app-mobile-navigation'),action=document.querySelector('.accounts-detail-actions button:last-child'),preceding=action?.previousElementSibling,actionRect=action?.getBoundingClientRect(),navRect=nav?.getBoundingClientRect(),notice=document.querySelector('.accounts-due'),current=[...document.querySelectorAll('nav [aria-current=page]')].filter(visible);return{viewport:{width:innerWidth,height:innerHeight},language:root?.getAttribute('lang'),currentCount:current.length,currentText:current[0]?.textContent?.trim(),overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth+1,modal:Boolean(document.querySelector('[role=dialog][aria-modal=true]')),rootCount:document.querySelectorAll('[data-accounts-ready=true]').length,navigationVisible:visible(nav),actionExists:Boolean(action),actionInsideViewport:Boolean(actionRect&&actionRect.top>=0&&actionRect.bottom<=innerHeight&&actionRect.width>0&&actionRect.height>=43),actionClearsNavigation:Boolean(actionRect&&navRect&&actionRect.bottom<=navRect.top),precedingContextVisible:visible(preceding),transactions:Boolean(document.querySelector('.accounts-transactions li')),amountOwed:!${credit}||document.body.innerText.includes('Amount owed'),availableCredit:!${credit}||document.body.innerText.includes('Available credit'),paymentNotice:!${credit}||Boolean(notice&&notice.textContent?.trim())}})()`)
+  assert.deepEqual(assertions.viewport,{width,height});assert.equal(assertions.language,'en');assert.equal(assertions.currentCount,1);assert.match(assertions.currentText||'',/Accounts/);assert.equal(assertions.overflow,false);assert.equal(assertions.modal,false);assert.equal(assertions.rootCount,1);assert.equal(assertions.navigationVisible,true);assert.equal(assertions.actionExists,true);assert.equal(assertions.actionInsideViewport,true);assert.equal(assertions.actionClearsNavigation,true);assert.equal(assertions.precedingContextVisible,true);assert.equal(assertions.transactions,true);assert.equal(assertions.amountOwed,true);assert.equal(assertions.availableCredit,true);assert.equal(assertions.paymentNotice,true)
+  const path=join(ARTIFACT_DIR,credit?'credit-card-details-final-row-390x844.png':'account-details-final-row-390x844.png');const screenshot=await client.send('Page.captureScreenshot',{format:'png',fromSurface:true,captureBeyondViewport:false},sessionId);await writeFile(path,screenshot.data,'base64')
+  await evaluate(client,sessionId,`window.__financePlannerAcceptanceState?.('accounts')`)
+  await waitFor(client,sessionId,`Boolean(document.querySelector('.accounts-summary'))`,'Accounts overview restored after scroll-end capture')
+  return{path,contextClear,...assertions}
+}
+
 async function captureAccountsEmptyEvidence(client,sessionId){
   await evaluate(client,sessionId,`window.__financePlannerAcceptanceState?.('empty')`);await setAccountsViewport(client,sessionId,390,844);await waitFor(client,sessionId,`Boolean(document.querySelector('.accounts-empty'))`,'Accounts empty state')
   const assertions=await accountsAssertions(client,sessionId);assert.equal(assertions.empty,true);assert.equal(assertions.accountRows,0);assert.equal(assertions.overflow,false)
@@ -675,6 +694,8 @@ async function runAcceptance() {
     for (const [width,height] of [[1440,900],[1024,768],[390,844],[360,800]]) report.checks.accountsScreenshots.push(await captureAccountsEvidence(client,sessionId,width,height))
     report.checks.accountDetail = await captureAccountDetailEvidence(client,sessionId,false)
     report.checks.creditCardDetail = await captureAccountDetailEvidence(client,sessionId,true)
+    report.checks.accountDetailScrollEnd = await captureAccountDetailScrollEndEvidence(client,sessionId,false)
+    report.checks.creditCardDetailScrollEnd = await captureAccountDetailScrollEndEvidence(client,sessionId,true)
     report.checks.accountsEmpty = await captureAccountsEmptyEvidence(client,sessionId)
     report.checks.accountsFinalRow = await captureAccountsFinalRowEvidence(client,sessionId)
     report.checks.transactionsScreenshots = []

@@ -134,6 +134,8 @@ jobs:
             artifacts/accounts-360x800.png
             artifacts/account-details-390x844.png
             artifacts/credit-card-details-390x844.png
+            artifacts/account-details-final-row-390x844.png
+            artifacts/credit-card-details-final-row-390x844.png
             artifacts/accounts-empty-390x844.png
             artifacts/accounts-final-row-390x844.png
             artifacts/backend-resilience.json
