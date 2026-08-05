@@ -22,21 +22,25 @@ function locationLabel(location: BudgetProfile['location']): string {
   return [location.city, location.region, location.country].filter(Boolean).join(', ')
 }
 
-export function LearningBudgetPlanner() {
+const acceptanceProfile: BudgetProfile = { enabled:true,preferences:{savingsStyle:'balanced',emergencyFundMonths:3,sustainabilityPriority:60},location:null,patterns:{categoryPreferences:[],monthlyIncomeCents:325000,monthlyExpenseCents:255000,monthlyRecurringCents:103089,savingsCapacityCents:70000,volatilityCents:12000,goalCount:2},confidence:.76,learnedFromTransactions:24,firstLearnedAt:'2026-08-01T00:00:00.000Z',lastLearnedAt:'2026-08-05T00:00:00.000Z',feedbackSummary:{},privacy:{rawDescriptionsPersisted:false,preciseCoordinatesPersisted:false,externalInferenceRequiresConsent:true,userCanReset:true} }
+const acceptancePlan: BudgetPlan = { planId:'budget-2026-08-05-12345678-1234-4123-8123-123456789abc',period:'monthly',generatedAt:'2026-08-05T00:00:00.000Z',cashflowStatus:'balanced',monthlyDeficitCents:0,summary:'A reconciled monthly plan based on recorded finances.',locationContext:null,allocations:{incomeCents:325000,essentialCents:190000,flexibleCents:65000,emergencyFundCents:30000,savingsGoalsCents:40000,unallocatedCents:0},emergencyFund:{targetMonths:3,targetCents:600000,currentBalanceCents:360000,gapCents:240000},goalAllocations:[{goalId:'planning-emergency',name:'Emergency fund',targetDate:'2026-12-15',remainingCents:240000,recommendedMonthlyCents:30000,requiredMonthlyCents:30000,onTrack:true},{goalId:'planning-course',name:'Course fund',targetDate:'2027-04-30',remainingCents:285000,recommendedMonthlyCents:10000,requiredMonthlyCents:18000,onTrack:false}],categoryCaps:[{category:'Groceries',historicalMonthlyCents:44500,recommendedCapCents:42000,rationale:'Based on recorded category totals'},{category:'Transport',historicalMonthlyCents:17200,recommendedCapCents:16000,rationale:'Based on recorded category totals'}],recommendations:[{id:'reduce-flexible-spending',priority:1,title:'Review flexible dining cap',explanation:'Compare the cap with recorded category totals.',aiExplanation:null,requiresApproval:true}],confidence:.76,dataQuality:{transactionCount:24,monthsCovered:4,level:'medium'},limitations:['Illustrative acceptance data does not represent provider availability.','Review the plan before making financial decisions.'],ai:{source:'deterministic-budget-engine',model:null,confidence:.76,warnings:[]},learningProfile:acceptanceProfile,profileVersion:1,privacy:{descriptionsSentToModel:false,accountNamesSentToModel:false,preciseLocationSentToModel:false,coarseLocationSentToModel:false,ipAddressPersisted:false,ipLocationLookupRequested:false,automaticMoneyMovement:false} }
+
+export function LearningBudgetPlanner({ acceptanceMode }: { acceptanceMode?: 'consent' | 'result' } = {}) {
   const [learningConsent, setLearningConsent] = useState(false)
   const [externalConsent, setExternalConsent] = useState(false)
   const [locationConsent, setLocationConsent] = useState(false)
   const [savingsStyle, setSavingsStyle] = useState<SavingsStyle>('balanced')
   const [emergencyMonths, setEmergencyMonths] = useState(3)
   const [sustainabilityPriority, setSustainabilityPriority] = useState(60)
-  const [profile, setProfile] = useState<BudgetProfile | null>(null)
-  const [plan, setPlan] = useState<BudgetPlan | null>(null)
+  const [profile, setProfile] = useState<BudgetProfile | null>(acceptanceMode === 'result' ? acceptanceProfile : null)
+  const [plan, setPlan] = useState<BudgetPlan | null>(acceptanceMode === 'result' ? acceptancePlan : null)
   const [loading, setLoading] = useState(false)
   const [profileLoading, setProfileLoading] = useState(true)
   const [feedbackLoading, setFeedbackLoading] = useState('')
   const [error, setError] = useState('')
 
   useEffect(() => {
+    if (acceptanceMode) { setProfileLoading(false); return }
     let active = true
     void loadLearningBudgetProfile()
       .then((stored) => {
@@ -54,7 +58,7 @@ export function LearningBudgetPlanner() {
         if (active) setProfileLoading(false)
       })
     return () => { active = false }
-  }, [])
+  }, [acceptanceMode])
 
   const generatePlan = async () => {
     if (!learningConsent || loading) return
@@ -168,16 +172,16 @@ export function LearningBudgetPlanner() {
         <p className="muted">Amounts are deterministic. Optional AI provides explanation or prioritization only and does not change these values.</p>
       </article>
 
-      {plan.categoryCaps.length > 0 && <article className="panel"><div className="panel-header"><div><p className="eyebrow">Kategorien</p><h2>Monatliche Richtwerte</h2></div><Target size={20}/></div><div className="transaction-list">{plan.categoryCaps.map((category) => <div className="transaction-row" key={category.category}><div><strong>{category.category}</strong><span>{category.rationale} · bisher {formatMoney(category.historicalMonthlyCents)}</span></div><b>{formatMoney(category.recommendedCapCents)}</b></div>)}</div></article>}
+      {plan.categoryCaps.length > 0 && <article className="panel"><div className="panel-header"><div><p className="eyebrow">Categories</p><h2>Monthly guidance</h2></div><Target size={20}/></div><div className="transaction-list">{plan.categoryCaps.map((category) => <div className="transaction-row" key={category.category}><div><strong>{category.category}</strong><span>{category.rationale} · recorded {formatMoney(category.historicalMonthlyCents)}</span></div><b>{formatMoney(category.recommendedCapCents)}</b></div>)}</div></article>}
 
-      {plan.goalAllocations.length > 0 && <article className="panel"><div className="panel-header"><div><p className="eyebrow">Sparpläne</p><h2>Empfohlene monatliche Verteilung</h2></div><Target size={20}/></div><div className="transaction-list">{plan.goalAllocations.map((goal) => <div className="transaction-row" key={goal.goalId}><div><strong>{goal.name}</strong><span>Benötigt {formatMoney(goal.requiredMonthlyCents)} · Ziel {new Date(goal.targetDate).toLocaleDateString('de-DE')}</span></div><b>{formatMoney(goal.recommendedMonthlyCents)}</b><span className="pill">{goal.onTrack ? 'im Plan' : 'Ziel gefährdet'}</span></div>)}</div></article>}
+      {plan.goalAllocations.length > 0 && <article className="panel"><div className="panel-header"><div><p className="eyebrow">Goals</p><h2>Recommended monthly allocation</h2></div><Target size={20}/></div><div className="transaction-list">{plan.goalAllocations.map((goal) => <div className="transaction-row" key={goal.goalId}><div><strong>{goal.name}</strong><span>Required {formatMoney(goal.requiredMonthlyCents)} · target {new Date(goal.targetDate).toLocaleDateString('en-GB')}</span></div><b>{formatMoney(goal.recommendedMonthlyCents)}</b><span className="pill">{goal.onTrack ? 'On track' : 'Needs attention'}</span></div>)}</div></article>}
 
       <article className="panel"><div className="panel-header"><div><p className="eyebrow">Feedback</p><h2>Review recommendations</h2></div><Leaf size={20}/></div><p className="muted">Approval records feedback. It does not move money.</p><div className="transaction-list">{plan.recommendations.map((recommendation) => {
         const learnedDecision = feedbackLabel(profile, recommendation.id)
         return <div className="transaction-row learning-budget-recommendation" key={recommendation.id}><div><strong>{recommendation.title}</strong><span>{recommendation.aiExplanation || recommendation.explanation}</span></div>{learnedDecision && <span className="pill">{learnedDecision}</span>}<div className="row-actions"><button aria-label={`Approve ${recommendation.title}`} disabled={!learningConsent || feedbackLoading === recommendation.id} onClick={() => void decide(recommendation.id, 'approved')}>{feedbackLoading === recommendation.id ? <LoaderCircle className="spin" size={16}/> : <Check size={16}/>}</button><button aria-label={`Reject ${recommendation.title}`} disabled={!learningConsent || feedbackLoading === recommendation.id} onClick={() => void decide(recommendation.id, 'rejected')}><X size={16}/></button></div></div>
       })}</div></article>
 
-      <article className="panel"><div className="panel-header"><div><p className="eyebrow">Transparenz</p><h2>Grenzen und Datenschutz</h2></div><ShieldCheck size={20}/></div><ul className="receipt-limitations">{plan.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul></article>
+      <article className="panel"><div className="panel-header"><div><p className="eyebrow">Transparency</p><h2>Sources and limitations</h2></div><ShieldCheck size={20}/></div><ul className="receipt-limitations">{plan.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul></article>
     </>}
   </section>
 }

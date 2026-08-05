@@ -138,6 +138,11 @@ jobs:
             artifacts/credit-card-details-final-row-390x844.png
             artifacts/accounts-empty-390x844.png
             artifacts/accounts-final-row-390x844.png
+            artifacts/goals-*.png
+            artifacts/goal-editor-390x844.png
+            artifacts/recurring-*.png
+            artifacts/budget-consent-*.png
+            artifacts/budget-result-*.png
             artifacts/backend-resilience.json
             artifacts/operational-metrics.prom
             artifacts/production-load-acceptance.json

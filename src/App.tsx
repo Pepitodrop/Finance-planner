@@ -5,7 +5,7 @@ import type { AiSuggestion } from './ai'
 import { learnBehavior } from './behavior'
 import { ConnectionsPanel } from './ConnectionsPanel'
 import { DataTools } from './DataTools'
-import { accountsAcceptanceState, initialState } from './data'
+import { accountsAcceptanceState, initialState, planningAcceptanceState } from './data'
 import { FinanceAssistant } from './FinanceAssistant'
 import { ReceiptReview } from './ReceiptReview'
 import { SavingsGoals } from './SavingsGoals'
@@ -32,12 +32,16 @@ function App({ userId, userName, onLockVault }: AppProps) {
   const [deletedTransaction, setDeletedTransaction] = useState<Transaction | null>(null)
   const [requestedTransactionAccount, setRequestedTransactionAccount] = useState<string | null>(null)
   const [accountsAcceptanceMode, setAccountsAcceptanceMode] = useState<'accounts' | 'empty' | 'detail' | 'credit' | null>(null)
+  const [planningAcceptanceMode, setPlanningAcceptanceMode] = useState<'goals' | 'goals-empty' | 'goal-editor' | 'recurring' | 'recurring-empty' | 'budget-consent' | 'budget-result' | null>(null)
 
   useEffect(() => saveState(state), [state])
   useEffect(() => {
     if (import.meta.env.VITE_ACCEPTANCE_FIXTURES !== 'true') return
-    const target = window as Window & { __financePlannerAcceptanceState?: (mode: 'accounts' | 'empty' | 'detail' | 'credit') => void }
-    target.__financePlannerAcceptanceState = setAccountsAcceptanceMode
+    const target = window as Window & { __financePlannerAcceptanceState?: (mode: string) => void }
+    target.__financePlannerAcceptanceState = (mode) => {
+      if (['accounts','empty','detail','credit'].includes(mode)) setAccountsAcceptanceMode(mode as 'accounts' | 'empty' | 'detail' | 'credit')
+      if (['goals','goals-empty','goal-editor','recurring','recurring-empty','budget-consent','budget-result'].includes(mode)) setPlanningAcceptanceMode(mode as typeof planningAcceptanceMode)
+    }
     return () => { delete target.__financePlannerAcceptanceState }
   }, [])
   useEffect(() => {
@@ -54,6 +58,12 @@ function App({ userId, userName, onLockVault }: AppProps) {
     if (accountsAcceptanceMode === 'empty') return { ...accountsAcceptanceState, accounts: [], transactions: [] }
     return state
   }, [accountsAcceptanceMode, state])
+  const planningPresentationState = useMemo(() => {
+    if (planningAcceptanceMode === 'goals-empty') return { ...planningAcceptanceState, goals: [] }
+    if (planningAcceptanceMode === 'recurring-empty') return { ...planningAcceptanceState, transactions: [] }
+    if (planningAcceptanceMode) return planningAcceptanceState
+    return state
+  }, [planningAcceptanceMode, state])
 
   const openNewTransaction = () => {
     setEditing(null)
@@ -172,11 +182,11 @@ function App({ userId, userName, onLockVault }: AppProps) {
         requestedAccountId={requestedTransactionAccount}
       />}
       {tab === 'accounts' && <AccountsPage key={accountsAcceptanceMode ?? 'live'} accounts={accountsPresentationState.accounts} transactions={accountsPresentationState.transactions} initialSelectedAccountId={accountsAcceptanceMode === 'detail' ? 'accept-checking' : accountsAcceptanceMode === 'credit' ? 'accept-card' : undefined} onOpenConnections={() => setTab('connections')} onViewTransactions={viewAccountTransactions}/>}
-      {tab === 'goals' && <SavingsGoals state={state} onChange={setState}/>} 
-      {tab === 'recurring' && <RecurringPaymentsPage transactions={state.transactions} onAddTransaction={openNewTransaction} onViewTransactions={() => navigate('transactions')}/>}
+      {tab === 'goals' && <SavingsGoals key={planningAcceptanceMode ?? 'live'} state={planningPresentationState} onChange={setState} initialEditorOpen={planningAcceptanceMode === 'goal-editor'}/>}
+      {tab === 'recurring' && <RecurringPaymentsPage transactions={planningPresentationState.transactions} onAddTransaction={openNewTransaction} onViewTransactions={() => navigate('transactions')}/>}
       {tab === 'connections' && <ConnectionsPanel state={state} onApply={setState}/>} 
       {tab === 'ai' && <AiPanel transactions={state.transactions} onApply={applyAiSuggestion}/>} 
-      {tab === 'assistant' && <FinanceAssistant state={state}/>} 
+      {tab === 'assistant' && <FinanceAssistant state={state} budgetAcceptanceMode={planningAcceptanceMode === 'budget-result' ? 'result' : planningAcceptanceMode === 'budget-consent' ? 'consent' : undefined}/>}
       {tab === 'receipt' && <ReceiptReview/>}
       {tab === 'data' && <DataTools userId={userId} state={state} onRestore={setState} onReset={resetAll}/>} 
     {deletedTransaction && <div className="undo-toast" role="status">
