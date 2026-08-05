@@ -23,8 +23,32 @@ export function useDialog<T extends HTMLElement>({ open, onClose, restoreFocus =
     previousFocusRef.current = document.activeElement as HTMLElement | null
     const mainContent = document.getElementById('main-content')
     const mobileNavigation = document.querySelector<HTMLElement>('.app-mobile-navigation')
-    mainContent?.setAttribute('inert', '')
-    mobileNavigation?.setAttribute('inert', '')
+    const inertedElements: HTMLElement[] = []
+    const markInert = (element: HTMLElement | null) => {
+      if (!element || element.hasAttribute('inert')) return
+      element.setAttribute('inert', '')
+      inertedElements.push(element)
+    }
+
+    const dialog = dialogRef.current
+    if (mainContent && dialog && mainContent.contains(dialog)) {
+      // The Connections dialogs currently render inside the main region. Inert
+      // only sibling branches along the dialog path so the background is
+      // unavailable without making the dialog itself inert and unfocusable.
+      let activeBranch: HTMLElement | null = dialog
+      while (activeBranch && activeBranch !== mainContent) {
+        const parent = activeBranch.parentElement
+        if (!parent) break
+        for (const sibling of Array.from(parent.children)) {
+          if (sibling !== activeBranch && sibling instanceof HTMLElement) markInert(sibling)
+        }
+        activeBranch = parent
+      }
+    } else {
+      markInert(mainContent)
+    }
+    markInert(mobileNavigation)
+
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
 
@@ -57,8 +81,7 @@ export function useDialog<T extends HTMLElement>({ open, onClose, restoreFocus =
     return () => {
       document.removeEventListener('keydown', handleKeyDown)
       document.body.style.overflow = previousOverflow
-      mainContent?.removeAttribute('inert')
-      mobileNavigation?.removeAttribute('inert')
+      for (const element of inertedElements) element.removeAttribute('inert')
       if (restoreFocus) previousFocusRef.current?.focus()
     }
   }, [open, onClose, restoreFocus])
