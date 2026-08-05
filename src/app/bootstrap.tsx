@@ -41,6 +41,7 @@ import '../glossy-finance.css'
 import './app-shell.css'
 import '../features/dashboard/dashboard.css'
 import '../features/transactions/transactions.css'
+import '../features/accounts/accounts.css'
 import '../runtime-surfaces/runtime-surfaces.css'
 
 const enrollmentRoute = window.location.pathname === '/test-enrollment'

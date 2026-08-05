@@ -19,13 +19,13 @@ describe('ApplicationShell navigation', () => {
   it('renders one desktop model and the staged mobile destinations', () => {
     render(<><MobileExperience/><TestShell /></>)
     const desktop = screen.getByRole('navigation', { name: 'Primary navigation' })
-    expect(within(desktop).getAllByRole('button')).toHaveLength(9)
+    expect(within(desktop).getAllByRole('button')).toHaveLength(10)
     expect(within(desktop).getByRole('button', { name: 'Dashboard' })).toHaveAttribute('aria-current', 'page')
 
     const mobile = screen.getByRole('navigation', { name: 'Mobile primary navigation' })
     expect(screen.getAllByRole('navigation', { name: 'Mobile primary navigation' })).toHaveLength(1)
     expect(within(mobile).getAllByRole('button').map((button) => button.textContent)).toEqual([
-      'Dashboard', 'Transactions', 'Goals', 'Connections', 'More',
+      'Dashboard', 'Transactions', 'Accounts', 'Goals', 'More',
     ])
   })
 
@@ -49,6 +49,7 @@ describe('ApplicationShell navigation', () => {
     expect(within(dialog).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([
       'Close more destinations',
       'Recurring payments',
+      'Bank and PayPal connections',
       'AI categorisation',
       'Finance assistant',
       'Receipt review',

@@ -2,6 +2,7 @@ import {
   BrainCircuit,
   DatabaseBackup,
   LayoutDashboard,
+  Landmark,
   Link2,
   MessageCircleQuestion,
   ReceiptText,
@@ -14,6 +15,7 @@ import {
 export type DestinationId =
   | 'dashboard'
   | 'transactions'
+  | 'accounts'
   | 'goals'
   | 'recurring'
   | 'connections'
@@ -35,13 +37,14 @@ export interface NavigationDestination {
 export const NAVIGATION_DESTINATIONS: readonly NavigationDestination[] = [
   { id: 'dashboard', label: 'Dashboard', accessibilityLabel: 'Dashboard', icon: LayoutDashboard, desktopOrder: 1, mobilePrimary: true },
   { id: 'transactions', label: 'Transactions', accessibilityLabel: 'Transactions', icon: ArrowLeftRight, desktopOrder: 2, mobilePrimary: true },
-  { id: 'goals', label: 'Goals', accessibilityLabel: 'Savings goals', icon: Target, desktopOrder: 3, mobilePrimary: true },
-  { id: 'recurring', label: 'Recurring', accessibilityLabel: 'Recurring payments', icon: Repeat2, desktopOrder: 4, mobilePrimary: false, moreOrder: 1 },
-  { id: 'connections', label: 'Connections', accessibilityLabel: 'Bank and PayPal connections', icon: Link2, desktopOrder: 5, mobilePrimary: true },
-  { id: 'ai', label: 'AI Categorisation', accessibilityLabel: 'AI categorisation', icon: BrainCircuit, desktopOrder: 6, mobilePrimary: false, moreOrder: 2 },
-  { id: 'assistant', label: 'Finance Assistant', accessibilityLabel: 'Finance assistant', icon: MessageCircleQuestion, desktopOrder: 7, mobilePrimary: false, moreOrder: 3 },
-  { id: 'receipt', label: 'Receipt Review', accessibilityLabel: 'Receipt review', icon: ReceiptText, desktopOrder: 8, mobilePrimary: false, moreOrder: 4 },
-  { id: 'data', label: 'Data and Backup', accessibilityLabel: 'Data and backup', icon: DatabaseBackup, desktopOrder: 9, mobilePrimary: false, moreOrder: 5 },
+  { id: 'accounts', label: 'Accounts', accessibilityLabel: 'Accounts', icon: Landmark, desktopOrder: 3, mobilePrimary: true },
+  { id: 'goals', label: 'Goals', accessibilityLabel: 'Savings goals', icon: Target, desktopOrder: 4, mobilePrimary: true },
+  { id: 'recurring', label: 'Recurring', accessibilityLabel: 'Recurring payments', icon: Repeat2, desktopOrder: 5, mobilePrimary: false, moreOrder: 1 },
+  { id: 'connections', label: 'Connections', accessibilityLabel: 'Bank and PayPal connections', icon: Link2, desktopOrder: 6, mobilePrimary: false, moreOrder: 2 },
+  { id: 'ai', label: 'AI Categorisation', accessibilityLabel: 'AI categorisation', icon: BrainCircuit, desktopOrder: 7, mobilePrimary: false, moreOrder: 3 },
+  { id: 'assistant', label: 'Finance Assistant', accessibilityLabel: 'Finance assistant', icon: MessageCircleQuestion, desktopOrder: 8, mobilePrimary: false, moreOrder: 4 },
+  { id: 'receipt', label: 'Receipt Review', accessibilityLabel: 'Receipt review', icon: ReceiptText, desktopOrder: 9, mobilePrimary: false, moreOrder: 5 },
+  { id: 'data', label: 'Data and Backup', accessibilityLabel: 'Data and backup', icon: DatabaseBackup, desktopOrder: 10, mobilePrimary: false, moreOrder: 6 },
 ]
 
 export const DESKTOP_DESTINATIONS = [...NAVIGATION_DESTINATIONS]

@@ -45,6 +45,8 @@ jobs:
         working-directory: server
         run: npm install --no-fund --no-audit --silent
       - name: Build production web bundle
+        env:
+          VITE_ACCEPTANCE_FIXTURES: "true"
         run: npm run build
       - name: Start PostgreSQL-backed connector
         env:
@@ -126,6 +128,16 @@ jobs:
             artifacts/transactions-360x800.png
             artifacts/transactions-filters-390x844.png
             artifacts/transactions-final-row-390x844.png
+            artifacts/accounts-1440x900.png
+            artifacts/accounts-1024x768.png
+            artifacts/accounts-390x844.png
+            artifacts/accounts-360x800.png
+            artifacts/account-details-390x844.png
+            artifacts/credit-card-details-390x844.png
+            artifacts/account-details-final-row-390x844.png
+            artifacts/credit-card-details-final-row-390x844.png
+            artifacts/accounts-empty-390x844.png
+            artifacts/accounts-final-row-390x844.png
             artifacts/backend-resilience.json
             artifacts/operational-metrics.prom
             artifacts/production-load-acceptance.json

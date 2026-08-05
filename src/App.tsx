@@ -10,13 +10,14 @@ import type { AiSuggestion } from './ai'
 import { learnBehavior } from './behavior'
 import { ConnectionsPanel } from './ConnectionsPanel'
 import { DataTools } from './DataTools'
-import { initialState } from './data'
+import { accountsAcceptanceState, initialState } from './data'
 import { FinanceAssistant } from './FinanceAssistant'
 import { ReceiptReview } from './ReceiptReview'
 import { SavingsGoals } from './SavingsGoals'
 import { TransactionsPage } from './TransactionsPage'
 import { formatMoney, recurringPayments } from './finance'
 import { Dashboard } from './features/dashboard/Dashboard'
+import { AccountsPage } from './features/accounts/AccountsPage'
 import { loadState, resetStoredState, saveState } from './storage'
 import { addTransactionToState, deleteTransactionFromState, updateTransactionInState } from './transactionState'
 import type { AppState, Transaction, TransactionType } from './types'
@@ -34,8 +35,16 @@ function App({ userId, userName, onLockVault }: AppProps) {
   const [transactionType, setTransactionType] = useState<TransactionType>('expense')
   const [formError, setFormError] = useState('')
   const [deletedTransaction, setDeletedTransaction] = useState<Transaction | null>(null)
+  const [requestedTransactionAccount, setRequestedTransactionAccount] = useState<string | null>(null)
+  const [accountsAcceptanceMode, setAccountsAcceptanceMode] = useState<'accounts' | 'empty' | 'detail' | 'credit' | null>(null)
 
   useEffect(() => saveState(state), [state])
+  useEffect(() => {
+    if (import.meta.env.VITE_ACCEPTANCE_FIXTURES !== 'true') return
+    const target = window as Window & { __financePlannerAcceptanceState?: (mode: 'accounts' | 'empty' | 'detail' | 'credit') => void }
+    target.__financePlannerAcceptanceState = setAccountsAcceptanceMode
+    return () => { delete target.__financePlannerAcceptanceState }
+  }, [])
   useEffect(() => {
     if (!dialogOpen) return
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -46,6 +55,11 @@ function App({ userId, userName, onLockVault }: AppProps) {
   }, [dialogOpen])
 
   const recurring = useMemo(() => recurringPayments(state.transactions), [state.transactions])
+  const accountsPresentationState = useMemo(() => {
+    if (accountsAcceptanceMode === 'accounts' || accountsAcceptanceMode === 'detail' || accountsAcceptanceMode === 'credit') return accountsAcceptanceState
+    if (accountsAcceptanceMode === 'empty') return { ...accountsAcceptanceState, accounts: [], transactions: [] }
+    return state
+  }, [accountsAcceptanceMode, state])
 
   const openNewTransaction = () => {
     setEditing(null)
@@ -128,6 +142,7 @@ function App({ userId, userName, onLockVault }: AppProps) {
   const titles: Record<DestinationId, string> = {
     dashboard: 'Dashboard',
     transactions: 'Transaktionen',
+    accounts: 'Accounts',
     goals: 'Sparziele',
     recurring: 'Wiederkehrende Zahlungen',
     connections: 'Banken & PayPal',
@@ -137,8 +152,14 @@ function App({ userId, userName, onLockVault }: AppProps) {
     data: 'Daten & Backup',
   }
 
-  return <ApplicationShell activeDestination={tab} onNavigate={setTab} onLockVault={onLockVault}>
-      {tab !== 'dashboard' && tab !== 'transactions' && <header className="topbar">
+  const navigate = (destination: DestinationId) => {
+    if (destination === 'transactions') setRequestedTransactionAccount(null)
+    setTab(destination)
+  }
+  const viewAccountTransactions = (accountId: string) => { setRequestedTransactionAccount(accountId); setTab('transactions') }
+
+  return <ApplicationShell activeDestination={tab} onNavigate={navigate} onLockVault={onLockVault}>
+      {tab !== 'dashboard' && tab !== 'transactions' && tab !== 'accounts' && <header className="topbar">
         <div>
           <p className="eyebrow">Persönliche Finanzen</p>
           <h1>{titles[tab]}</h1>
@@ -146,7 +167,7 @@ function App({ userId, userName, onLockVault }: AppProps) {
         <button type="button" className="primary" onClick={openNewTransaction}><Plus size={18}/> Manuelle Buchung</button>
       </header>}
 
-      {tab === 'dashboard' && <Dashboard state={state} userName={userName} onAddTransaction={openNewTransaction} onEditTransaction={openEditTransaction} onNavigate={setTab}/>}
+      {tab === 'dashboard' && <Dashboard state={state} userName={userName} onAddTransaction={openNewTransaction} onEditTransaction={openEditTransaction} onNavigate={navigate}/>}
 
       {tab === 'transactions' && <TransactionsPage
         transactions={state.transactions}
@@ -154,7 +175,9 @@ function App({ userId, userName, onLockVault }: AppProps) {
         onAdd={openNewTransaction}
         onEdit={openEditTransaction}
         onDelete={deleteTransaction}
+        requestedAccountId={requestedTransactionAccount}
       />}
+      {tab === 'accounts' && <AccountsPage key={accountsAcceptanceMode ?? 'live'} accounts={accountsPresentationState.accounts} transactions={accountsPresentationState.transactions} initialSelectedAccountId={accountsAcceptanceMode === 'detail' ? 'accept-checking' : accountsAcceptanceMode === 'credit' ? 'accept-card' : undefined} onOpenConnections={() => setTab('connections')} onViewTransactions={viewAccountTransactions}/>}
       {tab === 'goals' && <SavingsGoals state={state} onChange={setState}/>} 
       {tab === 'recurring' && <section className="panel table-panel">
         <div className="panel-header">
