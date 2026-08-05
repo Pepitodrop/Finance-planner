@@ -59,6 +59,10 @@ try {
         "  await setViewport(client, sessionId, width, height)",
         "  await setViewport(client, sessionId, width, height)\n  await evaluate(client, sessionId, `localStorage.setItem('finance-planner-connections-acceptance-mode', ${JSON.stringify(mode)})`)",
       )
+      .replace(
+        "  throw new Error(`Timed out waiting for ${description}. Last value: ${JSON.stringify(lastValue)}`)",
+        "  const diagnostics = await evaluate(client, sessionId, `(() => ({ href: location.href, storedMode: localStorage.getItem('finance-planner-connections-acceptance-mode'), hasBridge: typeof window.__financePlannerAcceptanceState === 'function', root: Boolean(document.querySelector('[data-connections-ready=true]')), overview: Boolean(document.querySelector('.connections-overview')), empty: Boolean(document.querySelector('.connections-empty')), text: document.body.innerText.slice(0, 1200) }))()`).catch((reason) => ({ diagnosticError: String(reason) }))\n  throw new Error(`Timed out waiting for ${description}. Last value: ${JSON.stringify(lastValue)}. Diagnostics: ${JSON.stringify(diagnostics)}`)",
+      )
     assert.notEqual(patched, source, `Failed to isolate Connections mode: ${mode}`)
     assert.ok(patched.includes('finance-planner-connections-acceptance-mode'), `Failed to persist Connections fixture mode: ${mode}`)
     const scriptPath = join(workspace, `connections-${mode}.mjs`)
