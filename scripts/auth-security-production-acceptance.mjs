@@ -472,6 +472,17 @@ async function runAcceptance() {
 
     // CRITICAL: complete a genuine, no-legacy-data setup and prove the
     // resulting production state is empty, not seeded demo finances.
+    // Offline for the whole creation + first read: local-user is a fixed,
+    // shared identity across every acceptance script in this CI job (and
+    // possibly across runs, since Postgres persists), so a remote cloud
+    // state can already exist by the time this script runs (observed
+    // directly: a later check in this same file picked up another
+    // script's seeded accounts via cloud bootstrap). Going offline forces
+    // synchronizeUnlockedState's fetch to fail closed and keep the local
+    // (genuinely empty) state, isolating this check to what it's actually
+    // meant to prove -- the real architecture's offline-fallback path, not
+    // an invented shortcut.
+    await client.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0, connectionType: 'none' }, sessionId)
     await evaluate(client, sessionId, `(() => {
       const inputs = [...document.querySelectorAll('input[type=password]')]
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
@@ -479,15 +490,21 @@ async function runAcceptance() {
     })()`)
     await clickButton(client, sessionId, 'Turn on encryption')
     await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-dashboard-ready=true]"))', 'authenticated dashboard after fresh vault setup')
+    await clickButton(client, sessionId, 'Accounts')
+    await waitFor(client, sessionId, `Boolean(document.querySelector('.accounts-empty')) || document.querySelectorAll('.accounts-list li').length === 0`, 'empty Accounts page after fresh vault setup')
     report.interactions.freshEmptyState = await evaluate(client, sessionId, `(() => {
       const text = document.body.innerText
       return {
         demoStringsPresent: ${JSON.stringify(DEMO_STRINGS)}.filter((needle) => text.includes(needle)),
         accountRows: document.querySelectorAll('.accounts-list li').length,
-        dashboardReady: Boolean(document.querySelector('[data-dashboard-ready=true]')),
+        emptyStateShown: Boolean(document.querySelector('.accounts-empty')),
       }
     })()`)
     assert.deepEqual(report.interactions.freshEmptyState.demoStringsPresent, [], 'seeded German demo finances leaked into a genuinely new account')
+    assert.equal(report.interactions.freshEmptyState.accountRows, 0, 'a genuinely new account must show zero accounts, not adopted/leaked data')
+    await client.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1, connectionType: 'wifi' }, sessionId)
+    await clickButton(client, sessionId, 'Dashboard')
+    await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-dashboard-ready=true]"))', 'back on dashboard after empty-state check')
 
     // -----------------------------------------------------------------
     // VAULT-02: unlock, on the vault we just created. A full reload
@@ -634,6 +651,11 @@ async function runAcceptance() {
       waitExpr: `document.body?.innerText.includes('data stored locally from before encryption')`,
       waitDescription: 'vault-migration',
     })
+    // Offline for the same reason as the VAULT-01 empty-state check above:
+    // local-user's remote cloud state can already exist from another
+    // acceptance script in this job, which would otherwise get adopted
+    // ahead of the real legacy migration this state is meant to prove.
+    await client.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0, connectionType: 'none' }, sessionId)
     await evaluate(client, sessionId, `(() => {
       const inputs = [...document.querySelectorAll('input[type=password]')]
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
@@ -652,6 +674,7 @@ async function runAcceptance() {
     }))()`)
     assert.equal(report.interactions.migrationPreservesLegacyData.legacyAccountVisible, true, 'real legacy local data must survive migration unchanged')
     assert.deepEqual(report.interactions.migrationPreservesLegacyData.demoStringsPresent, [])
+    await client.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1, connectionType: 'wifi' }, sessionId)
 
     // -----------------------------------------------------------------
     // Forced-colors / reduced-motion / text-pressure envelope checks on
