@@ -447,17 +447,21 @@ async function run() {
     report.interactions.transactionsSeeded = seedTransactions.length
 
     // AUTO-01 / AUTO-02: deterministic fixture-forced states of the
-    // globally-mounted status strip (independent of the active tab).
+    // globally-mounted status strip. Captured over whatever destination is
+    // currently active (Finance Intelligence, left over from seeding) --
+    // the strip itself is tab-independent, so its own readiness marker
+    // ('data-ai-ready', the real current destination) is what matters here,
+    // not a Dashboard marker for a page we never navigated to.
     await waitFor(client, sessionId, 'typeof window.__financePlannerAutoAcceptanceState === "function"', 'AUTO acceptance fixture bridge')
     await evaluate(client, sessionId, `window.__financePlannerAutoAcceptanceState('compact')`)
-    report.states['auto-analysis-compact'] = await captureState(client, sessionId, 'auto-analysis-compact', 'data-dashboard-ready', {
-      beforeEach: async () => {},
+    report.states['auto-analysis-compact'] = await captureState(client, sessionId, 'auto-analysis-compact', 'data-ai-ready', {
+      beforeEach: async (width) => { await ensureDestination(client, sessionId, 'Finance Intelligence', 'data-ai-ready') },
       waitExpr: `document.body?.innerText.includes('Transaction check up to date')`,
       waitDescription: 'auto-analysis-compact',
     })
     await evaluate(client, sessionId, `window.__financePlannerAutoAcceptanceState('expanded')`)
-    report.states['auto-analysis-expanded'] = await captureState(client, sessionId, 'auto-analysis-expanded', 'data-dashboard-ready', {
-      beforeEach: async () => {},
+    report.states['auto-analysis-expanded'] = await captureState(client, sessionId, 'auto-analysis-expanded', 'data-ai-ready', {
+      beforeEach: async (width) => { await ensureDestination(client, sessionId, 'Finance Intelligence', 'data-ai-ready') },
       waitExpr: `document.body?.innerText.includes('Runs automatically and rule-based')`,
       waitDescription: 'auto-analysis-expanded',
     })
