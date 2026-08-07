@@ -3,7 +3,7 @@
   display: grid;
   place-items: center;
   padding: max(1.25rem, var(--safe-top)) max(1rem, var(--safe-right)) max(1.25rem, var(--safe-bottom)) max(1rem, var(--safe-left));
-  background: #080c18;
+  background: var(--fp-color-canvas, #070a14);
 }
 
 .auth-card {
@@ -22,18 +22,49 @@
   gap: 0.45rem;
 }
 
-.auth-google {
+.auth-loading {
+  display: grid;
+  justify-items: center;
+  gap: 0.75rem;
+  text-align: center;
+}
+
+.auth-brand {
+  margin: 0;
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fp-color-text-primary, #f4f5fb);
+}
+
+.auth-google,
+.fp-action-primary,
+.vault-conflict-choice {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 0.6rem;
   width: 100%;
-  border: 1px solid rgba(148, 163, 184, 0.45);
-  border-radius: 0.8rem;
-  color: #e2e8f0;
-  background: #111827;
+  min-height: 2.75rem;
+  border-radius: 0.75rem;
   font: inherit;
   font-weight: 700;
+}
+
+.auth-google {
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  color: #e2e8f0;
+  background: #111827;
+}
+
+.fp-action-primary {
+  border: 1px solid var(--fp-color-border-strong, rgb(174 160 232 / 36%));
+  color: var(--fp-color-text-primary, #f4f5fb);
+  background: var(--fp-color-accent, #8b6aee);
+}
+
+.fp-action-primary:disabled,
+.auth-google:disabled {
+  opacity: 0.65;
 }
 
 .auth-divider {
@@ -51,9 +82,66 @@
   background: rgba(148, 163, 184, 0.3);
 }
 
+.auth-redirect-note,
+.auth-passkey-unsupported {
+  margin: 0;
+  color: var(--fp-color-text-muted, #929ab2);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.auth-passkey-error {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.9rem;
+  border: 1px solid var(--fp-color-border, rgb(151 160 199 / 22%));
+  border-radius: 0.9rem;
+  background: var(--fp-color-surface, #0f1628);
+}
+
+.auth-passkey-error-title {
+  margin: 0;
+  font-weight: 700;
+  color: var(--fp-color-text-primary, #f4f5fb);
+}
+
+.auth-test-password {
+  margin-top: 0.25rem;
+  padding: 0.75rem;
+  border: 1px dashed var(--fp-color-border, rgb(151 160 199 / 22%));
+  border-radius: 0.75rem;
+  color: var(--fp-color-text-muted, #929ab2);
+}
+
+.auth-test-password summary {
+  cursor: pointer;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.auth-test-password label {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+
+.auth-test-password input {
+  width: 100%;
+  min-height: 2.75rem;
+  border: 1px solid var(--fp-color-border, rgb(151 160 199 / 22%));
+  border-radius: 0.6rem;
+  padding: 0 0.75rem;
+  color: var(--fp-color-text-primary, #f4f5fb);
+  background: var(--fp-color-surface-interactive, #19223a);
+}
+
+.auth-test-password .fp-action-primary {
+  margin-top: 0.75rem;
+}
+
 .passkey-enrolment {
   position: fixed;
-  z-index: 9999;
+  z-index: var(--fp-z-system-overlay, 9999);
   left: max(1rem, var(--safe-left));
   right: max(1rem, var(--safe-right));
   bottom: max(1rem, var(--safe-bottom));
@@ -64,10 +152,10 @@
   max-width: 42rem;
   margin-inline: auto;
   padding: 1rem;
-  border: 1px solid rgba(125, 211, 252, 0.4);
+  border: 1px solid var(--fp-color-border-strong, rgb(174 160 232 / 36%));
   border-radius: 1rem;
-  color: #e2e8f0;
-  background: rgba(15, 23, 42, 0.98);
+  color: var(--fp-color-text-primary, #f4f5fb);
+  background: rgba(15, 22, 40, 0.98);
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
 }
 
@@ -76,18 +164,122 @@
   align-items: center;
   justify-content: center;
   gap: 0.45rem;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
   border: 0;
   border-radius: 0.75rem;
   padding: 0.7rem 0.9rem;
   color: #07111f;
-  background: #7dd3fc;
+  background: var(--fp-color-accent, #8b6aee);
   font: inherit;
   font-weight: 700;
+}
+
+.passkey-enrolment button[aria-label] {
+  color: var(--fp-color-text-primary, #f4f5fb);
+  background: transparent;
+}
+
+/* Vault password screens (VaultGate) */
+
+.vault-form-hint {
+  color: var(--fp-color-text-muted, #929ab2);
+  font-size: 0.75rem;
+}
+
+.vault-form-footnote {
+  margin: 0.75rem 0 0;
+  color: var(--fp-color-text-muted, #929ab2);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+/* VAULT-04: conflict resolution dialog (replaces window.confirm) */
+
+.vault-conflict-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--fp-z-dialog-backdrop, 700);
+  display: grid;
+  place-items: center;
+  padding: max(1.25rem, var(--safe-top)) max(1rem, var(--safe-right)) max(1.25rem, var(--safe-bottom)) max(1rem, var(--safe-left));
+  background: var(--fp-color-canvas, #070a14);
+}
+
+.vault-conflict-card {
+  width: min(100%, 30rem);
+  display: grid;
+  gap: 0.85rem;
+}
+
+.vault-conflict-card h1,
+.vault-conflict-card p {
+  margin-block: 0;
+}
+
+.vault-conflict-choices {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.vault-conflict-choice {
+  justify-content: flex-start;
+  text-align: left;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--fp-color-border-strong, rgb(174 160 232 / 36%));
+  color: var(--fp-color-text-primary, #f4f5fb);
+  background: var(--fp-color-surface-interactive, #19223a);
+}
+
+.vault-conflict-choice:hover:not(:disabled) {
+  background: var(--fp-color-surface-hover, #202a46);
+}
+
+.vault-conflict-choice:disabled {
+  opacity: 0.65;
+}
+
+.vault-conflict-choice strong {
+  display: block;
+  font-weight: 700;
+}
+
+.vault-conflict-choice small {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--fp-color-text-secondary, #c7ccdc);
+  font-size: 0.78125rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.vault-conflict-footnote {
+  color: var(--fp-color-text-muted, #929ab2);
+  font-size: 0.75rem;
+  text-align: center;
 }
 
 @media (max-width: 560px) {
   .passkey-enrolment {
     align-items: stretch;
     flex-direction: column;
+  }
+}
+
+@media (forced-colors: active) {
+  .auth-google,
+  .fp-action-primary,
+  .vault-conflict-choice,
+  .passkey-enrolment {
+    border: 1px solid ButtonText;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-google,
+  .fp-action-primary,
+  .vault-conflict-choice {
+    transition: none;
   }
 }

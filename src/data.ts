@@ -55,3 +55,14 @@ export const planningAcceptanceState: AppState = {
 }
 
 export const initialState: AppState = normalInitialState
+
+/**
+ * A genuinely new Finance Planner account (no legacy local data, no existing
+ * encrypted vault, no cloud state) must start empty, never seeded with
+ * `normalInitialState`'s sample German finances. See VaultGate's setup path.
+ */
+export const emptyProductionState: AppState = {
+  accounts: [],
+  transactions: [],
+  goals: [],
+}
