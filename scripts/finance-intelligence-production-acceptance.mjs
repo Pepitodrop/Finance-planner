@@ -311,6 +311,16 @@ async function authenticateFreshVault(client, sessionId) {
   await client.send('Page.reload', { ignoreCache: true }, sessionId)
   await waitFor(client, sessionId, 'document.body?.innerText.includes("Set up your encrypted vault") || document.body?.innerText.includes("Unlock Finance Planner")', 'vault gate')
   const vaultMode = await evaluate(client, sessionId, 'document.body.innerText.includes("Set up your encrypted vault") ? "setup" : "unlock"')
+  // local-user is a fixed, shared identity across every acceptance script in
+  // this CI job (all backed by the same Postgres instance) -- by the time
+  // this script runs, earlier scripts in the same job (browser/connections/
+  // auth-security) have already created real cloud state for that identity.
+  // Go offline for the whole creation + first read, exactly like
+  // auth-security-production-acceptance.mjs's VAULT-01 empty-state check, so
+  // synchronizeUnlockedState's fetch fails closed and this vault starts from
+  // its genuinely empty local state instead of silently adopting another
+  // script's leftover cloud data.
+  await client.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0, connectionType: 'none' }, sessionId)
   await evaluate(client, sessionId, `(() => {
     for (const input of document.querySelectorAll('input[type=password]')) {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(VAULT_PASSWORD)})
@@ -385,6 +395,7 @@ async function run() {
       waitExpr: `document.body?.innerText.includes('Finance Intelligence needs transaction history')`,
       waitDescription: 'finance-intelligence-empty',
     })
+    await client.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1, connectionType: 'wifi' }, sessionId)
 
     // -----------------------------------------------------------------
     // Seed a small, varied, real transaction set via the genuine Add
@@ -450,6 +461,12 @@ async function run() {
         waitDescription: name,
       })
     }
+    // Re-establish 'results' mode explicitly (the loop above ends on
+    // 'error', which has no suggestion rows at all) before checking the
+    // trusted-vs-review structural distinction and bulk-apply scoping.
+    await ensureDestination(client, sessionId, 'Finance Intelligence', 'data-ai-ready')
+    await evaluate(client, sessionId, `window.__financePlannerAcceptanceState('results')`)
+    await waitFor(client, sessionId, `document.body?.innerText.includes('Review queue')`, 'finance-intelligence results for trusted-vs-review check')
     report.interactions.trustedVsReview = await evaluate(client, sessionId, `(() => {
       const rows = [...document.querySelectorAll('.ai-result')]
       const trusted = rows.filter((r) => r.querySelector('.trusted-badge'))
@@ -462,12 +479,11 @@ async function run() {
         reviewHasDistinctBorder: review.every((r) => getComputedStyle(r).borderLeftWidth !== '1px'),
       }
     })()`)
+    assert.ok(report.interactions.trustedVsReview.trustedCount > 0, 'results state must include at least one trusted suggestion')
+    assert.ok(report.interactions.trustedVsReview.reviewCount > 0, 'results state must include at least one review-required suggestion')
     assert.ok(report.interactions.trustedVsReview.reviewHasDistinctBorder !== false || report.interactions.trustedVsReview.reviewCount === 0, 'review-required rows must differ structurally, not only by color')
 
-    // Bulk-apply must only ever touch the trusted subset (results mode).
-    await ensureDestination(client, sessionId, 'Finance Intelligence', 'data-ai-ready')
-    await evaluate(client, sessionId, `window.__financePlannerAcceptanceState('results')`)
-    await waitFor(client, sessionId, `document.body?.innerText.includes('Review queue')`, 'finance-intelligence results for bulk-apply check')
+    // Bulk-apply must only ever touch the trusted subset (still 'results').
     const beforeBulkNetworkCount = providerRequests.length
     await evaluate(client, sessionId, `document.querySelector('.ai-bulk-bar button')?.click()`)
     await delay(200)
@@ -604,21 +620,42 @@ async function run() {
       waitDescription: 'receipt-result-detail',
       scrollTo: 'items',
     })
+    // Re-establish the 'selected' state explicitly (the loop above may have
+    // left the page on a later fixture mode) before checking consent
+    // semantics, so this genuinely tests RECEIPT-02, not whatever ran last.
+    await ensureDestination(client, sessionId, 'Receipt Review', 'data-receipt-ready')
+    await evaluate(client, sessionId, `window.__financePlannerAcceptanceState('selected')`)
+    await waitFor(client, sessionId, `document.body?.innerText.includes('resets if you choose a different image')`, 'receipt-selected-consent for consent-lifecycle check')
     report.interactions.receiptConsentLifecycle = await evaluate(client, sessionId, `(() => {
       const checkbox = document.querySelector('.receipt-consent input[type=checkbox]')
       const analyzeButton = document.querySelector('.receipt-analyze')
       return { consentUnchecked: checkbox ? !checkbox.checked : null, analyzeDisabled: analyzeButton?.disabled ?? null }
     })()`)
+    assert.equal(report.interactions.receiptConsentLifecycle.consentUnchecked, true, 'per-image consent must start unchecked')
+    assert.equal(report.interactions.receiptConsentLifecycle.analyzeDisabled, true, 'Review purchase must stay disabled until consent is given')
 
+    // Re-establish 'insufficient' explicitly for the same reason.
+    await evaluate(client, sessionId, `window.__financePlannerAcceptanceState('insufficient')`)
+    await waitFor(client, sessionId, `document.body?.innerText.includes('Not enough to give a reliable review')`, 'receipt-insufficient for safeguard check')
     report.interactions.receiptInsufficientSafeguards = await evaluate(client, sessionId, `(() => {
       const hasScore = Boolean(document.querySelector('.receipt-score'))
       const hasItems = Boolean(document.querySelector('.receipt-items'))
       const hasRecommendations = document.querySelectorAll('.receipt-recommendations li').length > 0
       return { hasScore, hasItems, hasRecommendations, hasRetakeGuidance: document.body.innerText.includes('in focus, and in good light') }
     })()`)
+    assert.equal(report.interactions.receiptInsufficientSafeguards.hasScore, false, 'insufficient evidence must show no score')
+    assert.equal(report.interactions.receiptInsufficientSafeguards.hasItems, false, 'insufficient evidence must show no item breakdown')
+    assert.equal(report.interactions.receiptInsufficientSafeguards.hasRecommendations, false, 'insufficient evidence must show no recommendations')
+    assert.equal(report.interactions.receiptInsufficientSafeguards.hasRetakeGuidance, true, 'insufficient evidence must offer photo-retake guidance')
 
+    // Re-establish 'sufficient' explicitly for the no-live-price / no-
+    // certification-language checks (both are RECEIPT-04/05-specific claims).
+    await evaluate(client, sessionId, `window.__financePlannerAcceptanceState('sufficient')`)
+    await waitFor(client, sessionId, `document.body?.innerText.includes('Model confidence')`, 'receipt-sufficient for privacy-claim check')
     report.interactions.receiptNoLivePriceClaim = await evaluate(client, sessionId, `document.body.innerText.includes('No live price, offer, or inventory data')`)
+    assert.equal(report.interactions.receiptNoLivePriceClaim, true, 'must always disclose no live price/inventory data')
     report.interactions.receiptNoCertificationLanguage = await evaluate(client, sessionId, `!/verified certif|certified organic|official seal/i.test(document.body.innerText)`)
+    assert.equal(report.interactions.receiptNoCertificationLanguage, true, 'model-inferred labels must never read as verified certifications')
 
     // -----------------------------------------------------------------
     // Forced-colours / reduced-motion / 200% text envelope checks on
