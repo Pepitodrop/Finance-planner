@@ -49,8 +49,8 @@ describe('createSmartBriefing', () => {
     const briefing = createSmartBriefing(productionRegressionState, new Date('2026-07-31T19:40:00+02:00'))
 
     expect(briefing).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'savings-rate', title: 'Sparquote 55 %', severity: 'positive' }),
-      expect.objectContaining({ id: 'cash-runway', title: '6,3 Monate Reichweite', severity: 'positive' }),
+      expect.objectContaining({ id: 'savings-rate', title: 'Savings rate 55%', severity: 'positive' }),
+      expect.objectContaining({ id: 'cash-runway', title: '6.3 months runway', severity: 'positive' }),
     ]))
     expect(briefing.some((item) => item.id === 'recurring-load')).toBe(false)
   })

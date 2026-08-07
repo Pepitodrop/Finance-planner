@@ -52,7 +52,7 @@ describe('validateReceiptReviewResponse', () => {
   })
 
   it('rejects scores outside the supported range', () => {
-    expect(() => validateReceiptReviewResponse({ ...response, score: 101 })).toThrow(/Gesamtscore/)
+    expect(() => validateReceiptReviewResponse({ ...response, score: 101 })).toThrow(/overall score/)
   })
 
   it('accepts a fail-closed insufficient-evidence result without a score', () => {
@@ -79,7 +79,7 @@ describe('validateReceiptReviewResponse', () => {
       score: null,
       subScores: null,
       items: [],
-    })).toThrow(/keinen Score oder Empfehlungen/)
+    })).toThrow(/score or recommendations/)
   })
 })
 
@@ -113,6 +113,6 @@ describe('receipt request lifecycle', () => {
 describe('formatReceiptMoney', () => {
   it('formats cents and unknown values for German users', () => {
     expect(formatReceiptMoney(249)).toContain('2,49')
-    expect(formatReceiptMoney(null)).toBe('nicht erkannt')
+    expect(formatReceiptMoney(null)).toBe('not detected')
   })
 })

@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Plus, Undo2 } from 'lucide-react'
-import { AiPanel } from './AiPanel'
+import { AiPanel, type AiPanelAcceptanceMode } from './AiPanel'
 import type { AiSuggestion } from './ai'
 import { learnBehavior } from './behavior'
 import { ConnectionsPanel } from './ConnectionsPanel'
 import type { ConnectionsAcceptanceMode } from './features/connections/connectionsAcceptanceFixtures'
 import { DataTools } from './DataTools'
 import { accountsAcceptanceState, initialState, planningAcceptanceState } from './data'
-import { FinanceAssistant } from './FinanceAssistant'
-import { ReceiptReview } from './ReceiptReview'
+import { FinanceAssistant, type AssistantAcceptanceMode } from './FinanceAssistant'
+import { ReceiptReview, type ReceiptAcceptanceMode } from './ReceiptReview'
 import { SavingsGoals } from './SavingsGoals'
 import { TransactionsPage } from './TransactionsPage'
 import { Dashboard } from './features/dashboard/Dashboard'
@@ -24,6 +24,9 @@ import type { DestinationId } from './app/navigation'
 interface AppProps { userId: string; userName?: string; onLockVault?: () => void }
 
 const CONNECTIONS_ACCEPTANCE_MODES: ConnectionsAcceptanceMode[] = ['empty', 'populated', 'institution-selector', 'institution-search', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'checking', 'sync-selection', 'attention', 'manual', 'statement-preview']
+const AI_ACCEPTANCE_MODES: AiPanelAcceptanceMode[] = ['ready', 'progress', 'results', 'anomaly', 'applied', 'error', 'empty']
+const ASSISTANT_ACCEPTANCE_MODES: AssistantAcceptanceMode[] = ['hosted-consent', 'hosted-running', 'success', 'hosted-fallback', 'local-selected', 'local-running']
+const RECEIPT_ACCEPTANCE_MODES: ReceiptAcceptanceMode[] = ['selected', 'running', 'sufficient', 'insufficient', 'error']
 
 function App({ userId, userName, onLockVault }: AppProps) {
   const [state, setState] = useState<AppState>(() => loadState())
@@ -37,6 +40,9 @@ function App({ userId, userName, onLockVault }: AppProps) {
   const [accountsAcceptanceMode, setAccountsAcceptanceMode] = useState<'accounts' | 'empty' | 'detail' | 'credit' | null>(null)
   const [planningAcceptanceMode, setPlanningAcceptanceMode] = useState<'goals' | 'goals-empty' | 'goal-editor' | 'recurring' | 'recurring-empty' | 'budget-consent' | 'budget-result' | null>(null)
   const [connectionsAcceptanceMode, setConnectionsAcceptanceMode] = useState<ConnectionsAcceptanceMode | null>(null)
+  const [aiAcceptanceMode, setAiAcceptanceMode] = useState<AiPanelAcceptanceMode | null>(null)
+  const [assistantAcceptanceMode, setAssistantAcceptanceMode] = useState<AssistantAcceptanceMode | null>(null)
+  const [receiptAcceptanceMode, setReceiptAcceptanceMode] = useState<ReceiptAcceptanceMode | null>(null)
 
   useEffect(() => saveState(state), [state])
   useEffect(() => {
@@ -46,6 +52,9 @@ function App({ userId, userName, onLockVault }: AppProps) {
       if (['accounts','empty','detail','credit'].includes(mode)) setAccountsAcceptanceMode(mode as 'accounts' | 'empty' | 'detail' | 'credit')
       if (['goals','goals-empty','goal-editor','recurring','recurring-empty','budget-consent','budget-result'].includes(mode)) setPlanningAcceptanceMode(mode as typeof planningAcceptanceMode)
       if (CONNECTIONS_ACCEPTANCE_MODES.includes(mode as ConnectionsAcceptanceMode)) setConnectionsAcceptanceMode(mode as ConnectionsAcceptanceMode)
+      if (AI_ACCEPTANCE_MODES.includes(mode as AiPanelAcceptanceMode)) setAiAcceptanceMode(mode as AiPanelAcceptanceMode)
+      if (ASSISTANT_ACCEPTANCE_MODES.includes(mode as AssistantAcceptanceMode)) setAssistantAcceptanceMode(mode as AssistantAcceptanceMode)
+      if (RECEIPT_ACCEPTANCE_MODES.includes(mode as ReceiptAcceptanceMode)) setReceiptAcceptanceMode(mode as ReceiptAcceptanceMode)
     }
     return () => { delete target.__financePlannerAcceptanceState }
   }, [])
@@ -155,9 +164,9 @@ function App({ userId, userName, onLockVault }: AppProps) {
     goals: 'Sparziele',
     recurring: 'Wiederkehrende Zahlungen',
     connections: 'Banken & PayPal',
-    ai: 'KI-Kategorisierung',
-    assistant: 'Finanzanalyse & Planung',
-    receipt: 'Nachhaltiger Beleg-Check',
+    ai: 'Finance Intelligence',
+    assistant: 'Finance Assistant',
+    receipt: 'Receipt Review',
     data: 'Daten & Backup',
   }
 
@@ -190,9 +199,9 @@ function App({ userId, userName, onLockVault }: AppProps) {
       {tab === 'goals' && <SavingsGoals key={planningAcceptanceMode ?? 'live'} state={planningPresentationState} onChange={setState} initialEditorOpen={planningAcceptanceMode === 'goal-editor'}/>}
       {tab === 'recurring' && <RecurringPaymentsPage transactions={planningPresentationState.transactions} onAddTransaction={openNewTransaction} onViewTransactions={() => navigate('transactions')}/>}
       {tab === 'connections' && <ConnectionsPanel key={connectionsAcceptanceMode ?? 'live'} state={state} onApply={setState} acceptanceMode={connectionsAcceptanceMode ?? undefined}/>}
-      {tab === 'ai' && <AiPanel transactions={state.transactions} onApply={applyAiSuggestion}/>} 
-      {tab === 'assistant' && <FinanceAssistant state={state} budgetAcceptanceMode={planningAcceptanceMode === 'budget-result' ? 'result' : planningAcceptanceMode === 'budget-consent' ? 'consent' : undefined}/>}
-      {tab === 'receipt' && <ReceiptReview/>}
+      {tab === 'ai' && <AiPanel key={aiAcceptanceMode ?? 'live'} transactions={aiAcceptanceMode === 'empty' ? [] : state.transactions} onApply={applyAiSuggestion} acceptanceMode={aiAcceptanceMode ?? undefined}/>}
+      {tab === 'assistant' && <FinanceAssistant key={assistantAcceptanceMode ?? 'live'} state={state} budgetAcceptanceMode={planningAcceptanceMode === 'budget-result' ? 'result' : planningAcceptanceMode === 'budget-consent' ? 'consent' : undefined} acceptanceMode={assistantAcceptanceMode ?? undefined}/>}
+      {tab === 'receipt' && <ReceiptReview key={receiptAcceptanceMode ?? 'live'} acceptanceMode={receiptAcceptanceMode ?? undefined}/>}
       {tab === 'data' && <DataTools userId={userId} state={state} onRestore={setState} onReset={resetAll}/>} 
     {deletedTransaction && <div className="undo-toast" role="status">
       <span>“{deletedTransaction.description}” was deleted.</span>

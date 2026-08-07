@@ -1,0 +1,28 @@
+.intel-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.intel-badge--calculated {
+  color: var(--fp-color-text-secondary);
+  background: rgb(151 160 199 / 12%);
+  border: 1px solid var(--fp-color-border);
+}
+
+.intel-badge--local {
+  color: #d9d0ff;
+  background: var(--fp-color-accent-muted);
+  border: 1px solid rgb(139 106 238 / 40%);
+}
+
+.intel-badge--hosted {
+  color: #c4b5fd;
+  background: transparent;
+  border: 1px solid var(--fp-color-border-strong);
+}
