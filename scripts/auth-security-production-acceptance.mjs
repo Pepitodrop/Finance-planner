@@ -680,6 +680,10 @@ async function runAcceptance() {
     // Forced-colors / reduced-motion / text-pressure envelope checks on
     // the three priority states (auth-login, vault-setup, vault-conflict).
     // -----------------------------------------------------------------
+    // resetBrowserState only clears localStorage; the session cookie
+    // persists, so without an explicit logout, navigating here would land
+    // back on VaultGate (still authenticated) instead of AuthGate's login.
+    await evaluate(client, sessionId, `fetch('/api/auth/logout', { method: 'POST', credentials: 'include', cache: 'no-store' })`)
     await resetBrowserState(client, sessionId, { keepPasskeyDismissed: true })
     await navigate(client, sessionId, APP_URL)
     await setViewport(client, sessionId, 390, 844)
