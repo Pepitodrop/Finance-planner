@@ -202,10 +202,27 @@ async function captureScreenshot(name, width, height, sessionId, client, suffix 
 
 const SCROLL_END_CANDIDATES = new Set(['finance-intelligence-mixed', 'finance-intelligence-anomaly', 'assistant-hosted-result', 'assistant-hosted-fallback', 'assistant-local-running', 'assistant-planning', 'receipt-selected-consent', 'receipt-result-overview', 'receipt-result-detail', 'receipt-insufficient', 'receipt-error'])
 
+// Resolves a VaultConflict dialog if one happens to be showing right now,
+// keeping this device's version. Cheap (a single synchronous DOM check, no
+// polling wait) when nothing is there, which is the common case -- each of
+// the seeding step's several separate saves can independently trigger sync,
+// and therefore independently trigger a real conflict against local-user's
+// shared cloud state (see the two prior fixes for the same underlying
+// cause), so this is checked defensively at the start of every capture
+// rather than assumed resolved once and for all.
+async function resolveConflictIfPresent(client, sessionId) {
+  const present = await evaluate(client, sessionId, `Boolean(document.querySelector('.vault-conflict-backdrop'))`)
+  if (!present) return false
+  await clickButton(client, sessionId, "Keep this device's version")
+  await waitFor(client, sessionId, `!document.querySelector('.vault-conflict-backdrop')`, "vault conflict resolved (kept this device's version)")
+  return true
+}
+
 async function captureState(client, sessionId, name, readyAttribute, { beforeEach, waitExpr, waitDescription, scrollTo } = {}) {
   const results = []
   for (const [width, height] of VIEWPORTS) {
     await setViewport(client, sessionId, width, height)
+    await resolveConflictIfPresent(client, sessionId)
     await beforeEach(width, height)
     if (waitExpr) await waitFor(client, sessionId, waitExpr, `${waitDescription || name} @ ${width}x${height}`)
     await evaluate(client, sessionId, `new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`)
@@ -431,25 +448,13 @@ async function run() {
     // Going back online can surface a real VaultConflict dialog: local-user
     // is a shared identity across every acceptance script in this job, so
     // cloud state written by an earlier script can genuinely conflict with
-    // this vault's own (different) local state once sync resumes. If it
-    // appears, resolve it by keeping this device's version -- the fresh
-    // account/transactions this script is about to seed -- rather than
-    // leaving the real conflict backdrop blocking every capture after it.
-    // A short, bounded wait (not the default 45s) since most of the time no
-    // conflict exists at all.
-    const conflictAppeared = await evaluate(client, sessionId, `(async () => {
-      const deadline = Date.now() + 4000
-      while (Date.now() < deadline) {
-        if (document.querySelector('.vault-conflict-backdrop')) return true
-        await new Promise((r) => setTimeout(r, 150))
-      }
-      return false
-    })()`)
-    if (conflictAppeared) {
-      await clickButton(client, sessionId, "Keep this device's version")
-      await waitFor(client, sessionId, `!document.querySelector('.vault-conflict-backdrop')`, "vault conflict resolved (kept this device's version)")
-    }
-    report.interactions.vaultConflictDuringSeeding = conflictAppeared
+    // this vault's own (different) local state once sync resumes. Give it a
+    // moment to appear (most runs won't see one at all), then resolve it
+    // defensively -- captureState also checks this on every subsequent
+    // capture, since each of the several separate saves below can
+    // independently retrigger it, not just the first reconnect.
+    await delay(2_000)
+    report.interactions.vaultConflictDuringSeeding = await resolveConflictIfPresent(client, sessionId)
 
     // A fresh vault has zero accounts too -- the Add Transaction dialog's
     // account <select> needs at least one real <option> before any
