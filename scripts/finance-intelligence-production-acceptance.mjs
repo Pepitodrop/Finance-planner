@@ -123,13 +123,21 @@ async function navigate(client, sessionId, url) {
 }
 
 async function clickButton(client, sessionId, text) {
-  const clicked = await evaluate(client, sessionId, `(() => {
+  const result = await evaluate(client, sessionId, `(() => {
     const visible = (el) => { const s = getComputedStyle(el); const r = el.getBoundingClientRect(); return s.visibility !== 'hidden' && s.display !== 'none' && r.width > 0 && r.height > 0 }
-    const target = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim().includes(${JSON.stringify(text)}) && !b.disabled && visible(b))
-    if (!target) return false
-    target.click(); return true
+    const candidates = [...document.querySelectorAll('button')].filter((b) => b.textContent?.trim().includes(${JSON.stringify(text)}))
+    const target = candidates.find((b) => !b.disabled && visible(b))
+    if (target) { target.click(); return { clicked: true } }
+    return {
+      clicked: false,
+      candidateCount: candidates.length,
+      candidates: candidates.slice(0, 5).map((b) => ({
+        text: b.textContent?.trim().slice(0, 60), disabled: b.disabled, visible: visible(b),
+        inert: Boolean(b.closest('[inert]')), rect: b.getBoundingClientRect().toJSON(),
+      })),
+    }
   })()`)
-  assert.equal(clicked, true, `Button not found or disabled: ${text}`)
+  assert.equal(result.clicked, true, `Button not found or disabled: ${text} -- ${JSON.stringify(result)}`)
 }
 
 async function setInput(client, sessionId, selector, value) {
