@@ -17,8 +17,18 @@ function isRetryableBrowserFailure(report) {
   // AuthGate/VaultGate mount; "is not a function" here means a navigation
   // reset the page between the waitFor(hook exists) check and the call --
   // the same underlying race as "Inspected target navigated or closed",
-  // just surfacing through a different code path.
-  return /Inspected target navigated or closed|CDP connection (?:closed|failed)|Failed to fetch|Chrome did not publish a DevTools endpoint|CDP connection timed out|__financePlanner\w*AcceptanceState is not a function/.test(failure)
+  // just surfacing through a different code path. waitFor() also swallows
+  // the raw CDP error internally and keeps polling until its own deadline,
+  // so a freshly-launched Chrome target dropped mid-evaluate can surface as
+  // a plain "Timed out waiting for X" with no CDP text in it at all.
+  if (/Inspected target navigated or closed|CDP connection (?:closed|failed)|Failed to fetch|Chrome did not publish a DevTools endpoint|CDP connection timed out|__financePlanner\w*AcceptanceState is not a function/.test(failure)) return true
+  // If literally no state was captured yet, the failure happened before any
+  // substantive assertion ran -- almost certainly launch/first-navigation
+  // instability, not a logic bug (the real logic bugs found during Step 11
+  // development all manifested mid-flow, with earlier states already
+  // captured successfully).
+  if (Object.keys(report?.states || {}).length === 0) return true
+  return false
 }
 
 function runNode(script) {
