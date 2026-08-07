@@ -526,9 +526,13 @@ async function runAcceptance() {
         focusInside: Boolean(dialog?.contains(document.activeElement)),
         choiceCount: buttons.length,
         choiceLabels: buttons.map((b) => b.textContent?.trim()),
-        mentionsMerge: document.body.innerText.toLowerCase().includes('merge'),
-        mentionsArchived: document.body.innerText.toLowerCase().includes('archived'),
-        mentionsReplaced: document.body.innerText.toLowerCase().includes('replace'),
+        // Scoped to the dialog itself, not document.body: the underlying
+        // (inert) Dashboard/Goals page can legitimately contain unrelated
+        // text that happens to substring-match, e.g. an empty-state example
+        // goal name like "Emergency fund" contains "merge" (E-merge-ncy).
+        mentionsMerge: Boolean(dialog?.innerText?.toLowerCase().includes('merge')),
+        mentionsArchived: Boolean(dialog?.innerText?.toLowerCase().includes('archived')),
+        mentionsReplaced: Boolean(dialog?.innerText?.toLowerCase().includes('replace')),
         navInert: Boolean(nav?.closest('[inert]') || nav?.hasAttribute('inert')),
         backgroundInert: Boolean(document.getElementById('main-content')?.hasAttribute('inert') || document.getElementById('main-content')?.closest('[inert]'))
           || Boolean(document.querySelector('.app-shell')?.hasAttribute('inert')),
@@ -653,7 +657,7 @@ async function runAcceptance() {
     console.log(`Auth/security production acceptance passed. Evidence: ${ARTIFACT_PATH}`)
   } catch (error) {
     report.passed = false
-    report.error = error instanceof Error ? error.message : String(error)
+    report.error = error instanceof Error ? error.stack || error.message : String(error)
     await mkdir(ARTIFACT_DIR, { recursive: true }).catch(() => {})
     await writeFile(ARTIFACT_PATH, `${JSON.stringify(report, null, 2)}\n`).catch(() => {})
     console.error(report.error)
