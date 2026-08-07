@@ -690,9 +690,9 @@ async function runAcceptance() {
       localStorage.setItem('finance-planner-install-dismissed-until', String(Date.now() + 24 * 60 * 60 * 1000))
     })()`)
     await client.send('Page.reload', { ignoreCache: true }, sessionId)
-    await waitFor(client, sessionId, 'document.body?.innerText.includes("Sicheren Datenspeicher einrichten") || document.body?.innerText.includes("Finance Planner entsperren")', 'vault gate')
+    await waitFor(client, sessionId, 'document.body?.innerText.includes("Set up your encrypted vault") || document.body?.innerText.includes("Unlock Finance Planner")', 'vault gate')
 
-    const vaultMode = await evaluate(client, sessionId, 'document.body.innerText.includes("Sicheren Datenspeicher einrichten") ? "setup" : "unlock"')
+    const vaultMode = await evaluate(client, sessionId, 'document.body.innerText.includes("Set up your encrypted vault") ? "setup" : "unlock"')
     const passwordInputs = await evaluate(client, sessionId, 'document.querySelectorAll("input[type=password]").length')
     assert.ok(passwordInputs >= (vaultMode === 'setup' ? 2 : 1))
     await evaluate(client, sessionId, `(() => {
@@ -704,7 +704,7 @@ async function runAcceptance() {
       }
       return inputs.length
     })()`)
-    await clickButton(client, sessionId, vaultMode === 'setup' ? 'Verschlüsselung aktivieren' : 'Entsperren')
+    await clickButton(client, sessionId, vaultMode === 'setup' ? 'Turn on encryption' : 'Unlock')
     await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-dashboard-ready=true]"))', 'authenticated finance dashboard')
 
     report.checks.backendHealth = await evaluate(client, sessionId, `(async () => {

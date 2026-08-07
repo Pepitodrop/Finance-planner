@@ -165,15 +165,15 @@ async function authenticate(client, sessionId) {
     localStorage.setItem('finance-planner-install-dismissed-until', String(Date.now() + 24 * 60 * 60 * 1000))
   })()`)
   await client.send('Page.reload', { ignoreCache: true }, sessionId)
-  await waitFor(client, sessionId, 'document.body?.innerText.includes("Sicheren Datenspeicher einrichten") || document.body?.innerText.includes("Finance Planner entsperren")', 'vault gate')
-  const vaultMode = await evaluate(client, sessionId, 'document.body.innerText.includes("Sicheren Datenspeicher einrichten") ? "setup" : "unlock"')
+  await waitFor(client, sessionId, 'document.body?.innerText.includes("Set up your encrypted vault") || document.body?.innerText.includes("Unlock Finance Planner")', 'vault gate')
+  const vaultMode = await evaluate(client, sessionId, 'document.body.innerText.includes("Set up your encrypted vault") ? "setup" : "unlock"')
   await evaluate(client, sessionId, `(() => {
     for (const input of document.querySelectorAll('input[type=password]')) {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(VAULT_PASSWORD)})
       input.dispatchEvent(new Event('input', { bubbles: true }))
     }
   })()`)
-  await clickVisibleButton(client, sessionId, vaultMode === 'setup' ? 'Verschlüsselung aktivieren' : 'Entsperren')
+  await clickVisibleButton(client, sessionId, vaultMode === 'setup' ? 'Turn on encryption' : 'Unlock')
   await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-dashboard-ready=true]"))', 'authenticated dashboard')
   await waitFor(client, sessionId, 'typeof window.__financePlannerAcceptanceState === "function"', 'Connections acceptance fixture bridge')
   await waitFor(client, sessionId, '!document.querySelector(".automatic-analysis, .mobile-connectivity-status, .mobile-install-card, .passkey-enrolment, .platform-action-bar")', 'clean runtime state')
