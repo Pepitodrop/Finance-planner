@@ -416,8 +416,11 @@ async function runAcceptance() {
       waitDescription: 'vault-setup',
     })
     report.interactions.vaultSetupValidation = {}
-    await setInput(client, sessionId, 'input[autocomplete=new-password]', 'short')
-    await evaluate(client, sessionId, `(() => { const inputs=[...document.querySelectorAll('input[type=password]')]; inputs[1] && (inputs[1].value='short') })()`)
+    await evaluate(client, sessionId, `(() => {
+      const inputs = [...document.querySelectorAll('input[type=password]')]
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+      for (const input of inputs) { setter.call(input, 'short'); input.dispatchEvent(new Event('input', { bubbles: true })) }
+    })()`)
     await clickButton(client, sessionId, 'Turn on encryption')
     await waitFor(client, sessionId, `document.querySelector('[role=alert]')?.textContent?.includes('at least 12 characters')`, 'short-password validation error')
     report.interactions.vaultSetupValidation.shortPasswordRejected = true

@@ -688,6 +688,32 @@ async function runAcceptance() {
     await evaluate(client, sessionId, `(() => {
       localStorage.setItem('finance-planner-passkey-prompt-dismissed-v1', 'true')
       localStorage.setItem('finance-planner-install-dismissed-until', String(Date.now() + 24 * 60 * 60 * 1000))
+      // Since Step 11 corrected a genuinely new vault to start empty (no more
+      // seeded demo finances), this acceptance run seeds real legacy local
+      // data before the vault gate so the migration path adopts it -- the
+      // same real feature Step 11's VAULT-03 exercises -- giving the
+      // Dashboard/Transactions/Accounts checks below actual content to
+      // verify, instead of accidentally depending on the old first-run bug.
+      localStorage.setItem('finance-planner-state-v2', JSON.stringify({
+        accounts: [
+          { id: 'accept-checking', name: 'Everyday checking', type: 'checking', balanceCents: 286450, currency: 'EUR' },
+          { id: 'accept-savings', name: 'Rainy day savings', type: 'savings', balanceCents: 420000, currency: 'EUR' },
+          { id: 'accept-cash', name: 'Cash wallet', type: 'cash', balanceCents: 8500, currency: 'EUR' },
+        ],
+        transactions: [
+          { id: 'accept-t1', accountId: 'accept-checking', description: 'Salary', category: 'Income', type: 'income', amountCents: 185000, date: '2026-07-01', recurring: true },
+          { id: 'accept-t2', accountId: 'accept-checking', description: 'Rent', category: 'Housing', type: 'expense', amountCents: 72000, date: '2026-07-03', recurring: true },
+          { id: 'accept-t3', accountId: 'accept-checking', description: 'Groceries', category: 'Food', type: 'expense', amountCents: 6840, date: '2026-07-08' },
+          { id: 'accept-t4', accountId: 'accept-checking', description: 'Gym membership', category: 'Health', type: 'expense', amountCents: 2990, date: '2026-07-10', recurring: true },
+          { id: 'accept-t5', accountId: 'accept-checking', description: 'Public transit pass', category: 'Transport', type: 'expense', amountCents: 5800, date: '2026-07-12', recurring: true },
+          { id: 'accept-t6', accountId: 'accept-checking', description: 'Freelance income', category: 'Income', type: 'income', amountCents: 62000, date: '2026-07-15', recurring: true },
+          { id: 'accept-t7', accountId: 'accept-checking', description: 'Restaurant', category: 'Leisure', type: 'expense', amountCents: 4200, date: '2026-07-18' },
+        ],
+        goals: [
+          { id: 'accept-g1', name: 'Emergency fund', targetCents: 600000, currentCents: 420000, targetDate: '2027-01-01' },
+          { id: 'accept-g2', name: 'New laptop', targetCents: 400000, currentCents: 125000, targetDate: '2027-05-01' },
+        ],
+      }))
     })()`)
     await client.send('Page.reload', { ignoreCache: true }, sessionId)
     await waitFor(client, sessionId, 'document.body?.innerText.includes("Set up your encrypted vault") || document.body?.innerText.includes("Unlock Finance Planner")', 'vault gate')
