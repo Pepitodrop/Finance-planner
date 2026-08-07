@@ -468,10 +468,13 @@ async function run() {
     report.interactions.autoAnalysis = await evaluate(client, sessionId, `(() => {
       const strip = document.querySelector('.automatic-analysis')
       const closeButton = strip?.querySelector('.automatic-analysis__header')
-      return { hasCalculatedBadge: Boolean(strip?.querySelector('.intel-badge--calculated')), hasConfidencePercent: /\\d+%/.test(strip?.querySelector('.automatic-analysis__body')?.textContent || ''), collapsible: Boolean(closeButton) }
+      // The briefing text legitimately contains real deterministic
+      // percentages (spending-trend deltas, savings rate) -- what must
+      // never appear is a confidence/model-score-style claim next to one.
+      return { hasCalculatedBadge: Boolean(strip?.querySelector('.intel-badge--calculated')), hasConfidenceClaim: /confidence|model score|\\bcertainty\\b/i.test(strip?.textContent || ''), collapsible: Boolean(closeButton) }
     })()`)
     assert.equal(report.interactions.autoAnalysis.hasCalculatedBadge, true, 'AUTO must carry the neutral Calculated badge')
-    assert.equal(report.interactions.autoAnalysis.hasConfidencePercent, false, 'AUTO must never show a confidence percentage (deterministic, not model-derived)')
+    assert.equal(report.interactions.autoAnalysis.hasConfidenceClaim, false, 'AUTO must never show a confidence/model-score claim (deterministic, not model-derived)')
     await evaluate(client, sessionId, `window.__financePlannerAutoAcceptanceState('reset')`)
 
     // -----------------------------------------------------------------
