@@ -428,6 +428,28 @@ async function run() {
       waitDescription: 'finance-intelligence-empty',
     })
     await client.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1, connectionType: 'wifi' }, sessionId)
+    // Going back online can surface a real VaultConflict dialog: local-user
+    // is a shared identity across every acceptance script in this job, so
+    // cloud state written by an earlier script can genuinely conflict with
+    // this vault's own (different) local state once sync resumes. If it
+    // appears, resolve it by keeping this device's version -- the fresh
+    // account/transactions this script is about to seed -- rather than
+    // leaving the real conflict backdrop blocking every capture after it.
+    // A short, bounded wait (not the default 45s) since most of the time no
+    // conflict exists at all.
+    const conflictAppeared = await evaluate(client, sessionId, `(async () => {
+      const deadline = Date.now() + 4000
+      while (Date.now() < deadline) {
+        if (document.querySelector('.vault-conflict-backdrop')) return true
+        await new Promise((r) => setTimeout(r, 150))
+      }
+      return false
+    })()`)
+    if (conflictAppeared) {
+      await clickButton(client, sessionId, "Keep this device's version")
+      await waitFor(client, sessionId, `!document.querySelector('.vault-conflict-backdrop')`, "vault conflict resolved (kept this device's version)")
+    }
+    report.interactions.vaultConflictDuringSeeding = conflictAppeared
 
     // A fresh vault has zero accounts too -- the Add Transaction dialog's
     // account <select> needs at least one real <option> before any
