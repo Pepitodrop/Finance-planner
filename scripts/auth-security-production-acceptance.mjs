@@ -116,11 +116,19 @@ async function evaluate(client, sessionId, expression) {
 async function waitFor(client, sessionId, expression, description, timeoutMs = DEADLINE_MS) {
   const deadline = Date.now() + timeoutMs
   let lastValue
+  let lastEvalError
   while (Date.now() < deadline) {
-    try { lastValue = await evaluate(client, sessionId, expression); if (lastValue) return lastValue } catch {}
+    try { lastValue = await evaluate(client, sessionId, expression); lastEvalError = undefined; if (lastValue) return lastValue } catch (reason) { lastEvalError = reason instanceof Error ? reason.message : String(reason) }
     await delay(150)
   }
-  throw new Error(`Timed out waiting for ${description}. Last value: ${JSON.stringify(lastValue)}`)
+  const diagnostics = await evaluate(client, sessionId, `(() => ({
+    href: location.href,
+    readyState: document.readyState,
+    hasAuthHook: typeof window.__financePlannerAuthAcceptanceState === 'function',
+    hasVaultHook: typeof window.__financePlannerVaultAcceptanceState === 'function',
+    bodyTextSample: document.body?.innerText?.slice(0, 800),
+  }))()`).catch((reason) => ({ diagnosticError: reason instanceof Error ? reason.message : String(reason) }))
+  throw new Error(`Timed out waiting for ${description}. Last value: ${JSON.stringify(lastValue)}. Last eval error: ${lastEvalError || 'none'}. Diagnostics: ${JSON.stringify(diagnostics)}`)
 }
 
 async function navigate(client, sessionId, url) {
