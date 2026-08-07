@@ -476,6 +476,16 @@ async function run() {
     assert.equal(report.interactions.autoAnalysis.hasCalculatedBadge, true, 'AUTO must carry the neutral Calculated badge')
     assert.equal(report.interactions.autoAnalysis.hasConfidenceClaim, false, 'AUTO must never show a confidence/model-score claim (deterministic, not model-derived)')
     await evaluate(client, sessionId, `window.__financePlannerAutoAcceptanceState('reset')`)
+    // Resetting clears the fixture override, but that also flips
+    // AutomaticTransactionAnalysis's acceptanceMode dependency back to null,
+    // which re-runs its real (non-fixture) polling effect immediately --
+    // revisionRef was never touched while the fixture was active, so it
+    // genuinely sees the 5 seeded transactions as new and fires a real,
+    // accurate "Transaction check up to date" status. Let that run its
+    // real ~4s auto-fade to completion so it doesn't visually collide with
+    // the FI-01 capture right after, rather than fighting real, correct
+    // timing with a CSS workaround alone.
+    await delay(4_500)
 
     // -----------------------------------------------------------------
     // Finance Intelligence: FI-01 .. FI-06 (FI-07 already captured empty).

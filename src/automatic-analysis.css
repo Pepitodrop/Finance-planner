@@ -46,5 +46,11 @@
 }
 
 @media (max-width: 760px) {
-  .automatic-analysis { right: 12px; bottom: calc(82px + env(safe-area-inset-bottom)); left: 12px; width: auto; }
+  /* Step 12C acceptance caught this strip's collapsed header overlapping a
+     page's own bottom-of-content primary action (e.g. Finance Intelligence's
+     "Analyze transactions" button) when both land near the same screen
+     position on a short page -- the old ~8px clearance above the mobile nav
+     was too tight in practice. Use the real bottom-nav-height token plus a
+     full spacing step, not a magic-number guess, for real headroom. */
+  .automatic-analysis { right: 12px; bottom: calc(var(--fp-mobile-fixed-bottom) + var(--fp-space-4)); left: 12px; width: auto; }
 }
