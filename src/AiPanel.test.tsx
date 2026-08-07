@@ -20,9 +20,14 @@ describe('AiPanel', () => {
   })
 
   it('shows a guided empty state instead of meaningless zero metrics when there is no history', () => {
-    render(<AiPanel transactions={[]} onApply={vi.fn()}/>)
+    const { container } = render(<AiPanel transactions={[]} onApply={vi.fn()}/>)
     expect(screen.getByText('Finance Intelligence needs transaction history')).toBeInTheDocument()
     expect(screen.queryByText('Analyzed')).not.toBeInTheDocument()
+    // Regression: the empty-state return branch was the one of AiPanel's
+    // four return points missing lang="en", caught by Step 12C browser
+    // acceptance (a real-Chromium check saw the page fall back to the
+    // app shell's document-level "de" instead).
+    expect(container.querySelector('.ai-page')).toHaveAttribute('lang', 'en')
   })
 
   it('runs local classification without any network request', async () => {

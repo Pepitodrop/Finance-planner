@@ -119,7 +119,7 @@ export function AiPanel({ transactions, onApply, acceptanceMode }: AiPanelProps)
   }
 
   if (transactions.length === 0) {
-    return <div className="ai-page" data-ai-ready="true">
+    return <div className="ai-page" lang="en" data-ai-ready="true">
       <section className="panel ai-empty-state">
         <ListChecks size={40}/>
         <strong>Finance Intelligence needs transaction history</strong>
