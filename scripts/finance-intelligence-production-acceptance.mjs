@@ -135,6 +135,9 @@ async function clickButton(client, sessionId, text) {
         text: b.textContent?.trim().slice(0, 60), disabled: b.disabled, visible: visible(b),
         inert: Boolean(b.closest('[inert]')), rect: b.getBoundingClientRect().toJSON(),
       })),
+      href: location.href,
+      bodyTextSample: document.body?.innerText?.slice(0, 500),
+      allButtonTexts: [...document.querySelectorAll('button')].map((b) => b.textContent?.trim().slice(0, 30)).filter(Boolean).slice(0, 25),
     }
   })()`)
   assert.equal(result.clicked, true, `Button not found or disabled: ${text} -- ${JSON.stringify(result)}`)
