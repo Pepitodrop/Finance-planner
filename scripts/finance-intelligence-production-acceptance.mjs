@@ -337,6 +337,28 @@ async function authenticateFreshVault(client, sessionId) {
   // once its own offline-only read (FI-07) is done.
 }
 
+// A genuinely fresh vault has zero accounts, not just zero transactions --
+// the Add Transaction dialog's account <select> would have no <option>s at
+// all, and validateTransactionInput rejects a missing accountId outright.
+// Create one real manual account first, via the same genuine Connections UI
+// exercised by connections-production-acceptance.mjs, before any transaction
+// can be added.
+async function addManualAccount(client, sessionId) {
+  await ensureDestination(client, sessionId, 'Connections', 'data-connections-ready')
+  await waitFor(client, sessionId, `(async () => { await document.fonts.ready; return true })()`, 'connections page settled')
+  // Button copy differs by state ("Add a manual account" when the account
+  // list is empty vs. "Manual account" under "Other options" once it isn't,
+  // in case cloud sync already adopted accounts from an earlier script in
+  // this job) -- "anual account" (dropping the leading, differently-cased
+  // letter) matches either real, un-fabricated copy.
+  await clickButton(client, sessionId, 'anual account')
+  await waitFor(client, sessionId, `Boolean(document.querySelector('.connections-manual-modal'))`, 'manual account dialog')
+  await setInput(client, sessionId, '.connections-manual-modal input[placeholder="Everyday credit card"]', 'Everyday checking account')
+  await setInput(client, sessionId, '.connections-manual-modal input[placeholder="0.00"]', '1500.00')
+  await clickButton(client, sessionId, 'Save account')
+  await waitFor(client, sessionId, `!document.querySelector('.connections-manual-modal')`, 'manual account dialog closed')
+}
+
 async function addTransaction(client, sessionId, { description, amount, category, type, recurring }) {
   await clickButton(client, sessionId, 'Manual entry')
   await waitFor(client, sessionId, `Boolean(document.querySelector('[role=dialog], .modal'))`, `transaction dialog for ${description}`)
@@ -401,14 +423,18 @@ async function run() {
     })
     await client.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1, connectionType: 'wifi' }, sessionId)
 
+    // A fresh vault has zero accounts too -- the Add Transaction dialog's
+    // account <select> needs at least one real <option> before any
+    // transaction can be validly submitted.
+    await addManualAccount(client, sessionId)
+    await ensureDestination(client, sessionId, 'Finance Intelligence', 'data-ai-ready')
+
     // -----------------------------------------------------------------
     // Seed a small, varied, real transaction set via the genuine Add
-    // Transaction dialog (never a storage-internals shortcut), so
-    // FI-01/AUTO-01/AUTO-02/ASSIST-* have real, non-empty state to show.
-    // Stays on the Finance Intelligence tab -- its topbar already exposes
-    // the same "Manual entry" control as every other non-Dashboard tab, so
-    // no extra navigation (and no dependency on Dashboard's own, differently
-    // labelled add-transaction affordance) is needed.
+    // Transaction dialog (never a storage-internals shortcut). Finance
+    // Intelligence's topbar already exposes the same "Manual entry" control
+    // as every other non-Dashboard tab, so no dependency on Dashboard's own,
+    // differently labelled add-transaction affordance is needed.
     // -----------------------------------------------------------------
     const seedTransactions = [
       { description: 'Salary', amount: '3200.00', category: 'Income', type: 'income', recurring: true },
