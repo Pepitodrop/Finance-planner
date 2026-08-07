@@ -589,22 +589,31 @@ async function runAcceptance() {
     // SECURITY-01: privacy shield / locked state.
     // -----------------------------------------------------------------
     await evaluate(client, sessionId, `window.__financePlannerVaultAcceptanceState('shielded')`)
+    // The shield's "Finance Planner is locked" text is CSS ::before
+    // generated content (mobile.css .mobile-privacy-shielded body::before),
+    // not a real DOM text node. Chrome's innerText implementation here does
+    // not surface it (confirmed empirically: a real run's diagnostic dump
+    // showed bodyTextSample: "" while shielded), so detect the shield via
+    // its actual state flag -- the documentElement class the mechanism
+    // itself toggles -- not the rendered text it happens to produce.
     report.states['security-privacy-shield'] = await captureStateMatrix(client, sessionId, 'security-privacy-shield', {
       beforeEach: async () => {},
-      waitExpr: `document.body?.innerText.includes('Finance Planner is locked')`,
+      waitExpr: `document.documentElement.classList.contains('mobile-privacy-shielded')`,
       waitDescription: 'security-privacy-shield',
       skipLangAssertion: true,
       skipScrollEnd: true,
     })
     report.interactions.privacyShield = await evaluate(client, sessionId, `(() => ({
+      shieldClassActive: document.documentElement.classList.contains('mobile-privacy-shielded'),
       underlyingHidden: [...document.body.children].every((el) => getComputedStyle(el).visibility === 'hidden' || el.matches('style,script')),
       noFinancialText: !document.body.innerText.match(/€|EUR|[0-9]{2,}[.,][0-9]{2}/),
       coversViewport: true,
     }))()`)
+    assert.equal(report.interactions.privacyShield.shieldClassActive, true)
     assert.equal(report.interactions.privacyShield.underlyingHidden, true, 'underlying app content must be genuinely hidden, not just covered')
     assert.equal(report.interactions.privacyShield.noFinancialText, true)
     await evaluate(client, sessionId, `window.__financePlannerVaultAcceptanceState('reset')`)
-    await waitFor(client, sessionId, `!document.body?.innerText.includes('Finance Planner is locked')`, 'privacy shield lifted')
+    await waitFor(client, sessionId, `!document.documentElement.classList.contains('mobile-privacy-shielded')`, 'privacy shield lifted')
 
     // -----------------------------------------------------------------
     // VAULT-03: migration / legacy-data context. Requires no vault but
