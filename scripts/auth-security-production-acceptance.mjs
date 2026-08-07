@@ -641,6 +641,11 @@ async function runAcceptance() {
     })()`)
     await clickButton(client, sessionId, 'Turn on encryption')
     await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-dashboard-ready=true]"))', 'authenticated dashboard after migration')
+    // The Dashboard's own view only shows aggregate figures (net worth,
+    // "Across N accounts"), not individual account names, so verify the
+    // migrated account the same way a real user would: open Accounts.
+    await clickButton(client, sessionId, 'Accounts')
+    await waitFor(client, sessionId, `document.body?.innerText.includes(${JSON.stringify(legacyMarker)})`, 'migrated legacy account visible on Accounts page')
     report.interactions.migrationPreservesLegacyData = await evaluate(client, sessionId, `(() => ({
       legacyAccountVisible: document.body.innerText.includes(${JSON.stringify(legacyMarker)}),
       demoStringsPresent: ${JSON.stringify(DEMO_STRINGS)}.filter((needle) => document.body.innerText.includes(needle)),
