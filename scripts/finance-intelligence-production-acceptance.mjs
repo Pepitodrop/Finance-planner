@@ -154,6 +154,13 @@ async function setViewport(client, sessionId, width, height) {
 
 async function ensureDestination(client, sessionId, label, readyAttribute) {
   if (await evaluate(client, sessionId, `Boolean(document.querySelector('[${readyAttribute}=true]'))`)) return
+  // A real VaultConflict dialog (see resolveConflictIfPresent) can appear
+  // between an earlier check and this navigation attempt -- its backdrop
+  // makes the nav/topbar inert, which is why the marker check above can
+  // legitimately see "not there yet" while a click on a nav button would
+  // otherwise silently do nothing. Clear it first so navigation isn't
+  // attempted against an inert background.
+  await resolveConflictIfPresent(client, sessionId)
   // Decide mobile-vs-desktop navigation from the browser's *actual* current
   // viewport, not a caller-supplied value -- callers may invoke this before
   // setViewport has run for the upcoming capture, while the browser is still
