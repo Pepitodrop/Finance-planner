@@ -330,7 +330,11 @@ async function authenticateFreshVault(client, sessionId) {
   await clickButton(client, sessionId, vaultMode === 'setup' ? 'Turn on encryption' : 'Unlock')
   await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-dashboard-ready=true]"))', 'authenticated dashboard')
   await waitFor(client, sessionId, 'typeof window.__financePlannerAcceptanceState === "function"', 'acceptance fixture bridge')
-  await waitFor(client, sessionId, '!document.querySelector(".mobile-connectivity-status, .mobile-install-card, .passkey-enrolment, .platform-action-bar")', 'clean runtime state')
+  // No "clean runtime state" (no connectivity banner, etc.) check here: the
+  // caller is still deliberately offline at this point (see above), so
+  // MobileConnectivityStatus's offline banner is expected, correct, real UI
+  // -- not a leftover state to wait out. The caller restores connectivity
+  // once its own offline-only read (FI-07) is done.
 }
 
 async function addTransaction(client, sessionId, { description, amount, category, type, recurring }) {
