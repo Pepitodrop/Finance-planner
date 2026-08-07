@@ -170,18 +170,20 @@ async function ensureDestination(client, sessionId, label, readyAttribute) {
 function geometryScript(readyAttribute) {
   return `(() => {
     const visible = (el) => { if (!(el instanceof Element)) return false; const s = getComputedStyle(el); const r = el.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0 }
-    const unobscured = (el) => { if (!el) return false; const r = el.getBoundingClientRect(); const x = Math.max(0, Math.min(innerWidth - 1, r.left + r.width / 2)); const y = Math.max(0, Math.min(innerHeight - 1, r.top + r.height / 2)); const top = document.elementFromPoint(x, y); return Boolean(top && (top === el || el.contains(top))) }
+    const obscuredBy = (el) => { if (!el) return 'no-nav-element'; const r = el.getBoundingClientRect(); const x = Math.max(0, Math.min(innerWidth - 1, r.left + r.width / 2)); const y = Math.max(0, Math.min(innerHeight - 1, r.top + r.height / 2)); const top = document.elementFromPoint(x, y); if (top && (top === el || el.contains(top))) return null; return top ? \`\${top.tagName}.\${[...top.classList].join('.')}\` : 'nothing-at-point' }
     const root = document.querySelector('[${readyAttribute}=true]')
     const buttons = [...document.querySelectorAll('button, a[href]')].filter(visible)
     const undersized = buttons.filter((b) => { const r = b.getBoundingClientRect(); return r.height < 43 }).map((b) => (b.textContent || b.getAttribute('aria-label') || 'unnamed').trim()).slice(0, 20)
     const mobileNavigation = [...document.querySelectorAll('nav')].find((nav) => nav.classList.contains('app-mobile-navigation') && visible(nav))
+    const navObscuredBy = innerWidth <= 768 ? obscuredBy(mobileNavigation) : null
     return {
       viewport: { width: innerWidth, height: innerHeight },
       root: Boolean(root),
       lang: root?.getAttribute('lang') || document.documentElement.lang,
       horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
       undersizedTargets: undersized,
-      mobileNavigationUnobscured: innerWidth <= 768 ? unobscured(mobileNavigation) : true,
+      mobileNavigationUnobscured: navObscuredBy === null,
+      navObscuredBy,
       scrollHeight: document.documentElement.scrollHeight,
       viewportHeight: innerHeight,
       colorFraudTerms: /\\bfraud\\b|suspicious|unauthorized|flagged for security/i.test(document.body.innerText),
@@ -215,15 +217,19 @@ async function captureState(client, sessionId, name, readyAttribute, { beforeEac
     }
 
     const assertions = await evaluate(client, sessionId, geometryScript(readyAttribute))
+    // Capture the screenshot before asserting: an assertion failure must
+    // still leave visual evidence of exactly what was on screen, not just
+    // an error message -- the mission requires inspecting the actual
+    // rendered screenshot for every failure, not just reading assert text.
+    const shot = await captureScreenshot(name, width, height, sessionId, client)
     assert.deepEqual(assertions.viewport, { width, height }, `${name} viewport mismatch`)
     assert.equal(assertions.root, true, `${name} @ ${width}x${height} missing ready marker`)
     assert.equal(assertions.lang, 'en', `${name} @ ${width}x${height} missing English language boundary`)
     assert.equal(assertions.horizontalOverflow, false, `${name} @ ${width}x${height} has horizontal overflow`)
     assert.deepEqual(assertions.undersizedTargets, [], `${name} @ ${width}x${height} has undersized targets: ${JSON.stringify(assertions.undersizedTargets)}`)
-    assert.equal(assertions.mobileNavigationUnobscured, true, `${name} @ ${width}x${height} obstructs mobile navigation`)
+    assert.equal(assertions.mobileNavigationUnobscured, true, `${name} @ ${width}x${height} obstructs mobile navigation (covered by: ${assertions.navObscuredBy})`)
     assert.equal(assertions.colorFraudTerms, false, `${name} @ ${width}x${height} uses fraud/security-alert language`)
 
-    const shot = await captureScreenshot(name, width, height, sessionId, client)
     let scrollEnd = null
     if (width === 390 && SCROLL_END_CANDIDATES.has(name) && assertions.scrollHeight > assertions.viewportHeight + 4) {
       await evaluate(client, sessionId, `window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' })`)
