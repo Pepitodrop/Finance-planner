@@ -325,6 +325,23 @@ async function runAcceptance() {
       if (eventSession === sessionId) browserErrors.push(params.exceptionDetails?.exception?.description || params.exceptionDetails?.text || 'Uncaught browser exception')
     })
 
+    // Warm-up: this script always launches Chrome with a brand-new,
+    // isolated profile (see launchChrome), so the very first navigation to
+    // the app is also the very first time the service worker installs and
+    // becomes the page's controller. bootstrap.tsx reloads the page on
+    // 'controllerchange' (to guarantee the new SW is in control before the
+    // app runs), and that reload can land in the narrow window between a
+    // fixture hook call and its expected UI appearing, silently discarding
+    // the forced state. Absorbing that one-time reload here, before any
+    // state capture begins, keeps every real state deterministic.
+    await navigate(client, sessionId, APP_URL)
+    await waitFor(client, sessionId, `(async () => {
+      if (!('serviceWorker' in navigator)) return true
+      await navigator.serviceWorker.ready.catch(() => {})
+      return Boolean(navigator.serviceWorker.controller)
+    })()`, 'service worker controller settled (warm-up)', 20_000).catch(() => {})
+    await delay(500)
+
     // -----------------------------------------------------------------
     // AUTH-01 .. AUTH-04B: unauthenticated states, forced via the
     // build-time-gated __financePlannerAuthAcceptanceState fixture hook.
