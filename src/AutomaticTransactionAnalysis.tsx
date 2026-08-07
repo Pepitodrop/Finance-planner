@@ -9,11 +9,15 @@ import { runtimeSurfaceRegistration, useRuntimeSurface } from './runtime-surface
 const POLL_INTERVAL_MS = 1_500
 const ANALYSIS_DEBOUNCE_MS = 500
 const COMPLETED_STATUS_DURATION_MS = 4_000
+const ACCEPTANCE_ANALYSIS = ['Automatic transaction analysis', 'Spending rising: Your expenses this month so far are 12% above the same period last month.', '3.4 months runway: Your available balance covers at least three months of current spending.'].join('\n\n')
+
+export type AutomaticAnalysisAcceptanceMode = 'compact' | 'expanded'
 
 export function AutomaticTransactionAnalysis() {
   const [analysis, setAnalysis] = useState('')
   const [expanded, setExpanded] = useState(false)
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
+  const [acceptanceMode, setAcceptanceMode] = useState<AutomaticAnalysisAcceptanceMode | null>(null)
   // null (not '') so a genuinely empty account's real revision (also '' --
   // see transactionAnalysisRevision) is never mistaken for "unchanged since
   // mount", which would otherwise skip the first analysis entirely.
@@ -22,6 +26,7 @@ export function AutomaticTransactionAnalysis() {
 
   useEffect(() => {
     const analyze = () => {
+      if (acceptanceMode) return
       const state = loadState()
       const revision = transactionAnalysisRevision(state)
       if (revision === revisionRef.current) return
@@ -42,13 +47,33 @@ export function AutomaticTransactionAnalysis() {
       if (debounceRef.current) window.clearTimeout(debounceRef.current)
       document.removeEventListener('visibilitychange', onVisibility)
     }
+  }, [acceptanceMode])
+
+  useEffect(() => {
+    if (import.meta.env.VITE_ACCEPTANCE_FIXTURES !== 'true') return
+    const target = window as Window & { __financePlannerAutoAcceptanceState?: (mode: string) => void }
+    target.__financePlannerAutoAcceptanceState = (mode) => {
+      if (mode === 'compact' || mode === 'expanded') {
+        setAcceptanceMode(mode)
+        setAnalysis(ACCEPTANCE_ANALYSIS)
+        setExpanded(mode === 'expanded')
+        setUpdatedAt(new Date('2026-08-07T14:32:00'))
+      } else if (mode === 'reset') {
+        setAcceptanceMode(null)
+        setAnalysis('')
+        setExpanded(false)
+        setUpdatedAt(null)
+        revisionRef.current = null
+      }
+    }
+    return () => { delete target.__financePlannerAutoAcceptanceState }
   }, [])
 
   useEffect(() => {
-    if (!analysis || expanded) return
+    if (!analysis || expanded || acceptanceMode) return
     const timer = window.setTimeout(() => setAnalysis(''), COMPLETED_STATUS_DURATION_MS)
     return () => window.clearTimeout(timer)
-  }, [analysis, expanded])
+  }, [analysis, expanded, acceptanceMode])
 
   const visible = useRuntimeSurface(runtimeSurfaceRegistration(
     'analysis',

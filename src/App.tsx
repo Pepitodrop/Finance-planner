@@ -179,10 +179,10 @@ function App({ userId, userName, onLockVault }: AppProps) {
   return <ApplicationShell activeDestination={tab} onNavigate={navigate} onLockVault={onLockVault}>
       {tab !== 'dashboard' && tab !== 'transactions' && tab !== 'accounts' && tab !== 'goals' && tab !== 'recurring' && <header className="topbar">
         <div>
-          <p className="eyebrow">Persönliche Finanzen</p>
+          <p className="eyebrow">Personal finance</p>
           <h1>{titles[tab]}</h1>
         </div>
-        <button type="button" className="primary" onClick={openNewTransaction}><Plus size={18}/> Manuelle Buchung</button>
+        <button type="button" className="primary" onClick={openNewTransaction}><Plus size={18}/> Manual entry</button>
       </header>}
 
       {tab === 'dashboard' && <Dashboard state={state} userName={userName} onAddTransaction={openNewTransaction} onEditTransaction={openEditTransaction} onNavigate={navigate}/>}

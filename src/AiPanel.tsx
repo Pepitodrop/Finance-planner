@@ -119,7 +119,7 @@ export function AiPanel({ transactions, onApply, acceptanceMode }: AiPanelProps)
   }
 
   if (transactions.length === 0) {
-    return <div className="ai-page">
+    return <div className="ai-page" data-ai-ready="true">
       <section className="panel ai-empty-state">
         <ListChecks size={40}/>
         <strong>Finance Intelligence needs transaction history</strong>
@@ -129,7 +129,7 @@ export function AiPanel({ transactions, onApply, acceptanceMode }: AiPanelProps)
   }
 
   if (!hasAnalyzed) {
-    return <div className="ai-page" lang="en">
+    return <div className="ai-page" lang="en" data-ai-ready="true">
       <section className="panel ai-intro">
         <p className="eyebrow">On-device analysis</p>
         <h2>Understand your transactions</h2>
@@ -146,7 +146,7 @@ export function AiPanel({ transactions, onApply, acceptanceMode }: AiPanelProps)
 
   if (loading && progressIndex) {
     const percent = Math.round((progressIndex.index / progressIndex.total) * 100)
-    return <div className="ai-page" lang="en">
+    return <div className="ai-page" lang="en" data-ai-ready="true">
       <section className="panel ai-intro">
         <p className="eyebrow">On-device analysis</p>
         <h2>Understand your transactions</h2>
@@ -158,7 +158,7 @@ export function AiPanel({ transactions, onApply, acceptanceMode }: AiPanelProps)
   }
 
   return (
-    <div className="ai-page" lang="en">
+    <div className="ai-page" lang="en" data-ai-ready="true">
       {error && <section className="panel ai-error-state" role="alert">
         <AlertTriangle size={28}/>
         <strong>Analysis couldn't finish.</strong>

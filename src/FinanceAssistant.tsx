@@ -83,7 +83,7 @@ export function FinanceAssistant({ state, budgetAcceptanceMode, acceptanceMode }
           ? { kind: 'calculated', label: 'Calculated · local fallback' }
           : null
 
-  return <div className="assistant-page" lang="en">
+  return <div className="assistant-page" lang="en" data-assistant-ready="true">
     <section className="panel assistant-hero">
       <div><p className="eyebrow">Choose how this runs</p><h2>Analysis, questions, and financial planning</h2><p>Hosted models run through the Finance Planner server and require your consent each session. On-device models stay on your device and are only loaded after you explicitly select them.</p></div>
       <div className="ai-model"><IntelligenceBadge kind={engine === 'hosted' ? 'hosted' : 'local'}/><div><strong>{activeModel}</strong><span>{engine === 'hosted' ? 'Server-side analyst + critic ensemble' : 'Runs locally in your browser · large one-time model download'}</span></div></div>

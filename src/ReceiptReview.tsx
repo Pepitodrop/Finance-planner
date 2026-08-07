@@ -130,7 +130,7 @@ export function ReceiptReview({ acceptanceMode }: { acceptanceMode?: ReceiptAcce
   const consent = image !== null && receiptConsentMatches(selectedImageIdRef.current, consentedImageId)
   const hasSufficientEvidence = result?.evidenceStatus === 'sufficient'
 
-  return <div className="receipt-review-page" lang="en">
+  return <div className="receipt-review-page" lang="en" data-receipt-ready="true">
     <section className="panel receipt-hero">
       <div><p className="eyebrow">Sustainable purchase check</p><h2>Review a grocery receipt</h2><p>Photograph or upload a receipt to get a value and sustainability check on what you bought. The analysis assesses price sense, bio/fair trade, and environmental impact, and suggests possible alternatives.</p></div>
       <div className="receipt-model-note"><IntelligenceBadge kind="hosted" label="Hosted vision model"/><span>Qwen2.5-VL-7B · Apache-2.0 · Hugging Face provider routing · sent only after you consent to this exact image</span></div>
