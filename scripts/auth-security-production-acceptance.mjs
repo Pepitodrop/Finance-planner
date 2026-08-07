@@ -165,6 +165,15 @@ async function setInput(client, sessionId, selector, value) {
 async function setViewport(client, sessionId, width, height) {
   await client.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width <= 768, screenWidth: width, screenHeight: height }, sessionId)
   await evaluate(client, sessionId, `(async () => { await document.fonts.ready; await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))) })()`)
+  // Real wall-clock settle time in addition to the rAF wait above: the
+  // downloaded artifact from an earlier run showed every one of this
+  // script's own screenshots painted as blank/skeleton-gray boxes (no
+  // text, no icons) despite the DOM text checks passing, while the
+  // pre-existing Dashboard/Transactions screenshots from the same CI run
+  // (same environment, same CDP capture pattern) rendered perfectly --
+  // pointing at a compositor-vs-DOM race specific to capturing very soon
+  // after a fresh navigation/state change, not a general rendering issue.
+  await delay(300)
 }
 
 async function geometryAssertions(client, sessionId) {
@@ -208,6 +217,7 @@ async function captureStateMatrix(client, sessionId, name, { beforeEach, waitExp
     await setViewport(client, sessionId, width, height)
     if (waitExpr) await waitFor(client, sessionId, waitExpr, `${waitDescription || name} @ ${width}x${height}`)
     await evaluate(client, sessionId, `new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`)
+    await delay(150)
     const assertions = await geometryAssertions(client, sessionId)
     assert.deepEqual(assertions.viewport, { width, height }, `${name} viewport mismatch`)
     assert.equal(assertions.horizontalOverflow, false, `${name} @ ${width}x${height} has horizontal overflow`)
