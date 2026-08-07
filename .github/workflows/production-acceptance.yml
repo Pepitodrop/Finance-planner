@@ -93,6 +93,12 @@ jobs:
           ACCEPTANCE_APP_URL: http://127.0.0.1:4173
           CONNECTIONS_ACCEPTANCE_ARTIFACT_PATH: artifacts/connections-production-acceptance.json
         run: node scripts/run-connections-production-acceptance-stable.mjs
+      - name: Run Step 11 exhaustive auth/security acceptance
+        if: always()
+        env:
+          ACCEPTANCE_APP_URL: http://127.0.0.1:4173
+          AUTH_SECURITY_ACCEPTANCE_ARTIFACT_PATH: artifacts/auth-security-production-acceptance.json
+        run: node scripts/run-auth-security-production-acceptance-stable.mjs
       - name: Verify authenticated operational metrics
         shell: bash
         run: |
@@ -153,6 +159,18 @@ jobs:
             artifacts/budget-result-*.png
             artifacts/connections-production-acceptance.json
             artifacts/connections-*.png
+            artifacts/auth-security-production-acceptance.json
+            artifacts/auth-session-restoration-*.png
+            artifacts/auth-session-error-*.png
+            artifacts/auth-login-*.png
+            artifacts/auth-passkey-unsupported-*.png
+            artifacts/auth-passkey-error-*.png
+            artifacts/auth-passkey-recommendation-*.png
+            artifacts/vault-setup-*.png
+            artifacts/vault-unlock-*.png
+            artifacts/vault-migration-*.png
+            artifacts/vault-conflict-*.png
+            artifacts/security-privacy-shield-*.png
             artifacts/backend-resilience.json
             artifacts/operational-metrics.prom
             artifacts/production-load-acceptance.json

@@ -56,7 +56,7 @@ function base64ToBytes(value: string): Uint8Array {
 
 function requireOwnerId(userId: string): string {
   const normalized = String(userId || '').trim()
-  if (!normalized || normalized.length > 256) throw new Error('Die angemeldete Benutzerkennung ist ungültig.')
+  if (!normalized || normalized.length > 256) throw new Error('The signed-in account identifier is invalid.')
   return normalized
 }
 
@@ -81,7 +81,7 @@ async function deriveKey(password: string, salt: Uint8Array, iterations: number)
 
 function parseEnvelope(raw: string): AnyVaultEnvelope {
   const parsed: unknown = JSON.parse(raw)
-  if (typeof parsed !== 'object' || parsed === null) throw new Error('Der verschlüsselte Datenspeicher ist beschädigt.')
+  if (typeof parsed !== 'object' || parsed === null) throw new Error('The encrypted vault is corrupted.')
   const envelope = parsed as Partial<AnyVaultEnvelope>
   const commonValid = envelope.format === 'finance-planner-encrypted-vault'
     && (envelope.version === 1 || envelope.version === 2)
@@ -93,17 +93,17 @@ function parseEnvelope(raw: string): AnyVaultEnvelope {
     && typeof envelope.ciphertext === 'string'
     && typeof envelope.updatedAt === 'string'
   if (!commonValid || (envelope.version === 2 && (typeof envelope.ownerId !== 'string' || !envelope.ownerId))) {
-    throw new Error('Der verschlüsselte Datenspeicher hat ein ungültiges Format.')
+    throw new Error('The encrypted vault has an invalid format.')
   }
   return envelope as AnyVaultEnvelope
 }
 
 export function normalizeVaultPayload(parsed: unknown): VaultPayload {
   if (isAppState(parsed)) return { state: parsed, secureData: {} }
-  if (typeof parsed !== 'object' || parsed === null) throw new Error('Die entschlüsselten Daten sind ungültig.')
+  if (typeof parsed !== 'object' || parsed === null) throw new Error('The decrypted data is invalid.')
   const candidate = parsed as Partial<VaultPayload>
   if (!isAppState(candidate.state) || typeof candidate.secureData !== 'object' || candidate.secureData === null || Array.isArray(candidate.secureData)) {
-    throw new Error('Die entschlüsselten Daten sind ungültig.')
+    throw new Error('The decrypted data is invalid.')
   }
   return { state: structuredClone(candidate.state), secureData: structuredClone(candidate.secureData as Record<string, unknown>) }
 }
@@ -127,7 +127,7 @@ async function encryptPayload(payload: VaultPayload, key: CryptoKey, salt: Uint8
 }
 
 async function decryptEnvelope(envelope: AnyVaultEnvelope, key: CryptoKey, ownerId: string): Promise<VaultPayload> {
-  if (envelope.version === 2 && envelope.ownerId !== ownerId) throw new Error('Dieser lokale Vault gehört zu einem anderen Konto.')
+  if (envelope.version === 2 && envelope.ownerId !== ownerId) throw new Error('This local vault belongs to a different account.')
   const algorithm: AesGcmParams = envelope.version === 2
     ? { name: 'AES-GCM', iv: base64ToBytes(envelope.iv), additionalData: ownerBinding(ownerId) }
     : { name: 'AES-GCM', iv: base64ToBytes(envelope.iv) }
@@ -144,7 +144,7 @@ function queueSessionPersistence(): Promise<void> {
   const operation = persistenceQueue.then(async () => {
     const storageKey = vaultStorageKey(ownerId)
     const raw = localStorage.getItem(storageKey)
-    if (!raw) throw new Error('Der kontogebundene verschlüsselte Datenspeicher fehlt.')
+    if (!raw) throw new Error('The account-bound encrypted vault is missing.')
     const current = parseEnvelope(raw)
     if (current.version !== 2 || current.ownerId !== ownerId) throw new Error('Der lokale Vault ist nicht korrekt an dieses Konto gebunden.')
     const envelope = await encryptPayload(payload, key, base64ToBytes(current.salt), current.iterations, ownerId)
@@ -176,7 +176,7 @@ export function getUnlockedVaultPayload(): VaultPayload | null {
 
 export async function createVault(password: string, state: AppState, userId: string): Promise<void> {
   const ownerId = requireOwnerId(userId)
-  if (password.length < 12) throw new Error('Das Passwort muss mindestens 12 Zeichen lang sein.')
+  if (password.length < 12) throw new Error('The password must be at least 12 characters long.')
   const salt = crypto.getRandomValues(new Uint8Array(16))
   const key = await deriveKey(password, salt, PBKDF2_ITERATIONS)
   const payload: VaultPayload = { state: structuredClone(state), secureData: {} }
@@ -194,7 +194,7 @@ export async function unlockVault(password: string, userId: string): Promise<App
   const accountRaw = localStorage.getItem(accountKey)
   const legacyRaw = accountRaw ? null : localStorage.getItem(LEGACY_VAULT_KEY)
   const raw = accountRaw ?? legacyRaw
-  if (!raw) throw new Error('Für dieses Konto wurde auf dem Gerät noch kein verschlüsselter Datenspeicher eingerichtet.')
+  if (!raw) throw new Error('No encrypted vault has been set up for this account on this device yet.')
   const envelope = parseEnvelope(raw)
   const key = await deriveKey(password, base64ToBytes(envelope.salt), envelope.iterations)
   try {
@@ -212,12 +212,12 @@ export async function unlockVault(password: string, userId: string): Promise<App
     return structuredClone(payload.state)
   } catch (error) {
     if (error instanceof Error && /anderen Konto/.test(error.message)) throw error
-    throw new Error('Passwort falsch oder verschlüsselte Daten beschädigt.')
+    throw new Error('Incorrect password, or the encrypted data is corrupted.')
   }
 }
 
 export async function replaceUnlockedVaultPayload(payload: VaultPayload): Promise<void> {
-  if (!sessionKey || !sessionPayload || !sessionOwnerId) throw new Error('Der Vault ist nicht entsperrt.')
+  if (!sessionKey || !sessionPayload || !sessionOwnerId) throw new Error('The vault is not unlocked.')
   sessionPayload = normalizeVaultPayload(payload)
   await queueSessionPersistence()
 }
@@ -230,19 +230,19 @@ export async function persistEncryptedState(state: AppState): Promise<void> {
 }
 
 export async function changeVaultPassword(currentPassword: string, newPassword: string): Promise<void> {
-  if (!sessionPayload || !sessionKey || !sessionOwnerId) throw new Error('Der Vault ist nicht entsperrt.')
-  if (newPassword.length < 12) throw new Error('Das neue Passwort muss mindestens 12 Zeichen lang sein.')
+  if (!sessionPayload || !sessionKey || !sessionOwnerId) throw new Error('The vault is not unlocked.')
+  if (newPassword.length < 12) throw new Error('The new password must be at least 12 characters long.')
   await persistenceQueue
   const storageKey = vaultStorageKey(sessionOwnerId)
   const raw = localStorage.getItem(storageKey)
-  if (!raw) throw new Error('Der verschlüsselte Datenspeicher fehlt.')
+  if (!raw) throw new Error('The encrypted vault is missing.')
   const current = parseEnvelope(raw)
   if (current.version !== 2 || current.ownerId !== sessionOwnerId) throw new Error('Der lokale Vault ist nicht korrekt an dieses Konto gebunden.')
   const verificationKey = await deriveKey(currentPassword, base64ToBytes(current.salt), current.iterations)
   try {
     await decryptEnvelope(current, verificationKey, sessionOwnerId)
   } catch {
-    throw new Error('Das aktuelle Vault-Passwort ist falsch.')
+    throw new Error('The current vault password is incorrect.')
   }
 
   const salt = crypto.getRandomValues(new Uint8Array(16))

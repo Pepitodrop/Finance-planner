@@ -13,7 +13,10 @@ export function AutomaticTransactionAnalysis() {
   const [analysis, setAnalysis] = useState('')
   const [expanded, setExpanded] = useState(false)
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
-  const revisionRef = useRef('')
+  // null (not '') so a genuinely empty account's real revision (also '' --
+  // see transactionAnalysisRevision) is never mistaken for "unchanged since
+  // mount", which would otherwise skip the first analysis entirely.
+  const revisionRef = useRef<string | null>(null)
   const debounceRef = useRef<number | null>(null)
 
   useEffect(() => {

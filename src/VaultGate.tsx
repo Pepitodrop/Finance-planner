@@ -1,9 +1,22 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { KeyRound, ShieldCheck } from 'lucide-react'
 import { shouldLockAfterBackground, setPrivacyShield } from './mobile-security'
-import { clearLegacyPlaintextState, configureAuthenticatedStorage, flushCloudState, hasLegacyPlaintextState, loadLegacyState, prepareNewDeviceCloudBootstrap, setUnlockedState, synchronizeUnlockedState } from './storage'
+import {
+  clearLegacyPlaintextState,
+  configureAuthenticatedStorage,
+  flushCloudState,
+  getCloudSyncStatus,
+  hasLegacyPlaintextState,
+  loadLegacyState,
+  prepareNewDeviceCloudBootstrap,
+  setUnlockedState,
+  subscribeCloudSyncStatus,
+  synchronizeUnlockedState,
+} from './storage'
+import { emptyProductionState } from './data'
 import type { AppState } from './types'
 import { createVault, hasEncryptedVault, lockVault, unlockVault } from './vault'
+import { VaultConflict } from './VaultConflict'
 
 interface VaultGateProps { children: ReactNode | ((lock: () => void) => ReactNode); userId: string }
 
@@ -19,14 +32,40 @@ export function VaultGate({ children, userId }: VaultGateProps) {
   const [confirmation, setConfirmation] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const backgroundedAt = useRef<number | null>(null)
   const migrating = mode === 'setup' && hasLegacyPlaintextState()
+  const [cloudPhase, setCloudPhase] = useState(() => getCloudSyncStatus().phase)
+  const [conflictDismissed, setConflictDismissed] = useState(false)
+  const [forcedConflict, setForcedConflict] = useState(false)
   const lockNow = useCallback(() => {
     void flushCloudState({ keepalive: true })
     setPrivacyShield(true)
     lockVault()
     window.location.reload()
   }, [])
+
+  useEffect(() => {
+    if (mode !== 'open') return
+    return subscribeCloudSyncStatus((status) => setCloudPhase(status.phase))
+  }, [mode])
+
+  useEffect(() => { setConflictDismissed(false) }, [cloudPhase])
+
+  useEffect(() => {
+    if (mode !== 'open' || import.meta.env.VITE_ACCEPTANCE_FIXTURES !== 'true') return
+    // Deterministic, build-time-gated presentation states for Step 11
+    // reference screenshots (VAULT-04, SECURITY-01). Never calls the real
+    // conflict-resolution API on its own -- 'conflict' only forces the
+    // dialog open; 'shielded' reuses the real setPrivacyShield mechanism.
+    const target = window as Window & { __financePlannerVaultAcceptanceState?: (mode: string) => void }
+    target.__financePlannerVaultAcceptanceState = (fixtureMode) => {
+      if (fixtureMode === 'conflict') setForcedConflict(true)
+      if (fixtureMode === 'shielded') setPrivacyShield(true)
+      if (fixtureMode === 'reset') { setForcedConflict(false); setPrivacyShield(false) }
+    }
+    return () => { delete target.__financePlannerVaultAcceptanceState }
+  }, [mode])
 
   useEffect(() => {
     if (mode !== 'open') return
@@ -79,9 +118,12 @@ export function VaultGate({ children, userId }: VaultGateProps) {
     try {
       let state: AppState
       if (mode === 'setup') {
-        if (password.length < 12) throw new Error('Das Passwort muss mindestens 12 Zeichen lang sein.')
-        if (password !== confirmation) throw new Error('Die Passwörter stimmen nicht überein.')
-        state = loadLegacyState()
+        if (password.length < 12) throw new Error('The password must be at least 12 characters long.')
+        if (password !== confirmation) throw new Error('The passwords do not match.')
+        // A genuinely new account (no legacy local data) starts from an empty
+        // state, never from normalInitialState's seeded sample finances.
+        // Migration keeps using the device's real legacy data unchanged.
+        state = migrating ? loadLegacyState() : structuredClone(emptyProductionState)
         await createVault(password, state, userId)
         if (!migrating) prepareNewDeviceCloudBootstrap()
         clearLegacyPlaintextState()
@@ -89,37 +131,49 @@ export function VaultGate({ children, userId }: VaultGateProps) {
         state = await unlockVault(password, userId)
       }
       setUnlockedState(state)
+      setSyncing(true)
       const synchronizedState = await synchronizeUnlockedState(state)
       setUnlockedState(synchronizedState)
+      setSyncing(false)
       setPassword('')
       setConfirmation('')
       setPrivacyShield(false)
       setMode('open')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Der Datenspeicher konnte nicht geöffnet werden.')
+      setSyncing(false)
+      setError(reason instanceof Error ? reason.message : 'The vault could not be opened.')
     } finally {
       setBusy(false)
     }
   }
 
   if (mode === 'open') {
-    return <>{typeof children === 'function' ? children(lockNow) : children}</>
+    const showConflict = forcedConflict || (cloudPhase === 'conflict' && !conflictDismissed)
+    return <>
+      {typeof children === 'function' ? children(lockNow) : children}
+      {showConflict && <VaultConflict onClose={() => { setConflictDismissed(true); setForcedConflict(false) }}/>}
+    </>
   }
 
-  return <main className="vault-screen">
+  return <main className="vault-screen" lang="en">
     <section className="panel vault-card">
       <div className="goal-hero-icon"><ShieldCheck size={26}/></div>
-      <p className="eyebrow">Kontogebundene Verschlüsselung + Cloud-Synchronisierung</p>
-      <h1>{mode === 'setup' ? 'Sicheren Datenspeicher einrichten' : 'Finance Planner entsperren'}</h1>
-      <p className="muted">Dieser Geräte-Vault ist ausschließlich an dein angemeldetes Konto gebunden. Konten, Transaktionen, Sparziele und persönliche Lernwerte werden lokal mit AES-256-GCM verschlüsselt. Nach dem Entsperren wird derselbe vollständige Datenstand authentifiziert und serverseitig verschlüsselt in PostgreSQL gespeichert, damit er auf deinen anderen Geräten verfügbar ist.</p>
-      {migrating && <p className="status-message">Bestehende Klartextdaten werden nach erfolgreicher Einrichtung diesem Konto zugeordnet. Falls bereits ein abweichender Serverstand existiert, musst du ausdrücklich auswählen, welcher Stand gelten soll.</p>}
+      <p className="eyebrow">Account-bound encryption + cloud sync</p>
+      <h1>{mode === 'setup' ? 'Set up your encrypted vault' : 'Unlock Finance Planner'}</h1>
+      {mode === 'setup'
+        ? <p className="muted">This is separate from signing in. Your accounts, transactions, and goals are encrypted on this device, then synced encrypted to Finance Planner's servers so they are available on your other devices.</p>
+        : <p className="muted">Enter your vault password to decrypt your data on this device. It stays on this device and is never sent to our servers.</p>}
+      {migrating && <p className="status-message">We found data stored locally from before encryption was enabled. Setting up your vault will encrypt this data and use it as your starting point. If a different version already exists in the cloud, you will be asked to choose which one to keep next.</p>}
       <form onSubmit={submit} className="vault-form">
-        <label>Passwort<input autoFocus autoComplete={mode === 'setup' ? 'new-password' : 'current-password'} minLength={12} type="password" value={password} onChange={(event) => setPassword(event.target.value)} required/></label>
-        {mode === 'setup' && <label>Passwort wiederholen<input autoComplete="new-password" minLength={12} type="password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} required/></label>}
+        <label>Vault password<input autoFocus autoComplete={mode === 'setup' ? 'new-password' : 'current-password'} minLength={12} type="password" value={password} onChange={(event) => setPassword(event.target.value)} required aria-describedby={mode === 'setup' ? 'vault-password-hint' : undefined}/></label>
+        {mode === 'setup' && <small id="vault-password-hint" className="vault-form-hint">At least 12 characters.</small>}
+        {mode === 'setup' && <label>Confirm password<input autoComplete="new-password" minLength={12} type="password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} required/></label>}
         {error && <p className="status-message error-message" role="alert">{error}</p>}
-        <button className="primary" disabled={busy} type="submit"><KeyRound size={18}/>{busy ? 'Vault und Cloud werden geöffnet …' : mode === 'setup' ? 'Verschlüsselung aktivieren' : 'Entsperren'}</button>
+        <button className="fp-action-primary" disabled={busy} type="submit"><KeyRound size={18}/>{busy ? (syncing ? 'Syncing your data…' : mode === 'setup' ? 'Turning on encryption…' : 'Decrypting…') : mode === 'setup' ? 'Turn on encryption' : 'Unlock'}</button>
       </form>
-      <div className="vault-warning"><strong>Wichtig:</strong> Das lokale Vault-Passwort wird nicht an den Server gesendet und kann nicht wiederhergestellt werden. Jedes angemeldete Konto erhält auf diesem Gerät einen getrennten Vault. Der Cloud-Datenstand ist zusätzlich an die serverseitig geprüfte Benutzerkennung gebunden.</div>
+      {mode === 'setup'
+        ? <div className="vault-warning"><strong>Important:</strong> This password cannot be recovered if you forget it. It never leaves this device. Each signed-in account gets a separate vault on this device.</div>
+        : <p className="vault-form-footnote">There is no password reset for your vault. If you have forgotten it, your locally encrypted copy cannot be decrypted again.</p>}
     </section>
   </main>
 }
