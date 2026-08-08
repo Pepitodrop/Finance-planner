@@ -73,6 +73,13 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   </React.StrictMode>,
 )
 
+// Sole owner of service-worker registration and of the controllerchange ->
+// reload transition. Update DETECTION (registration.update() polling,
+// updatefound observation, and dispatching finance-planner:update-available)
+// is owned solely by MobileProductionRuntime, which already ties polling to
+// meaningful triggers (online, visibility, pageshow, resume) instead of a
+// blind interval -- having both here and there was genuine duplicate
+// ownership of the same browser state.
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
     let refreshing = false
@@ -82,21 +89,7 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
       window.location.reload()
     })
 
-    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((registration) => {
-      const announceUpdate = (worker: ServiceWorker | null) => {
-        if (!worker || !navigator.serviceWorker.controller) return
-        window.dispatchEvent(new CustomEvent('finance-planner:update-available', { detail: { registration } }))
-      }
-      announceUpdate(registration.waiting)
-      registration.addEventListener('updatefound', () => {
-        const worker = registration.installing
-        worker?.addEventListener('statechange', () => {
-          if (worker.state === 'installed') announceUpdate(worker)
-        })
-      })
-      void registration.update()
-      window.setInterval(() => void registration.update(), 60 * 60 * 1000)
-    }).catch((error: unknown) => {
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch((error: unknown) => {
       console.warn('Service worker registration failed', error)
     })
   })

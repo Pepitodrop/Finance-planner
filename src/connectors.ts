@@ -133,12 +133,12 @@ async function requestJson<T>(url: string, init: RequestInit, options: { retry?:
       return payload
     } catch (error) {
       if (error instanceof BankingRequestError) { if (!error.retryable) throw error; lastError = error; retryAfterMs = error.retryAfterMs }
-      else if (error instanceof DOMException && error.name === 'AbortError') lastError = new Error('Das Banking-Backend hat nicht rechtzeitig geantwortet.')
+      else if (error instanceof DOMException && error.name === 'AbortError') lastError = new Error('The banking backend did not respond in time.')
       else lastError = error
     } finally { window.clearTimeout(timeout) }
     if (attempt < attempts - 1) await delay(retryAfterMs ?? RETRY_DELAYS_MS[attempt])
   }
-  throw lastError instanceof Error ? lastError : new Error('Das Banking-Backend ist vorübergehend nicht erreichbar.')
+  throw lastError instanceof Error ? lastError : new Error('The banking backend is temporarily unreachable.')
 }
 
 export function connectorReturnUrl(): string { const url = new URL(window.location.href); for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'institution']) url.searchParams.delete(key); url.hash = ''; return url.toString() }
@@ -148,9 +148,9 @@ export async function startConnector(provider: ConnectorProvider, context: Conne
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ redirectUri: connectorReturnUrl(), country: 'DE', institutionId: context.institutionId, institutionName: context.institutionName, accountType: context.accountType }),
   }, { idempotent: true })
-  if (!result.redirectUrl || !result.redirectUrl.startsWith('https://')) throw new Error('Der Connector lieferte keine sichere Weiterleitungsadresse.')
+  if (!result.redirectUrl || !result.redirectUrl.startsWith('https://')) throw new Error('The connector did not return a secure redirect address.')
   window.location.assign(result.redirectUrl)
 }
-export async function synchronizeConnections(): Promise<SyncPayload[]> { if (activeSynchronization) return activeSynchronization; const operation = (async () => { const result = await requestJson<{ connections?: SyncPayload[] }>('/api/connectors/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } }, { retry: true, idempotent: true }); if (!Array.isArray(result.connections)) throw new Error('Der Sync-Dienst lieferte ein ungültiges Ergebnis.'); return result.connections })(); activeSynchronization = operation; try { return await operation } finally { if (activeSynchronization === operation) activeSynchronization = null } }
+export async function synchronizeConnections(): Promise<SyncPayload[]> { if (activeSynchronization) return activeSynchronization; const operation = (async () => { const result = await requestJson<{ connections?: SyncPayload[] }>('/api/connectors/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } }, { retry: true, idempotent: true }); if (!Array.isArray(result.connections)) throw new Error('The sync service returned an invalid result.'); return result.connections })(); activeSynchronization = operation; try { return await operation } finally { if (activeSynchronization === operation) activeSynchronization = null } }
 export async function disconnectConnector(provider: ConnectorProvider): Promise<void> { await requestJson<{ disconnected: boolean }>(`/api/connectors/${provider}`, { method: 'DELETE' }, { idempotent: true }) }
 export function consentDaysRemaining(connection: ConnectorConnection, now = Date.now()): number | null { if (!connection.consentExpiresAt) return null; const expiresAt = Date.parse(connection.consentExpiresAt); if (!Number.isFinite(expiresAt)) return null; return Math.ceil((expiresAt - now) / 86_400_000) }

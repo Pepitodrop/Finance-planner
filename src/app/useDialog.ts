@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 
 interface UseDialogOptions {
   open: boolean
@@ -14,8 +14,20 @@ const FOCUSABLE_SELECTOR = 'button:not([disabled]), a[href], input:not([disabled
  * form, confirmations) don't reimplement it.
  */
 export function useDialog<T extends HTMLElement>({ open, onClose, restoreFocus = true }: UseDialogOptions) {
-  const dialogRef = useRef<T>(null)
+  const elementRef = useRef<T | null>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
+
+  // A callback ref (not a plain useRef assigned inside useEffect) so the
+  // data-dialog-managed marker lands on the DOM node during React's commit
+  // phase, before ANY component's effects run -- including a sibling like
+  // FrontendExperience, whose own mount effect can otherwise run first and
+  // find this element before an effect-based marker would have been set,
+  // recreating the exact double-management race this marker exists to
+  // prevent. See FrontendExperience.tsx's sync().
+  const dialogRef = useCallback((node: T | null) => {
+    elementRef.current = node
+    node?.setAttribute('data-dialog-managed', 'true')
+  }, [])
 
   useEffect(() => {
     if (!open) return
@@ -30,7 +42,8 @@ export function useDialog<T extends HTMLElement>({ open, onClose, restoreFocus =
       inertedElements.push(element)
     }
 
-    const dialog = dialogRef.current
+    const dialog = elementRef.current
+
     if (mainContent && dialog && mainContent.contains(dialog)) {
       // The Connections dialogs currently render inside the main region. Inert
       // only sibling branches along the dialog path so the background is
@@ -52,10 +65,10 @@ export function useDialog<T extends HTMLElement>({ open, onClose, restoreFocus =
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
 
-    const focusable = () => Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? [])
+    const focusable = () => Array.from(elementRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? [])
     // Respect an element that already claimed focus on mount (e.g. an autoFocus
     // search field) instead of always stealing it for the first DOM element.
-    if (!dialogRef.current?.contains(document.activeElement)) focusable()[0]?.focus()
+    if (!elementRef.current?.contains(document.activeElement)) focusable()[0]?.focus()
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {

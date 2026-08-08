@@ -83,7 +83,7 @@ export function MobileEnhancements() {
         </div>
       )}
       {booting && (
-        <div className="mobile-boot-skeleton" role="status" aria-label="Finance Planner wird geladen">
+        <div className="mobile-boot-skeleton" role="status" aria-label="Finance Planner is loading">
           <div className="mobile-boot-skeleton__bar" />
           <div className="mobile-boot-skeleton__card" />
           <div className="mobile-boot-skeleton__card mobile-boot-skeleton__card--short" />

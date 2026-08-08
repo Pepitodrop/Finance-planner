@@ -12,7 +12,7 @@ function enhanceChartAccessibility(root: ParentNode = document) {
   for (const chart of root.querySelectorAll<HTMLElement>('.chart, .recharts-responsive-container')) {
     if (chart.hasAttribute('role')) continue
     const panel = chart.closest<HTMLElement>('.panel')
-    const title = panel?.querySelector<HTMLElement>('h2')?.textContent?.trim() || 'Finanzdiagramm'
+    const title = panel?.querySelector<HTMLElement>('h2')?.textContent?.trim() || 'Finance chart'
     chart.setAttribute('role', 'img')
     chart.setAttribute('aria-label', title)
   }
@@ -121,14 +121,20 @@ export function FrontendExperience() {
       if (!(form instanceof HTMLFormElement) || !form.matches('.modal[role="dialog"]')) return
       const description = new FormData(form).get('description')
       if (typeof description !== 'string' || !description.trim()) return
-      setAnnouncement(`„${description.trim()}“ wurde gespeichert.`)
+      setAnnouncement(`“${description.trim()}” was saved.`)
       if (announcementTimer) window.clearTimeout(announcementTimer)
       announcementTimer = window.setTimeout(() => setAnnouncement(''), 5_000)
     }
 
     const sync = () => {
       enhanceChartAccessibility()
-      const modal = document.querySelector<HTMLElement>('.modal')
+      // Dialogs built on useDialog (ConfirmationDialog, Connections' setup
+      // and manual-account modals) mark themselves data-dialog-managed and
+      // already own their full focus-trap/inert-background/scroll-lock/
+      // Escape contract -- this legacy enhancer now only ever reaches
+      // App.tsx's raw transaction dialog, the one remaining consumer that
+      // has never adopted useDialog.
+      const modal = document.querySelector<HTMLElement>('.modal:not([data-dialog-managed])')
       if (modal === activeModal) return
       cleanupModal?.()
       activeModal = modal
@@ -149,7 +155,7 @@ export function FrontendExperience() {
   }, [])
 
   return <>
-    <span className="sr-only">Finance Planner Anwendung</span>
+    <span className="sr-only">Finance Planner application</span>
     {announcement && <div className="save-announcement" role="status" aria-live="polite">{announcement}</div>}
   </>
 }

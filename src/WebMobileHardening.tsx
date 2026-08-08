@@ -36,7 +36,7 @@ export function WebMobileHardening() {
       if (label === previousLabel) return
       previousLabel = label
       document.title = `${label} · Finance Planner`
-      setAnnouncement(`${label} geöffnet`)
+      setAnnouncement(`${label} opened`)
     }
 
     const handlePopState = () => window.setTimeout(() => {
@@ -46,7 +46,7 @@ export function WebMobileHardening() {
     const handleUpdate = (event: Event) => {
       const registration = (event as CustomEvent<{ registration: ServiceWorkerRegistration }>).detail?.registration
       if (registration?.waiting) {
-        setAnnouncement('Eine neue Version ist verfügbar.')
+        setAnnouncement('A new version is available.')
       }
     }
 
@@ -67,7 +67,7 @@ export function WebMobileHardening() {
   return (
     <>
       <a className="skip-link" href="#main-content" onClick={() => window.setTimeout(focusMainContent, 0)}>
-        Zum Hauptinhalt springen
+        Skip to main content
       </a>
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</div>
     </>

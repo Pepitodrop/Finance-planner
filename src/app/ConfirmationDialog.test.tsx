@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -63,5 +64,29 @@ describe('ConfirmationDialog', () => {
     </>)
     await waitFor(() => expect(screen.getByRole('alertdialog')).toBeInTheDocument())
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  // Step 14 regression: this component owns its own scroll lock via
+  // useDialog. Before useDialog marked its element data-dialog-managed,
+  // FrontendExperience's legacy enhancer ALSO ran hideModalBackground/
+  // body.style.overflow on the same element -- and captured its own
+  // "previousOverflow" snapshot too late (after useDialog had already set
+  // it to "hidden"), so on close its cleanup clobbered the restore back to
+  // "hidden" instead of leaving useDialog's own correct restoration alone.
+  function Toggle() {
+    const [open, setOpen] = useState(true)
+    return <>
+      <FrontendExperience/>
+      <ConfirmationDialog open={open} severity="warning" heading="Reset financial data?" headingId="h" confirmLabel="Reset" onConfirm={vi.fn()} onClose={() => setOpen(false)}>body</ConfirmationDialog>
+    </>
+  }
+
+  it('restores body scroll exactly once on close, not clobbered by the legacy enhancer', async () => {
+    const user = userEvent.setup()
+    render(<Toggle/>)
+    await waitFor(() => expect(document.body.style.overflow).toBe('hidden'))
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await waitFor(() => expect(document.body.style.overflow).not.toBe('hidden'))
   })
 })

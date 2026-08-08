@@ -69,9 +69,9 @@ export function MobileConnectivityStatus() {
 
   return (
     <div className="mobile-connectivity-status runtime-surface runtime-surface--critical" role="alert" aria-live="assertive">
-      <span>Dein Gerät hat eine Netzwerkverbindung, aber Finance Planner kann den App-Dienst nicht erreichen.</span>
+      <span>Your device has a network connection, but Finance Planner can't reach the app service.</span>
       <button type="button" onClick={() => void refresh()} disabled={checking}>
-        {checking ? 'Wird geprüft …' : 'Erneut versuchen'}
+        {checking ? 'Checking…' : 'Retry'}
       </button>
     </div>
   )

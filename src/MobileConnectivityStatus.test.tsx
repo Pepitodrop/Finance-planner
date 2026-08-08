@@ -20,7 +20,7 @@ describe('MobileConnectivityStatus', () => {
     const user = userEvent.setup()
 
     render(<RuntimeSurfaceCoordinator><MobileConnectivityStatus/></RuntimeSurfaceCoordinator>)
-    const retry = await screen.findByRole('button', { name: 'Erneut versuchen' }, { timeout: 2_000 })
+    const retry = await screen.findByRole('button', { name: 'Retry' }, { timeout: 2_000 })
     expect(fetcher).toHaveBeenCalledTimes(2)
     await user.click(retry)
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())

@@ -54,7 +54,7 @@ function cloneInitialState(): AppState {
 }
 
 function requireActiveUser(): string {
-  if (!activeUserId) throw new Error('Cloud-Speicher wurde keinem angemeldeten Konto zugeordnet.')
+  if (!activeUserId) throw new Error('Cloud storage was not assigned to a signed-in account.')
   return activeUserId
 }
 
@@ -389,7 +389,7 @@ export async function synchronizeUnlockedState(localState: AppState): Promise<Ap
       return loadState()
     }
     cloudEnabled = false
-    emit({ phase: 'offline', message: error instanceof Error ? `Local mode: ${error.message}` : 'Local mode: Cloud-Speicher nicht erreichbar.', ...(syncMetadata.lastSyncedAt ? { lastSyncedAt: syncMetadata.lastSyncedAt } : {}) })
+    emit({ phase: 'offline', message: error instanceof Error ? `Local mode: ${error.message}` : 'Local mode: cloud storage unreachable.', ...(syncMetadata.lastSyncedAt ? { lastSyncedAt: syncMetadata.lastSyncedAt } : {}) })
     scheduleBootstrapRetry()
     return loadState()
   }
@@ -428,7 +428,7 @@ export async function resolveCloudConflict(strategy: 'server' | 'local'): Promis
     markSynced(remote.version, remote.updatedAt ?? new Date().toISOString())
   } else {
     const localPayload = getUnlockedVaultPayload()
-    if (!localPayload) throw new Error('Der lokale Vault ist nicht entsperrt.')
+    if (!localPayload) throw new Error('The local vault is not unlocked.')
     const saved = await saveCloudState(localPayload, remote.version)
     cloudVersion = saved.version
     rememberState(localPayload.state)

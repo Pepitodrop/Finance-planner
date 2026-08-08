@@ -51,7 +51,7 @@ describe('primary application shell accessibility', () => {
     const user = userEvent.setup()
     render(<Shell />)
 
-    const skipLink = screen.getByRole('link', { name: 'Zum Hauptinhalt springen' })
+    const skipLink = screen.getByRole('link', { name: 'Skip to main content' })
     expect(skipLink).toHaveAttribute('href', '#main-content')
 
     await user.click(skipLink)

@@ -20,7 +20,7 @@ export function addTransactionToState(state: AppState, transaction: Transaction)
 
 export function updateTransactionInState(state: AppState, updated: Transaction): AppState {
   const previous = state.transactions.find((transaction) => transaction.id === updated.id)
-  if (!previous) throw new Error('Die zu bearbeitende Transaktion wurde nicht gefunden.')
+  if (!previous) throw new Error('The transaction to edit was not found.')
 
   let next = adjustAccountBalance(state, previous.accountId, -signedAmount(previous))
   next = adjustAccountBalance(next, updated.accountId, signedAmount(updated))
@@ -32,7 +32,7 @@ export function updateTransactionInState(state: AppState, updated: Transaction):
 
 export function deleteTransactionFromState(state: AppState, transactionId: string): { state: AppState; deleted: Transaction } {
   const deleted = state.transactions.find((transaction) => transaction.id === transactionId)
-  if (!deleted) throw new Error('Die zu löschende Transaktion wurde nicht gefunden.')
+  if (!deleted) throw new Error('The transaction to delete was not found.')
 
   const next = adjustAccountBalance(state, deleted.accountId, -signedAmount(deleted))
   return {

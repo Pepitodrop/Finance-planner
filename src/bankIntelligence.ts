@@ -39,7 +39,7 @@ export function suggestCategoryFromHistory(description: string, history: Transac
 }
 
 export function assessBankImportQuality(transactions: Transaction[], smartCategorized: number): BankImportQuality {
-  if (!transactions.length) return { score: 0, smartCategorized: 0, needsReview: 0, warnings: ['Keine importierbaren Buchungen gefunden.'] }
+  if (!transactions.length) return { score: 0, smartCategorized: 0, needsReview: 0, warnings: ['No importable transactions found.'] }
   const missingCategory = transactions.filter((item) => !item.category || item.category === 'Unkategorisiert').length
   const weakDescriptions = transactions.filter((item) => item.description.length < 4).length
   const invalidDates = transactions.filter((item) => Number.isNaN(Date.parse(item.date))).length
@@ -47,8 +47,8 @@ export function assessBankImportQuality(transactions: Transaction[], smartCatego
   const penalty = Math.round((missingCategory * 35 + weakDescriptions * 20 + invalidDates * 45) / transactions.length)
   const score = Math.max(0, Math.min(100, 100 - penalty))
   const warnings: string[] = []
-  if (missingCategory) warnings.push(`${missingCategory} Buchungen benötigen eine Kategorieprüfung.`)
-  if (weakDescriptions) warnings.push(`${weakDescriptions} Buchungen haben schwache Händlerdaten.`)
-  if (invalidDates) warnings.push(`${invalidDates} Buchungen enthalten ungültige Datumswerte.`)
+  if (missingCategory) warnings.push(`${missingCategory} transactions need a category review.`)
+  if (weakDescriptions) warnings.push(`${weakDescriptions} transactions have weak merchant data.`)
+  if (invalidDates) warnings.push(`${invalidDates} transactions contain invalid date values.`)
   return { score, smartCategorized, needsReview, warnings }
 }

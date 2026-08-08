@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   installDismissalDeadline,
-  isSafeServiceWorkerUpdate,
   isStandaloneDisplay,
   requestServiceWorkerActivation,
   shouldOfferInstall,
@@ -134,35 +133,22 @@ export function MobileRuntime() {
     }
   }, [])
 
+  // Update detection is owned solely by MobileProductionRuntime, which
+  // dispatches finance-planner:update-available once it confirms a safe,
+  // controller-having update (see isSafeServiceWorkerUpdate). This banner is
+  // a pure consumer of that event rather than running its own independent
+  // navigator.serviceWorker.ready/updatefound observation -- registration
+  // (bootstrap.tsx) and the controllerchange -> reload transition
+  // (bootstrap.tsx) also each have exactly one owner.
   useEffect(() => {
-    if (!('serviceWorker' in navigator) || !import.meta.env.PROD) return
-
-    let active = true
-    let refreshing = false
-    const handleControllerChange = () => {
-      if (refreshing) return
-      refreshing = true
-      window.location.reload()
+    const handleUpdateAvailable = (event: Event) => {
+      const detail = (event as CustomEvent<{ registration: ServiceWorkerRegistration }>).detail
+      if (!detail?.registration) return
+      setRegistration(detail.registration)
+      setUpdateReady(true)
     }
-
-    navigator.serviceWorker.ready.then((readyRegistration) => {
-      if (!active) return
-      setRegistration(readyRegistration)
-      setUpdateReady(isSafeServiceWorkerUpdate(readyRegistration))
-
-      readyRegistration.addEventListener('updatefound', () => {
-        const worker = readyRegistration.installing
-        worker?.addEventListener('statechange', () => {
-          if (worker.state === 'installed' && navigator.serviceWorker.controller) setUpdateReady(true)
-        })
-      })
-    }).catch(() => undefined)
-
-    navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange)
-    return () => {
-      active = false
-      navigator.serviceWorker.removeEventListener('controllerchange', handleControllerChange)
-    }
+    window.addEventListener('finance-planner:update-available', handleUpdateAvailable)
+    return () => window.removeEventListener('finance-planner:update-available', handleUpdateAvailable)
   }, [])
 
   async function install() {
@@ -218,57 +204,57 @@ export function MobileRuntime() {
     <div className="mobile-runtime">
       {showOffline && (
         <div className="mobile-runtime__banner runtime-surface runtime-surface--critical" role="status" aria-live="polite">
-          Offline-Modus. Deine lokal gespeicherten Finanzdaten bleiben verfügbar.
+          Offline mode. Your locally stored financial data stays available.
         </div>
       )}
       {showStorageCritical && (
         <div className="mobile-runtime__banner runtime-surface runtime-surface--critical" role="alert">
-          Der Gerätespeicher ist fast voll. Speicherplatz freigeben, um fehlgeschlagene lokale Speicherungen zu vermeiden.
+          Device storage is almost full. Free up space to avoid failed local saves.
         </div>
       )}
       {storageHealth.pressure === 'warning' && !showStorageCritical && (
         <div className="mobile-runtime__banner mobile-runtime__banner--warning runtime-surface runtime-surface--informational" role="status" aria-live="polite">
-          Der Gerätespeicher wird knapp. Bald Speicherplatz freigeben.
+          Device storage is running low. Free up space soon.
         </div>
       )}
       {showUpdate && (
         <div className="mobile-runtime__banner mobile-runtime__banner--action runtime-surface runtime-surface--action" role="status" aria-live="polite">
-          <span>Eine sicherere, neuere Version ist verfügbar.</span>
-          <button type="button" onClick={() => requestServiceWorkerActivation(registration)}>Jetzt aktualisieren</button>
+          <span>A safer, newer version is available.</span>
+          <button type="button" onClick={() => requestServiceWorkerActivation(registration)}>Update now</button>
         </div>
       )}
       {showInstall && canInstall && (
-        <section className="mobile-install-card runtime-surface runtime-surface--prompt runtime-optional-surface" role="region" aria-label="Finance Planner installieren">
+        <section className="mobile-install-card runtime-surface runtime-surface--prompt runtime-optional-surface" role="region" aria-label="Install Finance Planner">
           <div>
-            <strong>Finance Planner installieren</strong>
-            <p>Wie eine App öffnen, den Vollbildmodus nutzen und die Offline-Hülle verfügbar halten.</p>
+            <strong>Install Finance Planner</strong>
+            <p>Open it like an app, use full-screen mode, and keep the offline shell available.</p>
           </div>
           <div className="mobile-install-card__actions">
-            <button type="button" onClick={dismissInstall} className="mobile-install-card__secondary">Nicht jetzt</button>
-            <button type="button" onClick={install} disabled={installing}>{installing ? 'Wird geöffnet …' : 'Installieren'}</button>
+            <button type="button" onClick={dismissInstall} className="mobile-install-card__secondary">Not now</button>
+            <button type="button" onClick={install} disabled={installing}>{installing ? 'Opening…' : 'Install'}</button>
           </div>
         </section>
       )}
       {showInstall && showIosGuide && (
-        <section className="mobile-install-card runtime-surface runtime-surface--prompt runtime-optional-surface" role="region" aria-label="Finance Planner auf iPhone oder iPad installieren">
+        <section className="mobile-install-card runtime-surface runtime-surface--prompt runtime-optional-surface" role="region" aria-label="Add Finance Planner to your iPhone or iPad">
           <div>
-            <strong>Finance Planner zum Home-Bildschirm hinzufügen</strong>
-            <p>In Safari auf „Teilen“ tippen, dann „Zum Home-Bildschirm“ wählen. Das aktiviert die eigenständige App-Ansicht.</p>
+            <strong>Add Finance Planner to your Home Screen</strong>
+            <p>In Safari, tap “Share”, then choose “Add to Home Screen”. That turns on the standalone app view.</p>
           </div>
           <div className="mobile-install-card__actions mobile-install-card__actions--single">
-            <button type="button" onClick={dismissInstall} className="mobile-install-card__secondary">Verstanden</button>
+            <button type="button" onClick={dismissInstall} className="mobile-install-card__secondary">Got it</button>
           </div>
         </section>
       )}
       {showStorageProtection && (
-        <section className="mobile-install-card runtime-surface runtime-surface--prompt runtime-optional-surface" role="region" aria-label="Lokal gespeicherte Finanzdaten schützen">
+        <section className="mobile-install-card runtime-surface runtime-surface--prompt runtime-optional-surface" role="region" aria-label="Protect locally stored financial data">
           <div>
-            <strong>Lokale Daten vor automatischer Bereinigung schützen</strong>
-            <p>Den Browser bitten, den verschlüsselten lokalen Speicher dieser App bei der Gerätebereinigung zu behalten.</p>
+            <strong>Protect local data from automatic cleanup</strong>
+            <p>Ask the browser to keep this app's encrypted local storage during device cleanup.</p>
           </div>
           <div className="mobile-install-card__actions">
-            <button type="button" onClick={dismissStorageProtection} className="mobile-install-card__secondary">Später</button>
-            <button type="button" onClick={protectStorage} disabled={protectingStorage}>{protectingStorage ? 'Wird geprüft …' : 'Daten schützen'}</button>
+            <button type="button" onClick={dismissStorageProtection} className="mobile-install-card__secondary">Later</button>
+            <button type="button" onClick={protectStorage} disabled={protectingStorage}>{protectingStorage ? 'Checking…' : 'Protect data'}</button>
           </div>
         </section>
       )}

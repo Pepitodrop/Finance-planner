@@ -81,7 +81,7 @@ describe('requestLearningBudgetPlan', () => {
       consentExternalAi: false,
       consentLocationContext: false,
       preferences: { savingsStyle: 'balanced', emergencyFundMonths: 3, sustainabilityPriority: 60 },
-    })).rejects.toThrow(/ungültiges Ergebnis/)
+    })).rejects.toThrow(/invalid result/)
   })
 })
 

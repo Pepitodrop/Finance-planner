@@ -69,7 +69,7 @@ function key(value: string): string {
 
 function parseCsv(content: string, filename: string): ParsedStatement {
   const lines = content.replace(/^\uFEFF/, '').split(/\r?\n/).filter((line) => line.trim())
-  if (lines.length < 2) throw new Error('CSV enthält keine Buchungen.')
+  if (lines.length < 2) throw new Error('CSV contains no transactions.')
   const delimiter = (lines[0].match(/;/g)?.length ?? 0) >= (lines[0].match(/,/g)?.length ?? 0) ? ';' : ','
   const headers = splitCsvLine(lines[0], delimiter).map(key)
   const find = (...names: string[]) => headers.findIndex((header) => names.some((name) => header.includes(name)))
@@ -77,7 +77,7 @@ function parseCsv(content: string, filename: string): ParsedStatement {
   const amountIndex = find('betrag', 'amount', 'umsatz')
   const descriptionIndex = find('verwendungszweck', 'buchungstext', 'beschreibung', 'empfänger', 'beguenstigter', 'name')
   const idIndex = find('transaktionsid', 'referenz', 'kundenreferenz', 'endtoendid')
-  if (dateIndex < 0 || amountIndex < 0) throw new Error('CSV benötigt mindestens Datum- und Betrag-Spalten.')
+  if (dateIndex < 0 || amountIndex < 0) throw new Error('CSV needs at least date and amount columns.')
   const rows: StatementRow[] = []
   let rejected = 0
   for (const line of lines.slice(1)) {
@@ -100,7 +100,7 @@ function firstTag(block: string, names: string[]): string {
 }
 
 function parseCamt(content: string, filename: string): ParsedStatement {
-  if (!/<(?:\w+:)?Document\b/i.test(content) || !/<(?:\w+:)?Ntry\b/i.test(content)) throw new Error('Die XML-Datei ist kein unterstützter CAMT-Kontoauszug.')
+  if (!/<(?:\w+:)?Document\b/i.test(content) || !/<(?:\w+:)?Ntry\b/i.test(content)) throw new Error('The XML file is not a supported CAMT statement.')
   const accountName = firstTag(content, ['Nm', 'IBAN']) || filename.replace(/\.[^.]+$/, '') || 'CAMT-Konto'
   const entryPattern = /<(?:\w+:)?Ntry\b[^>]*>([\s\S]*?)<\/(?:\w+:)?Ntry>/gi
   const rows: StatementRow[] = []
@@ -118,7 +118,7 @@ function parseCamt(content: string, filename: string): ParsedStatement {
     const externalId = firstTag(block, ['AcctSvcrRef', 'NtryRef', 'EndToEndId']) || `${date}:${amount}:${description}`
     rows.push({ externalId, date, description, signedAmountCents: amount })
   }
-  if (!rows.length && rejected === 0) throw new Error('CAMT enthält keine Buchungen.')
+  if (!rows.length && rejected === 0) throw new Error('CAMT contains no transactions.')
   return { format: 'camt', accountName, rows, rejected }
 }
 
