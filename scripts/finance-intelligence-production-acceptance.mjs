@@ -272,8 +272,26 @@ async function captureState(client, sessionId, name, readyAttribute, { beforeEac
     await setViewport(client, sessionId, width, height)
     await ensureVaultUnlocked(client, sessionId)
     await resolveConflictIfPresent(client, sessionId)
-    await beforeEach(width, height)
-    if (waitExpr) await waitFor(client, sessionId, waitExpr, `${waitDescription || name} @ ${width}x${height}`)
+    // beforeEach (almost always: a fixture window.__financePlannerAcceptanceState
+    // call) has been observed to occasionally not take effect on the first
+    // attempt -- root cause not conclusively isolated (the acceptance-fixture
+    // hook is confirmed present and callable at these points; retrying the
+    // exact same call is what actually resolves it, which points to a one-
+    // time race rather than a permanently broken hook). Retry the
+    // beforeEach+waitFor pair a bounded number of times with a short
+    // per-attempt deadline before falling through to the full-deadline
+    // final attempt, whose failure is what actually surfaces to the caller.
+    let settled = false
+    for (let attempt = 0; attempt < 3 && !settled; attempt += 1) {
+      await beforeEach(width, height)
+      if (!waitExpr) { settled = true; break }
+      try {
+        await waitFor(client, sessionId, waitExpr, `${waitDescription || name} @ ${width}x${height} (attempt ${attempt + 1})`, attempt < 2 ? 8_000 : DEADLINE_MS)
+        settled = true
+      } catch (error) {
+        if (attempt === 2) throw error
+      }
+    }
     await evaluate(client, sessionId, `new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`)
     await delay(150)
     if (scrollTo === 'items') {
