@@ -62,28 +62,32 @@ test('rolls back a failed PostgreSQL deletion after sessions are revoked', async
   assert.equal(events.at(-1), 'RELEASE')
 })
 
-test('removes every supported connector in file-backed development mode, including google-subscriptions', async () => {
-  // Regression test for a real persistence-mode asymmetry: PostgreSQL mode
-  // deletes every connector_connections row for the user unconditionally
-  // (no provider filter), but file mode has to enumerate providers by name,
-  // and 'google-subscriptions' was missing from that list -- so a deleted
-  // user's stored Google-subscriptions connection survived account deletion
-  // in file-persistence mode even though it was correctly removed under
-  // PostgreSQL. This only concerns Finance Planner's own stored connection
-  // record; it says nothing about provider-side (Google) token revocation,
-  // which is handled independently by the disconnect flow.
-  const removed = []
+test('removes every file-backed connector and OAuth nonce without a provider whitelist', async () => {
+  const calls = []
   const result = await deleteAccountData({
     userId: 'local-user',
     persistence: { pool: null },
-    store: { remove: async (userId, provider) => removed.push([userId, provider]) },
+    store: {
+      removeUser: async (userId) => {
+        calls.push(userId)
+        return { connectorConnections: 4, oauthNonces: 2 }
+      },
+    },
     sessionRevocations: { revoke: async () => '2026-08-01T12:00:00.000Z' },
   })
-  assert.deepEqual(removed, [
-    ['local-user', 'gocardless'],
-    ['local-user', 'finapi'],
-    ['local-user', 'paypal'],
-    ['local-user', 'google-subscriptions'],
-  ])
+  assert.deepEqual(calls, ['local-user'])
   assert.equal(result.persistence, 'file')
+  assert.deepEqual(result.deleted, { connectorConnections: 4, oauthNonces: 2, financeState: 0, learningProfiles: 0 })
+})
+
+test('fails closed when a file-backed store cannot delete all provider data', async () => {
+  await assert.rejects(
+    deleteAccountData({
+      userId: 'local-user',
+      persistence: { pool: null },
+      store: { remove: async () => {} },
+      sessionRevocations: { revoke: async () => '2026-08-01T12:00:00.000Z' },
+    }),
+    /complete user deletion/,
+  )
 })

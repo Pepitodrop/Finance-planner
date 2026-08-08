@@ -17,7 +17,7 @@ describe('classifyConnectivity', () => {
 })
 
 describe('probeSameOrigin', () => {
-  it('uses the same-origin backend liveness endpoint with credentialed no-store semantics', async () => {
+  it('uses the public same-origin health endpoint with credentialed no-store semantics', async () => {
     const fetcher = vi.fn(async () => new Response('{"status":"ok"}', {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -27,7 +27,7 @@ describe('probeSameOrigin', () => {
     expect(fetcher).toHaveBeenCalledOnce()
 
     const [url, options] = (fetcher as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
-    expect(String(url)).toContain('https://planner.example/health/live')
+    expect(String(url)).toContain('https://planner.example/healthz')
     expect(options).toMatchObject({
       cache: 'no-store',
       credentials: 'same-origin',

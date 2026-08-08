@@ -1,17 +1,6 @@
 import { HttpError } from './runtime-security.js'
 
 export const ACCOUNT_DELETE_CONFIRMATION = 'DELETE MY ACCOUNT'
-// Postgres mode removes every connector_connections row for the user
-// unconditionally (one DELETE, no provider filter). This file-mode fallback
-// has to enumerate providers explicitly instead, so it must be kept in sync
-// with every provider that persists through the connector store -- 'google-subscriptions'
-// (see google-subscriptions-router.js's PROVIDER constant) was previously
-// missing here, so account deletion in file-persistence mode left a deleted
-// user's stored Google-subscriptions connection behind. This does not
-// affect provider-side revocation (google-subscriptions-router.js's own
-// disconnect flow already calls Google's revoke endpoint independently) --
-// it only affects Finance Planner's own stored copy of the connection.
-const PROVIDERS = Object.freeze(['gocardless', 'finapi', 'paypal', 'google-subscriptions'])
 
 function safeUserId(value) {
   const userId = String(value || '').trim()
@@ -34,12 +23,18 @@ export async function deleteAccountData({ userId, persistence, store, sessionRev
   const revokedBefore = await sessionRevocations.revoke(normalizedUserId, now)
 
   if (!persistence?.pool) {
-    for (const provider of PROVIDERS) await store.remove(normalizedUserId, provider)
+    if (typeof store?.removeUser !== 'function') throw new Error('File-backed connector store does not support complete user deletion.')
+    const deleted = await store.removeUser(normalizedUserId)
     return {
       userId: normalizedUserId,
       revokedBefore,
       persistence: 'file',
-      deleted: { connectorConnections: PROVIDERS.length, oauthNonces: 0, financeState: 0, learningProfiles: 0 },
+      deleted: {
+        connectorConnections: deleted.connectorConnections || 0,
+        oauthNonces: deleted.oauthNonces || 0,
+        financeState: 0,
+        learningProfiles: 0,
+      },
     }
   }
 

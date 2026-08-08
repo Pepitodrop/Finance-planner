@@ -52,6 +52,8 @@ done
 
 command -v git >/dev/null 2>&1 || fail "git is not installed."
 command -v docker >/dev/null 2>&1 || fail "docker is not installed."
+command -v node >/dev/null 2>&1 || fail "Node.js is not installed."
+command -v curl >/dev/null 2>&1 || fail "curl is not installed."
 docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is not available."
 [[ -f "${COMPOSE_FILE}" ]] || fail "Compose file not found: ${COMPOSE_FILE}"
 [[ -f "${ENV_FILE}" ]] || fail "Environment file not found: ${ENV_FILE}. Copy .env.example and configure it first."
@@ -80,8 +82,18 @@ if [[ "${SKIP_PULL}" == false ]]; then
   git pull --ff-only origin main
 fi
 
-export RELEASE_SHA="${RELEASE_SHA:-$(git rev-parse HEAD)}"
-export RELEASE_VERSION="${RELEASE_VERSION:-$(node -p "require('./package.json').version" 2>/dev/null || printf 'unknown')}"
+repository_sha="$(git rev-parse HEAD)"
+package_version="$(node -e "const fs=require('node:fs'); const value=JSON.parse(fs.readFileSync('package.json','utf8')).version; if(!value) process.exit(1); process.stdout.write(String(value))")"
+
+if [[ -z "${RELEASE_SHA:-}" || "${RELEASE_SHA}" == "unknown" ]]; then
+  export RELEASE_SHA="${repository_sha}"
+fi
+if [[ -z "${RELEASE_VERSION:-}" || "${RELEASE_VERSION}" == "unknown" ]]; then
+  export RELEASE_VERSION="${package_version}"
+fi
+
+[[ "${RELEASE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]] || fail "RELEASE_SHA must be a full 40-character Git commit SHA."
+[[ "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || fail "RELEASE_VERSION must be a semantic version, not '${RELEASE_VERSION}'."
 
 log "Validating Docker Compose configuration"
 docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" config --quiet
@@ -129,11 +141,17 @@ if [[ "${SKIP_HEALTH}" == false ]]; then
   web_port="${WEB_PORT:-8080}"
   connector_port="${CONNECTOR_PORT:-8787}"
 
-  log "Verifying HTTP health endpoints"
+  log "Verifying HTTP health endpoints and release identity"
   curl --fail --silent --show-error --retry 12 --retry-delay 2 --retry-connrefused \
     "http://127.0.0.1:${web_port}/healthz" >/dev/null
-  curl --fail --silent --show-error --retry 12 --retry-delay 2 --retry-connrefused \
-    "http://127.0.0.1:${connector_port}/health/ready" >/dev/null
+  ready_json="$(curl --fail --silent --show-error --retry 12 --retry-delay 2 --retry-connrefused \
+    "http://127.0.0.1:${connector_port}/health/ready")"
+  READY_JSON="${ready_json}" EXPECTED_VERSION="${RELEASE_VERSION}" EXPECTED_SHA="${RELEASE_SHA}" node -e '
+    const payload = JSON.parse(process.env.READY_JSON || "{}");
+    if (payload.status !== "ready") throw new Error(`Connector reported ${payload.status || "no status"}.`);
+    if (payload.version !== process.env.EXPECTED_VERSION) throw new Error(`Version mismatch: ${payload.version} !== ${process.env.EXPECTED_VERSION}`);
+    if (payload.commit !== process.env.EXPECTED_SHA) throw new Error(`Commit mismatch: ${payload.commit} !== ${process.env.EXPECTED_SHA}`);
+  '
 fi
 
 log "Removing unused build cache and dangling images"
@@ -141,5 +159,5 @@ docker image prune -f >/dev/null
 
 trap - ERR
 log "Deployment completed successfully"
-printf 'Release: %s\n' "${RELEASE_SHA}"
+printf 'Release: %s (%s)\n' "${RELEASE_VERSION}" "${RELEASE_SHA}"
 docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" ps

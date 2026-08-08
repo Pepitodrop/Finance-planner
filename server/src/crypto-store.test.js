@@ -43,6 +43,45 @@ test('encrypted store persists data and keeps a recoverable previous snapshot', 
   }
 })
 
+test('encrypted store removes every provider and OAuth nonce for one user', async () => {
+  const { path, cleanup } = await fixture()
+  try {
+    const store = new EncryptedStore(path, secret)
+    await store.load()
+    await store.set('user-1', 'gocardless', { token: 'bank' })
+    await store.set('user-1', 'licensed-aisp', { token: 'replacement' })
+    await store.set('user-2', 'paypal', { token: 'other-user' })
+    await store.registerOAuthNonce({
+      nonce: 'user-1-nonce', consentId: 'consent-1', userId: 'user-1', provider: 'licensed-aisp',
+      redirectUri: 'https://app.test/callback', expiresAt: Date.now() + 60_000,
+    })
+    await store.registerOAuthNonce({
+      nonce: 'user-2-nonce', consentId: 'consent-2', userId: 'user-2', provider: 'paypal',
+      redirectUri: 'https://app.test/callback', expiresAt: Date.now() + 60_000,
+    })
+
+    assert.deepEqual(await store.removeUser('user-1'), { connectorConnections: 2, oauthNonces: 1 })
+    assert.equal(store.get('user-1', 'gocardless'), null)
+    assert.equal(store.get('user-1', 'licensed-aisp'), null)
+    assert.deepEqual(store.get('user-2', 'paypal'), { token: 'other-user' })
+    assert.equal(await store.consumeOAuthNonce({
+      nonce: 'user-1-nonce', consentId: 'consent-1', userId: 'user-1', provider: 'licensed-aisp',
+      redirectUri: 'https://app.test/callback', now: Date.now(),
+    }), false)
+    assert.equal(await store.consumeOAuthNonce({
+      nonce: 'user-2-nonce', consentId: 'consent-2', userId: 'user-2', provider: 'paypal',
+      redirectUri: 'https://app.test/callback', now: Date.now(),
+    }), true)
+
+    const reopened = new EncryptedStore(path, secret)
+    await reopened.load()
+    assert.equal(reopened.get('user-1', 'licensed-aisp'), null)
+    assert.deepEqual(reopened.get('user-2', 'paypal'), { token: 'other-user' })
+  } finally {
+    await cleanup()
+  }
+})
+
 test('encrypted store rejects unsupported envelopes instead of accepting ambiguous data', async () => {
   const { path, cleanup } = await fixture()
   try {

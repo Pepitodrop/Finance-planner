@@ -1,0 +1,216 @@
+:root {
+  --glass-surface: linear-gradient(145deg, rgba(31, 39, 86, .72), rgba(7, 13, 35, .82));
+  --glass-surface-strong: linear-gradient(145deg, rgba(42, 48, 104, .82), rgba(8, 14, 37, .9));
+  --glass-border: rgba(148, 162, 255, .28);
+  --glass-highlight: rgba(255, 255, 255, .22);
+  --glass-shadow: 0 24px 70px rgba(0, 0, 20, .46), inset 0 1px 0 rgba(255,255,255,.16), inset 0 -1px 0 rgba(70, 42, 170, .2);
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100%;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 16% 8%, rgba(94, 65, 255, .2), transparent 32%),
+    radial-gradient(circle at 82% 22%, rgba(111, 42, 255, .14), transparent 30%),
+    radial-gradient(circle at 55% 100%, rgba(33, 118, 255, .09), transparent 38%);
+  z-index: -1;
+}
+
+.sidebar,
+.panel,
+.stat-card,
+.modal,
+.auth-card,
+.vault-card,
+.transactions-table-row,
+.transactions-search,
+.transactions-filter-trigger,
+.transactions-more,
+.transaction-tabs,
+.account-row,
+.goal-item,
+.recent-transaction-row {
+  background: var(--glass-surface) !important;
+  border: 1px solid var(--glass-border) !important;
+  box-shadow: var(--glass-shadow) !important;
+  backdrop-filter: blur(24px) saturate(145%);
+  -webkit-backdrop-filter: blur(24px) saturate(145%);
+}
+
+.sidebar,
+.panel,
+.stat-card,
+.modal,
+.auth-card,
+.vault-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.sidebar::before,
+.panel::before,
+.stat-card::before,
+.modal::before,
+.auth-card::before,
+.vault-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(125deg, rgba(255,255,255,.16), transparent 18%, transparent 72%, rgba(116,61,255,.1)),
+    radial-gradient(circle at 90% 0%, rgba(136, 70, 255, .16), transparent 32%);
+  opacity: .72;
+}
+
+.sidebar > *, .panel > *, .stat-card > *, .modal > *, .auth-card > *, .vault-card > * { position: relative; z-index: 1; }
+
+.sidebar nav button.active,
+.transaction-tabs button.active,
+.primary {
+  background: linear-gradient(135deg, rgba(91, 72, 255, .95), rgba(145, 48, 255, .92)) !important;
+  border-color: rgba(194, 165, 255, .72) !important;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.12) inset, 0 12px 34px rgba(110, 44, 255, .42), 0 0 26px rgba(126, 63, 255, .28) !important;
+}
+
+.stat-card:hover,
+.panel:hover,
+.transactions-table-row:hover,
+.recent-transaction-row:hover {
+  border-color: rgba(188, 165, 255, .52) !important;
+  box-shadow: 0 26px 75px rgba(0,0,20,.5), 0 0 34px rgba(111,60,255,.12), inset 0 1px 0 rgba(255,255,255,.22) !important;
+}
+
+.transactions-table-row {
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 8px 22px rgba(0,0,18,.22) !important;
+  transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease;
+}
+.transactions-table-row:hover { transform: translateY(-1px); }
+
+.transaction-merchant-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 36px;
+  border: 1px solid rgba(255,255,255,.16);
+  background: linear-gradient(145deg, rgba(72,57,148,.8), rgba(16,22,54,.88));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 8px 20px rgba(0,0,20,.32), 0 0 18px rgba(115,68,255,.16);
+  overflow: hidden;
+  position: relative;
+}
+.transaction-merchant-logo img { width: 23px; height: 23px; object-fit: contain; filter: drop-shadow(0 2px 5px rgba(0,0,0,.35)); }
+.transaction-merchant-logo.fallback.income { background: linear-gradient(145deg, rgba(26,126,93,.78), rgba(10,46,43,.9)); }
+.transaction-merchant-logo.fallback.expense { background: linear-gradient(145deg, rgba(126,45,85,.72), rgba(48,18,48,.9)); }
+.merchant-initials { font-size: .72rem; font-weight: 800; letter-spacing: .02em; }
+.merchant-direction { position: absolute; right: 1px; bottom: 0; opacity: .8; }
+
+.recent-transaction-row .transaction-merchant-logo { width: 34px; height: 34px; flex-basis: 34px; }
+
+.recharts-wrapper svg { filter: drop-shadow(0 0 12px rgba(125, 66, 255, .18)); }
+.recharts-area-area { filter: drop-shadow(0 0 12px rgba(153, 68, 255, .32)); }
+
+/* Use the whole available desktop canvas instead of leaving a large dead column. */
+.app-shell {
+  width: 100%;
+  max-width: none;
+  grid-template-columns: clamp(248px, 15.5vw, 292px) minmax(0, 1fr);
+}
+
+main {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  padding-inline: clamp(26px, 2.4vw, 52px);
+}
+
+main > *,
+.topbar,
+.stats-grid,
+.dashboard-grid,
+.transactions-layout,
+.transactions-shell,
+.goals-reference-page,
+.reference-page-toolbar,
+.reference-kpi-grid,
+.reference-content-grid,
+.table-panel {
+  width: 100%;
+  max-width: none !important;
+}
+
+.dashboard-grid {
+  grid-template-columns: minmax(0, 1.55fr) minmax(340px, .95fr);
+}
+
+.dashboard-grid.lower {
+  grid-template-columns: minmax(300px, .95fr) minmax(300px, .95fr) minmax(360px, 1.2fr);
+}
+
+.transactions-layout {
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 22vw, 370px);
+}
+
+.reference-content-grid {
+  grid-template-columns: minmax(0, 1fr) clamp(280px, 21vw, 360px);
+}
+
+.auth-screen,
+.vault-screen {
+  width: 100%;
+  min-width: 100%;
+  background:
+    radial-gradient(circle at 50% 35%, rgba(95, 59, 220, .13), transparent 32%),
+    linear-gradient(180deg, #060918, #050817);
+}
+
+.auth-card {
+  width: min(100%, 31rem);
+}
+
+@media (min-width: 1700px) {
+  main { padding-inline: clamp(42px, 3vw, 68px); }
+  .stats-grid { gap: 20px; }
+  .dashboard-grid,
+  .dashboard-grid.lower,
+  .reference-content-grid { gap: 20px; }
+  .panel { padding: 24px 26px; }
+}
+
+@media (max-width: 1250px) {
+  .app-shell { grid-template-columns: 224px minmax(0, 1fr); }
+  .dashboard-grid.lower { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .recent-panel { grid-column: 1 / -1; }
+  .transactions-layout,
+  .reference-content-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
+  .app-shell { display: block; }
+  main { padding-inline: 14px; }
+  .dashboard-grid,
+  .dashboard-grid.lower { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sidebar nav button.active::after {
+    content: '';
+    position: absolute;
+    inset: -35% -10%;
+    background: linear-gradient(110deg, transparent 35%, rgba(255,255,255,.2) 50%, transparent 65%);
+    transform: translateX(-120%);
+    animation: glass-shimmer 7s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @keyframes glass-shimmer { 0%, 72%, 100% { transform: translateX(-120%); } 82% { transform: translateX(120%); } }
+}

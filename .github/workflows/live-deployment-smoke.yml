@@ -1,0 +1,70 @@
+name: Live deployment smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      app_url:
+        description: Public Finance Planner deployment URL
+        required: false
+        default: https://finance.luisbenedikt.de
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-deployment-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public-deployment:
+    name: Public deployment evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      LIVE_APP_URL: ${{ inputs.app_url || 'https://finance.luisbenedikt.de' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The public URL normally runs main while a pull request tests proposed
+      # fixes. Preserve the evidence even when the current deployment is broken;
+      # standard CI remains the source-change gate for this branch.
+      - name: Run non-destructive HTTP smoke
+        id: http_smoke
+        continue-on-error: true
+        run: node scripts/live-deployment-smoke.mjs
+
+      - name: Run headless-browser smoke
+        id: browser_smoke
+        continue-on-error: true
+        run: node scripts/live-browser-smoke.mjs
+
+      - name: Summarize live evidence
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Live Finance Planner deployment smoke'
+            echo
+            echo "Target: \`${LIVE_APP_URL}\`"
+            echo
+            echo "- HTTP smoke: **${{ steps.http_smoke.outcome }}**"
+            echo "- Browser smoke: **${{ steps.browser_smoke.outcome }}**"
+            echo
+            echo 'The live URL may still serve `main`; failures here are runtime evidence, not proof that the pull-request fix failed.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload live deployment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-deployment-smoke
+          path: |
+            artifacts/live-deployment-smoke.json
+            artifacts/live-browser-smoke.json
+            artifacts/live-browser-mobile.png
+          if-no-files-found: warn
+          retention-days: 30

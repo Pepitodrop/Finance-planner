@@ -11,10 +11,25 @@ export interface GoogleSubscriptionRecord {
   status: SubscriptionStatus
 }
 
+export interface GoogleSubscriptionCapability {
+  enabled: boolean
+  source: 'gmail' | 'custom' | 'invalid'
+  configured: boolean
+  ready: boolean
+  connected?: boolean
+  reason?: string
+  requiredScopes?: string[]
+  limitations: string[]
+  lastSyncAt?: string
+}
+
 export interface GoogleSubscriptionConnection {
   connected: boolean
+  source?: 'gmail' | 'custom'
   lastSyncAt?: string
   subscriptions: GoogleSubscriptionRecord[]
+  limitations?: string[]
+  capability?: GoogleSubscriptionCapability
   unavailableReason?: string
 }
 
@@ -53,6 +68,8 @@ export function normalizeGoogleSubscriptions(records: GoogleSubscriptionRecord[]
   const unique = new Map<string, Subscription>()
   for (const record of records) {
     if (!record.externalId || !Number.isSafeInteger(record.amountCents) || record.amountCents < 0 || record.currency !== 'EUR') continue
+    if (!['weekly', 'monthly', 'quarterly', 'yearly'].includes(record.billingInterval)) continue
+    if (!['active', 'paused', 'cancelled', 'expired'].includes(record.status)) continue
     unique.set(record.externalId, {
       id: `google:${record.externalId}`,
       externalId: record.externalId,
@@ -78,32 +95,49 @@ export function reconcileGoogleSubscriptions(state: AppState, imported: Subscrip
 }
 
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(url, { ...init, credentials: 'include', headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers } })
+  const response = await fetch(url, {
+    ...init,
+    credentials: 'include',
+    cache: 'no-store',
+    headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
+  })
   const payload = await response.json().catch(() => ({})) as T & { error?: { message?: string } }
   if (!response.ok) throw new Error(payload.error?.message || `Google subscriptions request failed (${response.status}).`)
   return payload
 }
 
-// Strips OAuth-specific query params from a candidate return URL before it's
-// sent as redirectUri -- prevents a stale code/state/error from a previous
-// attempt leaking into a fresh connection request if the user retries from
-// the same page without a full navigation in between.
+export function getGoogleSubscriptionCapability(): Promise<GoogleSubscriptionCapability> {
+  return request('/api/subscriptions/google/capability')
+}
+
+// Strips OAuth-specific query params (and any hash) from a candidate return
+// URL before it's sent as redirectUri -- prevents a stale code/state/error
+// from a previous attempt leaking into a fresh connection request if the
+// user retries from the same page without a full navigation in between.
 function cleanReturnUrl(returnUrl: string): string {
   const url = new URL(returnUrl)
-  for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider']) url.searchParams.delete(key)
+  url.hash = ''
+  for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'connected']) url.searchParams.delete(key)
   return url.toString()
 }
 
 export async function startGoogleSubscriptionConnection(returnUrl = window.location.href): Promise<void> {
   const result = await request<{ redirectUrl?: string }>('/api/subscriptions/google/start', { method: 'POST', body: JSON.stringify({ redirectUri: cleanReturnUrl(returnUrl) }) })
-  if (!result.redirectUrl?.startsWith('https://accounts.google.com/')) throw new Error('Google did not return a valid authorization address.')
-  window.location.assign(result.redirectUrl)
+  if (!result.redirectUrl) throw new Error('Google did not return an authorization address.')
+  // Origin check (not just startsWith) so a redirect URL like
+  // https://accounts.google.com.evil.example/... can never pass -- it would
+  // satisfy a naive prefix check but isn't the real Google origin.
+  const authorization = new URL(result.redirectUrl)
+  if (authorization.protocol !== 'https:' || authorization.origin !== 'https://accounts.google.com') {
+    throw new Error('Google did not return a valid authorization address.')
+  }
+  window.location.assign(authorization.toString())
 }
 
 export async function syncGoogleSubscriptions(): Promise<GoogleSubscriptionConnection> {
-  return request<GoogleSubscriptionConnection>('/api/subscriptions/google/sync', { method: 'POST' })
+  return request('/api/subscriptions/google/sync', { method: 'POST', body: '{}' })
 }
 
-export async function disconnectGoogleSubscriptions(deleteImportedData = false): Promise<GoogleSubscriptionDisconnectResult> {
-  return request<GoogleSubscriptionDisconnectResult>('/api/subscriptions/google', { method: 'DELETE', body: JSON.stringify({ deleteImportedData }) })
+export function disconnectGoogleSubscriptions(deleteImportedData = false): Promise<GoogleSubscriptionDisconnectResult> {
+  return request('/api/subscriptions/google', { method: 'DELETE', body: JSON.stringify({ deleteImportedData }) })
 }

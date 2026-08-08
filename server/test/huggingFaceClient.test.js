@@ -3,6 +3,8 @@ import test from 'node:test'
 import { createHuggingFaceChatTransport } from '../src/huggingFaceClient.js'
 
 const revision = '768f209d9ea81521153ed38c47d515654e938aea'
+const model = 'Qwen/Qwen3-4B-Thinking-2507:fastest'
+const messages = [{ role: 'user', content: 'analyse' }]
 
 test('requires a server-side token', () => {
   assert.throws(() => createHuggingFaceChatTransport(), /HF_TOKEN/)
@@ -10,7 +12,7 @@ test('requires a server-side token', () => {
 
 test('requires an immutable model revision', async () => {
   const transport = createHuggingFaceChatTransport({ token: 'server-secret', fetchImpl: async () => { throw new Error('must not call') } })
-  await assert.rejects(() => transport.chatCompletion({ model: 'model', messages: [] }), /immutable Hugging Face model revision/)
+  await assert.rejects(() => transport.chatCompletion({ model, messages }), /immutable Hugging Face model revision/)
 })
 
 test('calls the Hugging Face OpenAI-compatible router with structured output and pinned revision', async () => {
@@ -23,11 +25,7 @@ test('calls the Hugging Face OpenAI-compatible router with structured output and
     })
   }
   const transport = createHuggingFaceChatTransport({ token: 'server-secret', fetchImpl })
-  const content = await transport.chatCompletion({
-    model: 'Qwen/Qwen3-4B-Thinking-2507:fastest',
-    revision,
-    messages: [{ role: 'user', content: 'analyse' }],
-  })
+  const content = await transport.chatCompletion({ model, revision, messages })
 
   assert.match(request.url, /router\.huggingface\.co\/v1\/chat\/completions$/)
   assert.equal(request.init.headers.authorization, 'Bearer server-secret')
@@ -39,16 +37,20 @@ test('calls the Hugging Face OpenAI-compatible router with structured output and
   assert.equal(body.response_format.json_schema.schema.additionalProperties, false)
   assert.equal(body.temperature, 0.1)
   assert.equal(body.revision, revision)
+  assert.deepEqual(body.messages, messages)
   assert.equal(content, '{"summary":"ok","signals":[],"confidence":0.8}')
 })
 
-test('does not expose tokens in upstream error messages', async () => {
+test('does not expose tokens or provider response bodies in upstream error messages', async () => {
   const transport = createHuggingFaceChatTransport({
     token: 'server-secret',
-    fetchImpl: async () => new Response('rate limited', { status: 429 }),
+    retries: 0,
+    fetchImpl: async () => new Response('rate limited with provider-only detail', { status: 429 }),
   })
   await assert.rejects(
-    () => transport.chatCompletion({ model: 'model', revision, messages: [] }),
-    (error) => error.message.includes('429') && !error.message.includes('server-secret'),
+    () => transport.chatCompletion({ model, revision, messages }),
+    (error) => error.message.includes('429')
+      && !error.message.includes('server-secret')
+      && !error.message.includes('provider-only detail'),
   )
 })

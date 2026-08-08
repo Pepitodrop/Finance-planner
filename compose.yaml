@@ -78,17 +78,29 @@ services:
       # therefore always a trusted proxy here, not an operator choice.
       TRUST_PROXY: "true"
       APP_ORIGIN: ${APP_ORIGIN:-http://localhost:8080}
-      AUTH_MODE: ${AUTH_MODE:-local}
+      # Google is the safe Compose default. Production runtime validation still
+      # rejects missing Google credentials and never falls back to local auth.
+      AUTH_MODE: ${AUTH_MODE:-google}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_SUBSCRIPTIONS_ENABLED: ${GOOGLE_SUBSCRIPTIONS_ENABLED:-false}
+      GOOGLE_SUBSCRIPTIONS_SOURCE: ${GOOGLE_SUBSCRIPTIONS_SOURCE:-gmail}
+      GOOGLE_SUBSCRIPTIONS_SCOPES: ${GOOGLE_SUBSCRIPTIONS_SCOPES:-openid email profile https://www.googleapis.com/auth/gmail.readonly}
+      GOOGLE_SUBSCRIPTIONS_GMAIL_QUERY: ${GOOGLE_SUBSCRIPTIONS_GMAIL_QUERY:-}
+      GOOGLE_SUBSCRIPTIONS_MAX_MESSAGES: ${GOOGLE_SUBSCRIPTIONS_MAX_MESSAGES:-100}
+      GOOGLE_SUBSCRIPTIONS_DATA_SOURCE: ${GOOGLE_SUBSCRIPTIONS_DATA_SOURCE:-}
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
+      WEBAUTHN_RP_NAME: ${WEBAUTHN_RP_NAME:-Finance Planner}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-2592000}
       AUTH_MASTER_KEY: ${AUTH_MASTER_KEY:-}
       TEST_ACCOUNT_EMAIL: ${TEST_ACCOUNT_EMAIL:-}
       TEST_ACCOUNT_PASSWORD_HASH: ${TEST_ACCOUNT_PASSWORD_HASH:-}
       RELEASE_VERSION: ${RELEASE_VERSION:-0.2.0}
       RELEASE_SHA: ${RELEASE_SHA:-unknown}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
+      COBOL_BANKING_REQUIRED: ${COBOL_BANKING_REQUIRED:-true}
 
-      # Governed hosted Hugging Face reasoning
+      # Governed hosted Hugging Face reasoning and receipt vision.
       HF_TOKEN: ${HF_TOKEN:-}
       HF_TIMEOUT_MS: ${HF_TIMEOUT_MS:-30000}
       HF_MODEL: ${HF_MODEL:-Qwen/Qwen3-4B-Thinking-2507:fastest}
@@ -101,6 +113,7 @@ services:
       IP_GEOLOCATION_TIMEOUT_MS: ${IP_GEOLOCATION_TIMEOUT_MS:-4000}
       HF_RECEIPT_MODEL: ${HF_RECEIPT_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct:fastest}
       HF_RECEIPT_TIMEOUT_MS: ${HF_RECEIPT_TIMEOUT_MS:-45000}
+      HF_LIVE_VERIFIED_AT: ${HF_LIVE_VERIFIED_AT:-}
       PUBLIC_DEPLOYMENT: ${PUBLIC_DEPLOYMENT:-false}
       SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET in .env}
       CONNECTOR_MASTER_KEY: ${CONNECTOR_MASTER_KEY:?Set CONNECTOR_MASTER_KEY in .env}
@@ -122,9 +135,18 @@ services:
       PROVIDER_RETRIES: ${PROVIDER_RETRIES:-2}
       GOCARDLESS_SECRET_ID: ${GOCARDLESS_SECRET_ID:-}
       GOCARDLESS_SECRET_KEY: ${GOCARDLESS_SECRET_KEY:-}
+      GOCARDLESS_WEBHOOK_SECRET: ${GOCARDLESS_WEBHOOK_SECRET:-}
+      GOCARDLESS_INSTITUTION_ID: ${GOCARDLESS_INSTITUTION_ID:-}
+      PAYPAL_CONNECTION_MODE: ${PAYPAL_CONNECTION_MODE:-owner}
       PAYPAL_CLIENT_ID: ${PAYPAL_CLIENT_ID:-}
       PAYPAL_CLIENT_SECRET: ${PAYPAL_CLIENT_SECRET:-}
+      PAYPAL_OWNER_USER_ID: ${PAYPAL_OWNER_USER_ID:-}
       PAYPAL_WEBHOOK_SECRET: ${PAYPAL_WEBHOOK_SECRET:-}
+      PAYPAL_PARTNER_MERCHANT_ID: ${PAYPAL_PARTNER_MERCHANT_ID:-}
+      # providers.js historically consumes PAYPAL_ENV while operator tooling
+      # and documentation use PAYPAL_ENVIRONMENT. Keep one canonical setting
+      # and map it into the runtime name here.
+      PAYPAL_ENV: ${PAYPAL_ENVIRONMENT:-sandbox}
       PAYPAL_ENVIRONMENT: ${PAYPAL_ENVIRONMENT:-sandbox}
     ports:
       - "127.0.0.1:${CONNECTOR_PORT:-8787}:8787"
