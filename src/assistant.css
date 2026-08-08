@@ -3,7 +3,15 @@
 .assistant-hero p, .muted { color: var(--fp-color-text-secondary); line-height: var(--fp-line-height-body); margin-top: 8px; }
 
 .ai-model { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: var(--fp-border); border-radius: var(--fp-radius-control); background: var(--fp-color-surface-interactive); min-width: 260px; }
-.ai-model div { min-width: 0; }
+/* min-width: 0 let the badge icon (its own natural min-content is
+   respected by default, unaffected by this rule) claim space first and
+   squeeze the name/subtitle text down to almost nothing (a single
+   truncated character) once ellipsis started working correctly --
+   found via the same visual pass that caught the wrap-related defects
+   above. .assistant-hero has no overflow: hidden, so if this floor
+   ever doesn't fit, the horizontalOverflow acceptance check fails
+   loudly instead of silently hiding content. */
+.ai-model div { min-width: 110px; }
 .ai-model strong, .ai-model span { display: block; }
 /* text-overflow: ellipsis is a no-op without white-space: nowrap -- it
    was declared without it, so the model name never actually truncated

@@ -36,16 +36,7 @@
 .ai-applied-banner strong { display: block; color: var(--fp-color-text-primary); font-size: var(--fp-font-size-supporting); }
 
 .ai-result-list { display: grid; gap: 8px; }
-/* The scores column's 3rd track was a bare "auto", with no protection
-   against being squeezed by its minmax() neighbors when the row's total
-   minimums exceed available width. Combined with the site-wide
-   `body { overflow-wrap: anywhere }` safety net (design-foundation.css),
-   an over-squeezed column doesn't just wrap at word boundaries -- it
-   breaks mid-word, one character per line ("Re/cu/rri/ng/12/%"), found
-   via real-browser visual inspection of finance-intelligence-mixed.
-   130px comfortably fits "Unusual pattern" (the longest label) on one
-   line, with its percentage wrapping cleanly onto its own line at worst. */
-.ai-result { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(165px, .85fr) minmax(130px, auto) minmax(210px, 1.35fr) minmax(100px, auto); align-items: center; gap: 14px; padding: 15px; border: var(--fp-border); border-radius: var(--fp-radius-panel); background: var(--fp-color-surface); }
+.ai-result { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(165px, .85fr) auto minmax(210px, 1.35fr) auto; align-items: center; gap: 14px; padding: 15px; border: var(--fp-border); border-radius: var(--fp-radius-panel); background: var(--fp-color-surface); }
 .ai-result.review-required { border-color: rgb(230 183 90 / 40%); border-left-width: 3px; }
 .ai-result.unanalyzed { grid-template-columns: minmax(0, 1fr) auto; min-height: 64px; padding: 13px 15px; }
 .ai-result.unanalyzed .ai-waiting { justify-self: end; margin: 0; padding: 6px 10px; border: var(--fp-border); border-radius: 999px; color: var(--fp-color-text-muted); background: var(--fp-color-surface-interactive); white-space: nowrap; }
@@ -54,14 +45,31 @@
 .ai-prediction { display: grid; gap: 5px; align-content: start; }
 .ai-prediction b { color: var(--fp-color-text-primary); }
 .ai-prediction span { color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); }
-.ai-scores { display: grid; gap: 5px; color: var(--fp-color-text-secondary); font-size: var(--fp-font-size-metadata); font-variant-numeric: tabular-nums; }
+/* overflow-wrap: normal overrides the site-wide `body { overflow-wrap:
+   anywhere }` safety net specifically here: when this auto-sized grid
+   column gets squeezed, "anywhere" was breaking labels mid-word one
+   character per line ("Re/cu/rri/ng/12/%") instead of at word
+   boundaries, found via real-browser visual inspection. A width floor
+   was tried first but made the row wider than its clipped
+   (overflow: hidden) panel could show, hiding the Apply button/badge
+   entirely -- this fixes the wrap behavior without changing any
+   column widths, so it carries no such risk. */
+.ai-scores { display: grid; gap: 5px; color: var(--fp-color-text-secondary); font-size: var(--fp-font-size-metadata); font-variant-numeric: tabular-nums; overflow-wrap: normal; }
 .ai-scores .warning { color: var(--fp-color-warning); }
 .ai-explanation p { margin: 0; color: var(--fp-color-text-secondary); font-size: var(--fp-font-size-metadata); line-height: 1.5; }
 .ai-alternatives { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; color: var(--fp-color-text-muted); font-size: 0.6875rem; }
 .ai-alternatives span { padding: 3px 7px; border-radius: 999px; background: var(--fp-color-surface-interactive); white-space: nowrap; }
 .ai-decision { display: grid; justify-items: end; gap: 8px; }
 .ai-result .secondary { min-height: 44px; padding: 8px 12px; font-size: var(--fp-font-size-metadata); white-space: nowrap; }
-.review-badge, .trusted-badge { padding: 4px 8px; border-radius: 999px; font-size: 0.625rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+/* white-space: nowrap was tried first, but nowrap text's min-content
+   equals its full rendered width, which forced this auto-sized grid
+   column wider than the panel's clipped (overflow: hidden) bounds
+   could show for the longest badge text ("Needs your review"), hiding
+   the whole decision column. overflow-wrap: normal prevents the
+   original mid-word-break defect without demanding any extra width --
+   worst case this badge wraps to two lines, which is still far more
+   readable than either character salad or invisible content. */
+.review-badge, .trusted-badge { padding: 4px 8px; border-radius: 999px; font-size: 0.625rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; overflow-wrap: normal; }
 .review-badge { color: var(--fp-color-warning); background: var(--fp-color-warning-muted); }
 .trusted-badge { color: var(--fp-color-text-secondary); background: var(--fp-color-surface-interactive); }
 .ai-empty { padding: 26px; text-align: center; color: var(--fp-color-text-muted); }
