@@ -353,7 +353,15 @@ textarea {
 }
 
 @media (forced-colors: active) {
-  :where(.fp-panel-surface, .fp-interactive-surface, .primary, .secondary, .active) {
+  /* :is(), not :where() -- :where() always contributes zero specificity, so
+     it can never beat a plain-class rule like styles.css's
+     ".primary, .secondary { border: 0 }" regardless of import order, making
+     this forced-colors border silently never apply to those two classes.
+     :is() takes on its most specific argument (equal to a single class
+     selector here), which wins on source order since this file loads after
+     styles.css. Found via a real forced-colors accessibility check on the
+     Finance Intelligence page failing on exactly this class pair. */
+  :is(.fp-panel-surface, .fp-interactive-surface, .primary, .secondary, .active) {
     border: 1px solid ButtonText;
   }
 
