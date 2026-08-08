@@ -648,7 +648,7 @@ async function run() {
     // Finance Assistant: ASSIST-01 .. ASSIST-07.
     // -----------------------------------------------------------------
     const assistStates = [
-      ['assistant-hosted-consent', null, `document.body?.innerText.includes('Choose how this runs')`],
+      ['assistant-hosted-consent', null, `/choose how this runs/i.test(document.body?.innerText || '')`],
       ['assistant-hosted-running', 'hosted-running', `document.body?.innerText.includes('Building your financial analysis')`],
       ['assistant-hosted-result', 'success', `document.body?.innerText.includes('Personal financial analysis')`],
       ['assistant-hosted-fallback', 'hosted-fallback', `document.body?.innerText.includes('Rule-based analysis available')`],
@@ -674,7 +674,7 @@ async function run() {
         await waitFor(client, sessionId, `document.body?.innerText.includes('Personal financial analysis')`, 'assistant success state before planning tab')
         await clickButton(client, sessionId, 'Planning')
       },
-      waitExpr: `document.body?.innerText.includes('Learning budget plan') && document.body?.innerText.includes('Deterministic planning')`,
+      waitExpr: `document.body?.innerText.includes('Learning budget plan') && /deterministic planning/i.test(document.body?.innerText || '')`,
       waitDescription: 'assistant-planning',
     })
     report.interactions.learningBudgetIntegration = await evaluate(client, sessionId, `(() => ({
@@ -770,7 +770,7 @@ async function run() {
         await ensureDestination(client, sessionId, 'Receipt Review', 'data-receipt-ready')
         await evaluate(client, sessionId, `window.__financePlannerAcceptanceState('sufficient')`)
       },
-      waitExpr: `document.body?.innerText.includes('Detected items')`,
+      waitExpr: `/detected items/i.test(document.body?.innerText || '')`,
       waitDescription: 'receipt-result-detail',
       scrollTo: 'items',
     })
