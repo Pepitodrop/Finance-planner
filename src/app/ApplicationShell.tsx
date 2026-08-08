@@ -188,6 +188,8 @@ export function ApplicationShell({ activeDestination, onNavigate, children, over
         role="dialog"
         aria-modal="true"
         aria-labelledby="app-more-title"
+        lang="en"
+        data-more-ready="true"
         ref={sheetRef}
       >
         <div className="app-more-sheet__header">

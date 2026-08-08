@@ -180,6 +180,25 @@ async function clickButton(client, sessionId, text) {
   assert.equal(clicked, true, `Button not found or disabled: ${text}`)
 }
 
+// A full page reload always drops the in-memory decrypted vault (by design
+// -- see src/vault.ts), even though the session cookie stays authenticated.
+// Any acceptance step that reloads and then expects the dashboard must
+// re-enter the vault password first, exactly like a real returning user.
+async function unlockVaultAfterReload(client, sessionId, password) {
+  await waitFor(client, sessionId, 'document.body?.innerText.includes("Set up your encrypted vault") || document.body?.innerText.includes("Unlock Finance Planner")', 'vault gate after reload')
+  const vaultMode = await evaluate(client, sessionId, 'document.body.innerText.includes("Set up your encrypted vault") ? "setup" : "unlock"')
+  await evaluate(client, sessionId, `(() => {
+    const inputs = [...document.querySelectorAll('input[type=password]')]
+    for (const input of inputs) {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+      setter.call(input, ${JSON.stringify(password)})
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    return inputs.length
+  })()`)
+  await clickButton(client, sessionId, vaultMode === 'setup' ? 'Turn on encryption' : 'Unlock')
+}
+
 async function setInput(client, sessionId, selector, value) {
   const changed = await evaluate(client, sessionId, `(() => {
     const input = document.querySelector(${JSON.stringify(selector)})
@@ -911,17 +930,28 @@ async function runAcceptance() {
     await clickButton(client, sessionId, 'More')
     await waitFor(client, sessionId, 'Boolean(document.querySelector("#app-more-sheet"))', 'mobile More sheet')
     await clickButton(client, sessionId, 'Data and Backup')
-    await waitFor(client, sessionId, 'document.body?.innerText.includes("Konto und sämtliche Serverdaten löschen")', 'account deletion controls')
+    await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-data-ready=true]"))', 'Data and Backup overview')
+    // Step 13 moved account deletion off the overview and behind its own
+    // typed-phrase gate (DeleteAccountFlow) -- reach it the way a real user
+    // would, via the overview's "Delete account" trigger, rather than
+    // expecting the confirmation input inline on the overview itself.
+    await clickButton(client, sessionId, 'Delete account')
+    await waitFor(client, sessionId, 'Boolean(document.querySelector(".data-tools-subpage--danger"))', 'account deletion typed-phrase gate')
     report.checks.accountDeletion = await evaluate(client, sessionId, `(() => {
-      const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.includes('Konto endgültig löschen'))
-      const input = [...document.querySelectorAll('input')].find((item) => item.closest('label')?.textContent?.includes('DELETE MY ACCOUNT'))
+      const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.includes('Continue to final confirmation'))
+      const input = document.querySelector('.data-tools-subpage--danger .data-tools-form input')
       return { present: Boolean(button && input), initiallyDisabled: Boolean(button?.disabled) }
     })()`)
     assert.deepEqual(report.checks.accountDeletion, { present: true, initiallyDisabled: true })
-    const deletionInputSelector = `.account-deletion-controls input`
+    const deletionInputSelector = `.data-tools-subpage--danger .data-tools-form input`
     await setInput(client, sessionId, deletionInputSelector, 'DELETE MY ACCOUNT')
-    report.checks.accountDeletion.enabledAfterExactConfirmation = await evaluate(client, sessionId, `!document.querySelector('.danger-action')?.disabled`)
+    report.checks.accountDeletion.enabledAfterExactConfirmation = await evaluate(client, sessionId, `!([...document.querySelectorAll('button')].find((item) => item.textContent?.includes('Continue to final confirmation'))?.disabled)`)
     assert.equal(report.checks.accountDeletion.enabledAfterExactConfirmation, true)
+    // Never proceed past the typed gate here: the next step is a real
+    // DELETE /api/auth/account call, which this baseline smoke check must
+    // not trigger against the shared acceptance account.
+    await clickButton(client, sessionId, 'Data and Backup')
+    await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-data-ready=true]")) && !document.querySelector(".data-tools-subpage--danger")', 'back on the Data and Backup overview')
 
     await clickButton(client, sessionId, 'More')
     await waitFor(client, sessionId, 'Boolean(document.querySelector("#app-more-sheet"))', 'mobile More sheet for Finance Assistant')
@@ -944,6 +974,11 @@ async function runAcceptance() {
 
     await client.send('Emulation.clearDeviceMetricsOverride', {}, sessionId)
     await client.send('Page.reload', { ignoreCache: false }, sessionId)
+    // The reload above drops the in-memory decrypted vault (correct,
+    // intentional security behavior -- see src/vault.ts), so the dashboard
+    // will not reappear until the vault is unlocked again, same as any
+    // returning user's real second visit.
+    await unlockVaultAfterReload(client, sessionId, VAULT_PASSWORD)
     await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-dashboard-ready=true]"))', 'online reload before offline test')
     await client.send('Network.emulateNetworkConditions', {
       offline: true,

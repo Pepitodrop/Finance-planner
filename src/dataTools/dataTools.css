@@ -64,9 +64,17 @@
 .data-tools-backup-card strong { color: var(--fp-color-text-primary); }
 .data-tools-backup-card span { color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); line-height: 1.4; }
 
-.data-tools-csv-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 4px; border-top: var(--fp-divider); background: transparent; }
-.data-tools-csv-row-label { display: flex; align-items: center; gap: 10px; color: var(--fp-color-text-secondary); font-weight: 650; }
-.data-tools-plaintext-tag { padding: 3px 8px; border: 1px solid var(--fp-color-warning); border-radius: 999px; color: var(--fp-color-warning); font-size: 0.6875rem; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+/* flex-wrap plus flex-shrink:0/white-space:nowrap on the tag and button:
+   without these, three items (label + "Plaintext" tag + "Export" button)
+   in one row at 390px squeeze so tightly that the tag and button's own
+   text wraps internally ("PLAINTEXT" -> "PLAINT"/"EXT", "Export" ->
+   "Expo"/"rt") -- found via a real screenshot review at 390x844. The
+   label is the one allowed to wrap across lines instead; a button or
+   pill breaking its own word never reads as intentional. */
+.data-tools-csv-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 12px 4px; border-top: var(--fp-divider); background: transparent; }
+.data-tools-csv-row-label { display: flex; flex: 1 1 auto; min-width: 0; align-items: center; gap: 10px; color: var(--fp-color-text-secondary); font-weight: 650; }
+.data-tools-plaintext-tag { flex-shrink: 0; white-space: nowrap; padding: 3px 8px; border: 1px solid var(--fp-color-warning); border-radius: 999px; color: var(--fp-color-warning); font-size: 0.6875rem; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.data-tools-csv-row button { flex-shrink: 0; white-space: nowrap; }
 
 .warning-card { border-color: rgb(230 183 90 / 35%); }
 .warning-card .goal-hero-icon { color: var(--fp-color-warning); }
@@ -78,4 +86,11 @@
 
 @media (forced-colors: active) {
   .data-tools-alert, .data-tools-subpage--danger { border: 1px solid CanvasText; }
+  /* .data-tools-link sets border: 0 unconditionally (a plain text-link
+     treatment, e.g. "Change", "Use encrypted backup instead") -- under
+     forced-colors it would otherwise have no visible boundary at all,
+     found via a real forced-colors accessibility check on DATA-05's CSV
+     warning dialog, matching the same fix already applied to
+     .assistant-modes button / .assistant-consent-toggle. */
+  .data-tools-link, .data-tools-back { border: 1px solid CanvasText; }
 }

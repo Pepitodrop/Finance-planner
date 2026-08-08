@@ -97,7 +97,13 @@
 }
 
 @media (max-width: 760px) {
-  nav { grid-template-columns: repeat(6, 1fr) !important; }
+  /* Dead legacy override: no <nav> on this or any other page actually
+     wants 6 equal columns. Its !important also silently fought the real
+     5-item bottom nav's own explicit column count (app-shell.css's
+     .app-mobile-navigation) and, once a second <nav> (the grouped More
+     sheet) existed to reuse the bare tag selector against, broke that
+     one outright -- overflowing its 390px sheet to 1311px and truncating
+     every destination label. Found via a real screenshot review. */
   .assistant-modes { grid-template-columns: repeat(3, 1fr); position: sticky; top: 0; z-index: 2; }
   .assistant-engine { grid-template-columns: 1fr; }
   .learning-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); overflow-x: auto; }

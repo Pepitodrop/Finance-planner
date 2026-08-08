@@ -105,6 +105,12 @@ jobs:
           ACCEPTANCE_APP_URL: http://127.0.0.1:4173
           FINANCE_INTELLIGENCE_ACCEPTANCE_ARTIFACT_PATH: artifacts/finance-intelligence-production-acceptance.json
         run: node scripts/run-finance-intelligence-production-acceptance-stable.mjs
+      - name: Run Step 13 exhaustive Data, Subscriptions & Account acceptance
+        if: always()
+        env:
+          ACCEPTANCE_APP_URL: http://127.0.0.1:4173
+          DATA_PRIVACY_ACCEPTANCE_ARTIFACT_PATH: artifacts/data-privacy-production-acceptance.json
+        run: node scripts/run-data-privacy-production-acceptance-stable.mjs
       - name: Verify authenticated operational metrics
         shell: bash
         run: |
@@ -182,6 +188,13 @@ jobs:
             artifacts/auto-analysis-*.png
             artifacts/assistant-*.png
             artifacts/receipt-*.png
+            artifacts/data-privacy-production-acceptance.json
+            artifacts/more-*.png
+            artifacts/account-session-*.png
+            artifacts/data-*.png
+            artifacts/vault-password-*.png
+            artifacts/sync-status-*.png
+            artifacts/subscriptions-*.png
             artifacts/backend-resilience.json
             artifacts/operational-metrics.prom
             artifacts/production-load-acceptance.json

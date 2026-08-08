@@ -115,8 +115,9 @@
 /* SUB-03 / SUB-04 / SUB-05 / SUB-06: status header + list */
 .subscriptions-status-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--fp-space-3);
+  gap: var(--fp-space-2) var(--fp-space-3);
   padding: var(--fp-space-4) var(--fp-panel-padding-wide, var(--fp-space-5));
 }
 
@@ -130,6 +131,8 @@
 
 .subscriptions-status-text {
   display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
   gap: 2px;
 }
 
@@ -143,6 +146,8 @@
 }
 
 .subscriptions-sync-button {
+  flex-shrink: 0;
+  white-space: nowrap;
   margin-left: auto;
 }
 
@@ -316,4 +321,9 @@
 @media (forced-colors: active) {
   .subscriptions-alert { border-left: 1px solid CanvasText; }
   .subscriptions-manage-option--remove { border-left: 1px solid CanvasText; }
+  /* .subscriptions-manage-link sets border: 0 unconditionally (a plain
+     text-link treatment, "Manage connection ->") -- under forced-colors it
+     would otherwise have no visible boundary at all, same fix as
+     .data-tools-link in dataTools.css. */
+  .subscriptions-manage-link { border: 1px solid CanvasText; }
 }

@@ -1,6 +1,7 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { FrontendExperience } from '../FrontendExperience'
 import { ConfirmationDialog } from './ConfirmationDialog'
 
 afterEach(cleanup)
@@ -44,5 +45,23 @@ describe('ConfirmationDialog', () => {
   it('uses alertdialog semantics only when explicitly requested', () => {
     render(<ConfirmationDialog open severity="danger" heading="Delete?" headingId="h" confirmLabel="Delete" onConfirm={vi.fn()} onClose={vi.fn()} role="alertdialog">body</ConfirmationDialog>)
     expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+  })
+
+  // Regression: FrontendExperience runs a global, class-based (.modal)
+  // MutationObserver predating useDialog, written for the legacy raw
+  // transaction dialog -- it used to unconditionally overwrite every
+  // .modal element's role back to "dialog", silently downgrading this
+  // component's own explicit role="alertdialog" (e.g. DATA-10's final,
+  // point-of-no-return account-deletion confirmation) the instant it
+  // mounted anywhere inside the real app tree. Invisible to a
+  // ConfirmationDialog-only render; only reproduces with both mounted
+  // together, matching how bootstrap.tsx actually renders them.
+  it('keeps its own alertdialog role when FrontendExperience is mounted alongside it', async () => {
+    render(<>
+      <FrontendExperience/>
+      <ConfirmationDialog open severity="danger" heading="Permanently delete your account?" headingId="h" confirmLabel="Delete account" onConfirm={vi.fn()} onClose={vi.fn()} role="alertdialog">body</ConfirmationDialog>
+    </>)
+    await waitFor(() => expect(screen.getByRole('alertdialog')).toBeInTheDocument())
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 })

@@ -30,7 +30,7 @@ const CONNECTIONS_ACCEPTANCE_MODES: ConnectionsAcceptanceMode[] = ['empty', 'pop
 const AI_ACCEPTANCE_MODES: AiPanelAcceptanceMode[] = ['ready', 'progress', 'results', 'anomaly', 'applied', 'error', 'empty']
 const ASSISTANT_ACCEPTANCE_MODES: AssistantAcceptanceMode[] = ['hosted-consent', 'hosted-running', 'success', 'hosted-fallback', 'local-selected', 'local-running']
 const RECEIPT_ACCEPTANCE_MODES: ReceiptAcceptanceMode[] = ['selected', 'running', 'sufficient', 'insufficient', 'receipt-error']
-const DATA_ACCEPTANCE_MODES: DataToolsAcceptanceMode[] = ['vault-password', 'create-backup', 'restore-backup', 'restore-failure', 'reset', 'csv-warning', 'delete-account', 'delete-account-final', 'delete-failure', 'cloud-sync', 'sync-offline', 'sync-error']
+const DATA_ACCEPTANCE_MODES: DataToolsAcceptanceMode[] = ['overview', 'vault-password', 'create-backup', 'restore-backup', 'restore-failure', 'reset', 'reset-complete', 'csv-warning', 'delete-account', 'delete-account-final', 'delete-failure', 'cloud-sync', 'sync-offline', 'sync-error']
 const SUBSCRIPTIONS_ACCEPTANCE_MODES: SubscriptionsAcceptanceMode[] = ['intro', 'preflight', 'connected', 'syncing', 'no-subscriptions', 'unavailable', 'subscription-sync-error', 'manage']
 
 function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
@@ -220,7 +220,7 @@ function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
       {tab === 'ai' && <AiPanel key={aiAcceptanceMode ?? 'live'} transactions={aiAcceptanceMode === 'empty' ? [] : state.transactions} onApply={applyAiSuggestion} acceptanceMode={aiAcceptanceMode ?? undefined}/>}
       {tab === 'assistant' && <FinanceAssistant key={assistantAcceptanceMode ?? 'live'} state={state} budgetAcceptanceMode={planningAcceptanceMode === 'budget-result' ? 'result' : planningAcceptanceMode === 'budget-consent' ? 'consent' : undefined} acceptanceMode={assistantAcceptanceMode ?? undefined}/>}
       {tab === 'receipt' && <ReceiptReview key={receiptAcceptanceMode ?? 'live'} acceptanceMode={receiptAcceptanceMode ?? undefined}/>}
-      {tab === 'data' && <DataTools userId={userId} state={state} onRestore={setState} onReset={resetAll} acceptanceMode={dataAcceptanceMode ?? undefined}/>}
+      {tab === 'data' && <DataTools key={dataAcceptanceMode ?? 'live'} userId={userId} state={state} onRestore={setState} onReset={resetAll} acceptanceMode={dataAcceptanceMode ?? undefined}/>}
       {tab === 'account' && <AccountPage user={user} onLogout={onLogout} onNavigateToData={() => navigate('data')}/>}
       {tab === 'subscriptions' && <SubscriptionsPage key={subscriptionsAcceptanceMode ?? 'live'} state={state} onApply={setState} acceptanceMode={subscriptionsAcceptanceMode ?? undefined}/>}
     {deletedTransaction && <div className="undo-toast" role="status">

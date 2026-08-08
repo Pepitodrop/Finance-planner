@@ -19,11 +19,13 @@ interface DataToolsProps {
 }
 
 export type DataToolsAcceptanceMode =
+  | 'overview'
   | 'vault-password'
   | 'create-backup'
   | 'restore-backup'
   | 'restore-failure'
   | 'reset'
+  | 'reset-complete'
   | 'csv-warning'
   | 'delete-account'
   | 'delete-account-final'
@@ -65,7 +67,9 @@ export function DataTools({ userId, state, onRestore, onReset, acceptanceMode }:
   })
   const [csvDialogOpen, setCsvDialogOpen] = useState(acceptanceMode === 'csv-warning')
   const [resetDialogOpen, setResetDialogOpen] = useState(acceptanceMode === 'reset')
-  const [resetMessage, setResetMessage] = useState('')
+  // DATA-08: the completed-reset state, without ever performing a real reset
+  // -- acceptance fixtures must not mutate real persistent user data.
+  const [resetMessage, setResetMessage] = useState(acceptanceMode === 'reset-complete' ? 'Your accounts, transactions, and goals now show Finance Planner’s example dataset. Add your own transactions any time — nothing here is permanent.' : '')
   const [syncStatus, setSyncStatus] = useState<SyncStatus>(() => {
     if (acceptanceMode === 'sync-offline') return { phase: 'offline', message: 'Waiting for a connection.' }
     if (acceptanceMode === 'sync-error') return { phase: 'error', message: 'The last save attempt failed. Your data is safe on this device.' }
