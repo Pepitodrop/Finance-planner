@@ -113,8 +113,16 @@ async function waitFor(client, sessionId, expression, description, timeoutMs = D
     hasAiHook: typeof window.__financePlannerAcceptanceState === 'function',
     aiHookSource: window.__financePlannerAcceptanceState?.toString()?.slice(0, 700),
     hasAutoHook: typeof window.__financePlannerAutoAcceptanceState === 'function',
-    bodyTextSample: document.body?.innerText?.slice(0, 800),
+    bodyTextSample: document.body?.innerText?.slice(0, 1600),
+    bodyTextLength: document.body?.innerText?.length,
     aiPageRootOuterHTMLStart: document.querySelector('.ai-page')?.outerHTML?.slice(0, 200),
+    // Receipt-page structural markers -- cheaper and more precise than text
+    // matching for telling apart "empty" / "insufficient" / "sufficient
+    // result" render branches when a waitExpr fails on that page.
+    hasReceiptEmptyState: Boolean(document.querySelector('.receipt-empty')),
+    hasReceiptInsufficientState: Boolean(document.querySelector('.receipt-insufficient')),
+    hasReceiptScoreSummary: Boolean(document.querySelector('.receipt-score-summary')),
+    hasReceiptItemsSection: Boolean(document.querySelector('.receipt-items')),
   }))()`).catch((reason) => ({ diagnosticError: reason instanceof Error ? reason.message : String(reason) }))
   throw new Error(`Timed out waiting for ${description}. Last value: ${JSON.stringify(lastValue)}. Last eval error: ${lastEvalError || 'none'}. Diagnostics: ${JSON.stringify(diagnostics)}`)
 }
