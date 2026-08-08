@@ -84,11 +84,47 @@ describe('production deployment contract', () => {
 
   it('revalidates the application shell while caching hashed assets immutably', () => {
     const nginx = read('deploy/nginx.conf')
+    const securitySnippet = read('deploy/security-headers.conf')
 
     expect(nginx).toContain('location = /index.html')
     expect(nginx).toContain('Cache-Control "no-cache, no-store, must-revalidate"')
     expect(nginx).toContain('Cache-Control "public, immutable"')
-    expect(nginx).toContain('Cross-Origin-Opener-Policy same-origin')
-    expect(nginx).toContain('Cross-Origin-Resource-Policy same-origin')
+    expect(securitySnippet).toContain('Cross-Origin-Opener-Policy same-origin')
+    expect(securitySnippet).toContain('Cross-Origin-Resource-Policy same-origin')
+  })
+
+  it('never lets a location-specific add_header silently strip the shared security headers', () => {
+    // nginx does not merge add_header directives across scopes: a location
+    // block that declares its own add_header (e.g. a location-specific
+    // Cache-Control) stops inheriting every add_header from the server
+    // block, not just the one it redeclares. Any such location must
+    // `include` the shared security-headers snippet so the headers survive.
+    const nginx = read('deploy/nginx.conf')
+    const securitySnippet = read('deploy/security-headers.conf')
+
+    const requiredHeaders = [
+      'Strict-Transport-Security',
+      'Content-Security-Policy',
+      'X-Content-Type-Options',
+      'X-Frame-Options',
+      'Referrer-Policy',
+      'Permissions-Policy',
+      'Cross-Origin-Opener-Policy',
+      'Cross-Origin-Resource-Policy',
+    ]
+    for (const header of requiredHeaders) {
+      expect(securitySnippet).toContain(`add_header ${header} `)
+    }
+
+    const includeDirective = 'include /etc/nginx/security-headers.conf;'
+    expect(nginx).toContain(includeDirective)
+
+    const locationBlocks = [...nginx.matchAll(/location\s+[^{]*\{([^}]*)\}/g)].map((match) => match[1])
+    expect(locationBlocks.length).toBeGreaterThan(0)
+    for (const block of locationBlocks) {
+      if (/\badd_header\s/.test(block)) {
+        expect(block).toContain(includeDirective)
+      }
+    }
   })
 })
