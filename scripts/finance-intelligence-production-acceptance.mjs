@@ -209,7 +209,12 @@ function geometryScript(readyAttribute) {
       navObscuredBy,
       scrollHeight: document.documentElement.scrollHeight,
       viewportHeight: innerHeight,
-      colorFraudTerms: /\\bfraud\\b|suspicious|unauthorized|flagged for security/i.test(document.body.innerText),
+      // FI-04's own correct copy explicitly denies being a fraud check
+      // ("...a statistical comparison, not a fraud check") -- allow that
+      // exact legitimate denial while still catching any other, wrongly
+      // fraud-implying use of the word (e.g. "fraud detection", "potential
+      // fraud").
+      colorFraudTerms: /\\bfraud\\b(?!\\s*check)|suspicious|unauthorized|flagged for security/i.test(document.body.innerText),
       colorRedAlert: [...document.querySelectorAll('[class*="error"],[class*="warning"],[class*="anomaly"]')].some((el) => { const c = getComputedStyle(el).color; return /rgb\\(2[0-9][0-9], ?[0-3]?[0-9], ?[0-3]?[0-9]\\)/.test(c) }),
     }
   })()`
