@@ -16,6 +16,24 @@ import {
 import { RUNTIME_SURFACE_PRIORITY } from './runtime-surfaces/runtimeSurfacePolicy'
 import { runtimeSurfaceRegistration, useRuntimeSurface } from './runtime-surfaces/runtimeSurfaceContext'
 
+// Acceptance-only overrides for states that otherwise require either a
+// 30-second real-time delay (install/iOS-guide) or a real, high-usage
+// navigator.storage.estimate() result (storage warning/critical/protection)
+// that a browser automation harness cannot deterministically produce.
+// Self-registers its own global function (rather than reusing App.tsx's
+// __financePlannerAcceptanceState) because this component is mounted
+// directly in bootstrap.tsx, outside AuthGate/App's dispatcher. Gated the
+// same way as every other acceptance-fixture surface in this codebase --
+// never registered, and this prop has no effect, unless
+// VITE_ACCEPTANCE_FIXTURES=true.
+export type MobileRuntimeAcceptanceMode = 'install' | 'ios-guide' | 'storage-warning' | 'storage-critical' | 'storage-protection'
+const RUNTIME_ACCEPTANCE_MODES: MobileRuntimeAcceptanceMode[] = ['install', 'ios-guide', 'storage-warning', 'storage-critical', 'storage-protection']
+const FIXTURE_STORAGE_HEALTH: Record<'storage-warning' | 'storage-critical' | 'storage-protection', StorageHealth> = {
+  'storage-warning': { supported: true, persisted: false, usage: 850_000_000, quota: 1_000_000_000, usageRatio: 0.85, pressure: 'warning' },
+  'storage-critical': { supported: true, persisted: false, usage: 970_000_000, quota: 1_000_000_000, usageRatio: 0.97, pressure: 'critical' },
+  'storage-protection': { supported: true, persisted: false, usage: 100_000_000, quota: 1_000_000_000, usageRatio: 0.1, pressure: 'healthy' },
+}
+
 const DISMISSAL_KEY = 'finance-planner-install-dismissed-until'
 const STORAGE_DISMISSAL_KEY = 'finance-planner-storage-dismissed-until'
 const INSTALL_OFFER_DELAY_MS = 30_000
@@ -39,6 +57,7 @@ export function MobileRuntime() {
   const [dismissedUntil, setDismissedUntil] = useState(() => readDeadline(DISMISSAL_KEY))
   const [storageDismissedUntil, setStorageDismissedUntil] = useState(() => readDeadline(STORAGE_DISMISSAL_KEY))
   const [storageHealth, setStorageHealth] = useState<StorageHealth>(EMPTY_STORAGE_HEALTH)
+  const [acceptanceMode, setAcceptanceMode] = useState<MobileRuntimeAcceptanceMode | null>(null)
   const [registration, setRegistration] = useState<ServiceWorkerRegistration>()
   const [updateReady, setUpdateReady] = useState(false)
   const [installing, setInstalling] = useState(false)
@@ -57,29 +76,38 @@ export function MobileRuntime() {
   ), [])
 
   const now = Date.now()
-  const canInstall = shouldOfferInstall({
-    standalone,
-    promptAvailable: Boolean(installPrompt),
-    offerEligible: installOfferEligible,
-    dismissedUntil,
-    now,
-  })
-  const showIosGuide = installOfferEligible && shouldShowIosInstallGuide({
-    standalone,
-    promptAvailable: Boolean(installPrompt),
-    dismissedUntil,
-    now,
-    iosSafari,
-  })
-  const shouldOfferStorageProtection = standalone
-    && storageHealth.supported
-    && !storageHealth.persisted
-    && storageDismissedUntil <= now
-    && !canInstall
-    && !showIosGuide
+  const effectiveStorageHealth = acceptanceMode && acceptanceMode !== 'install' && acceptanceMode !== 'ios-guide'
+    ? FIXTURE_STORAGE_HEALTH[acceptanceMode]
+    : storageHealth
+  const canInstall = acceptanceMode
+    ? acceptanceMode === 'install'
+    : shouldOfferInstall({
+      standalone,
+      promptAvailable: Boolean(installPrompt),
+      offerEligible: installOfferEligible,
+      dismissedUntil,
+      now,
+    })
+  const showIosGuide = acceptanceMode
+    ? acceptanceMode === 'ios-guide'
+    : installOfferEligible && shouldShowIosInstallGuide({
+      standalone,
+      promptAvailable: Boolean(installPrompt),
+      dismissedUntil,
+      now,
+      iosSafari,
+    })
+  const shouldOfferStorageProtection = acceptanceMode
+    ? acceptanceMode === 'storage-protection'
+    : standalone
+      && effectiveStorageHealth.supported
+      && !effectiveStorageHealth.persisted
+      && storageDismissedUntil <= now
+      && !canInstall
+      && !showIosGuide
 
   const showOffline = useRuntimeSurface(runtimeSurfaceRegistration('offline', !online, RUNTIME_SURFACE_PRIORITY.critical, { exclusive: true, blocksLower: true }))
-  const showStorageCritical = useRuntimeSurface(runtimeSurfaceRegistration('storage-critical', storageHealth.pressure === 'critical', RUNTIME_SURFACE_PRIORITY.critical, { exclusive: true, blocksLower: true }))
+  const showStorageCritical = useRuntimeSurface(runtimeSurfaceRegistration('storage-critical', effectiveStorageHealth.pressure === 'critical', RUNTIME_SURFACE_PRIORITY.critical, { exclusive: true, blocksLower: true }))
   const showUpdate = useRuntimeSurface(runtimeSurfaceRegistration('update', updateReady, RUNTIME_SURFACE_PRIORITY.userAction, { exclusive: true, blocksLower: true }))
   const showInstall = useRuntimeSurface(runtimeSurfaceRegistration('install', canInstall || showIosGuide, RUNTIME_SURFACE_PRIORITY.recommendationInstall, { exclusive: true, blocksLower: true }))
   const showStorageProtection = useRuntimeSurface(runtimeSurfaceRegistration('storage-protection', shouldOfferStorageProtection, RUNTIME_SURFACE_PRIORITY.optional, { exclusive: true, blocksLower: true }))
@@ -87,6 +115,15 @@ export function MobileRuntime() {
   useEffect(() => {
     const timer = window.setTimeout(() => setInstallOfferEligible(true), INSTALL_OFFER_DELAY_MS)
     return () => window.clearTimeout(timer)
+  }, [])
+
+  useEffect(() => {
+    if (import.meta.env.VITE_ACCEPTANCE_FIXTURES !== 'true') return
+    const target = window as Window & { __financePlannerRuntimeAcceptanceState?: (mode: string) => void }
+    target.__financePlannerRuntimeAcceptanceState = (mode) => {
+      setAcceptanceMode(RUNTIME_ACCEPTANCE_MODES.includes(mode as MobileRuntimeAcceptanceMode) ? (mode as MobileRuntimeAcceptanceMode) : null)
+    }
+    return () => { delete target.__financePlannerRuntimeAcceptanceState }
   }, [])
 
   useEffect(() => {
@@ -212,7 +249,7 @@ export function MobileRuntime() {
           Device storage is almost full. Free up space to avoid failed local saves.
         </div>
       )}
-      {storageHealth.pressure === 'warning' && !showStorageCritical && (
+      {effectiveStorageHealth.pressure === 'warning' && !showStorageCritical && (
         <div className="mobile-runtime__banner mobile-runtime__banner--warning runtime-surface runtime-surface--informational" role="status" aria-live="polite">
           Device storage is running low. Free up space soon.
         </div>

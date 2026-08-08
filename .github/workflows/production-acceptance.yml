@@ -111,6 +111,12 @@ jobs:
           ACCEPTANCE_APP_URL: http://127.0.0.1:4173
           DATA_PRIVACY_ACCEPTANCE_ARTIFACT_PATH: artifacts/data-privacy-production-acceptance.json
         run: node scripts/run-data-privacy-production-acceptance-stable.mjs
+      - name: Run Step 14 whole-product readiness acceptance
+        if: always()
+        env:
+          ACCEPTANCE_APP_URL: http://127.0.0.1:4173
+          WHOLE_PRODUCT_READINESS_ARTIFACT_PATH: artifacts/whole-product-readiness-acceptance.json
+        run: node scripts/run-whole-product-readiness-acceptance-stable.mjs
       - name: Verify authenticated operational metrics
         shell: bash
         run: |
@@ -195,6 +201,9 @@ jobs:
             artifacts/vault-password-*.png
             artifacts/sync-status-*.png
             artifacts/subscriptions-*.png
+            artifacts/whole-product-readiness-acceptance.json
+            artifacts/wpr-*.png
+            artifacts/runtime-*.png
             artifacts/backend-resilience.json
             artifacts/operational-metrics.prom
             artifacts/production-load-acceptance.json

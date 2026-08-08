@@ -586,7 +586,7 @@ async function captureRuntimeSurfaceStressEvidence(client, sessionId) {
     connectionType: 'none',
   }, sessionId)
   await evaluate(client, sessionId, `window.dispatchEvent(new Event('offline'))`)
-  await waitFor(client, sessionId, `document.body?.innerText.includes('Offline-Modus')`, 'offline runtime surface')
+  await waitFor(client, sessionId, `document.body?.innerText.includes('Offline mode')`, 'offline runtime surface')
   await waitFor(client, sessionId, `(async () => {
     await document.fonts.ready
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
@@ -601,7 +601,7 @@ async function captureRuntimeSurfaceStressEvidence(client, sessionId) {
       return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0
     }
     const navigation = [...document.querySelectorAll('nav')].find((item) => item.classList.contains('app-mobile-navigation') && visible(item))
-    const surface = [...document.querySelectorAll('.mobile-runtime__banner')].find((item) => item.textContent?.includes('Offline-Modus') && visible(item))
+    const surface = [...document.querySelectorAll('.mobile-runtime__banner')].find((item) => item.textContent?.includes('Offline mode') && visible(item))
     const dashboard = document.querySelector('[data-dashboard-ready="true"]')
     const navigationRect = navigation?.getBoundingClientRect()
     const surfaceRect = surface?.getBoundingClientRect()
@@ -635,7 +635,7 @@ async function captureRuntimeSurfaceStressEvidence(client, sessionId) {
     connectionType: 'wifi',
   }, sessionId)
   await evaluate(client, sessionId, `window.dispatchEvent(new Event('online'))`)
-  await waitFor(client, sessionId, `!document.body?.innerText.includes('Offline-Modus')`, 'online recovery after runtime-surface stress')
+  await waitFor(client, sessionId, `!document.body?.innerText.includes('Offline mode')`, 'online recovery after runtime-surface stress')
   return { path, ...assertions }
 }
 

@@ -462,7 +462,7 @@ interface OverviewScreenProps {
 
 function OverviewScreen({ connections, busy, onConnect, onRefresh, onOpenAttention, onOpenManual, onImportStatement }: OverviewScreenProps) {
   if (connections.length === 0) return <div className="connections-empty">
-    <header className="connections-header"><h1 id="connections-title">Connections</h1><p>Securely connect your financial accounts.</p></header>
+    <header className="connections-header"><h2 id="connections-title">Connections</h2><p>Securely connect your financial accounts.</p></header>
     <div className="connections-empty-hero">
       <div className="connections-empty-icon"><ShieldCheck size={26}/></div>
       <h2>Connect your financial accounts</h2>
@@ -480,7 +480,7 @@ function OverviewScreen({ connections, busy, onConnect, onRefresh, onOpenAttenti
   </div>
 
   return <div className="connections-overview">
-    <header className="connections-header"><div><h1 id="connections-title">Connections</h1><p>Manage your connected accounts and data sources.</p></div></header>
+    <header className="connections-header"><div><h2 id="connections-title">Connections</h2><p>Manage your connected accounts and data sources.</p></div></header>
     <div className="connections-actions">
       <button type="button" className="primary" onClick={onConnect}><Link2 size={17}/> Connect account</button>
       <button type="button" className="secondary" disabled={busy} onClick={onRefresh}><RefreshCw size={17}/> {busy ? 'Refreshing…' : 'Refresh all'}</button>
@@ -520,7 +520,7 @@ function OverviewScreen({ connections, busy, onConnect, onRefresh, onOpenAttenti
 function CheckingScreen() {
   return <div className="connections-checking" role="status" aria-live="polite">
     <div className="connections-checking-spinner" aria-hidden="true"/>
-    <h1>Checking your connection</h1>
+    <h2>Checking your connection</h2>
     <p>We&apos;re confirming what your provider returned and loading available accounts. This does not mean your data has been imported yet.</p>
   </div>
 }
@@ -647,7 +647,7 @@ interface SyncSelectionScreenProps {
 
 function SyncSelectionScreen({ accounts, selectedAccountIds, onToggle, selection, transactionsAvailable, duplicates, pending, quality, warnings, onCancel, onImport }: SyncSelectionScreenProps) {
   return <div className="connections-sync-screen">
-    <header className="connections-subpage-header"><button type="button" className="connections-back" onClick={onCancel}><ArrowLeft size={18}/> Back</button><h1>Choose accounts</h1></header>
+    <header className="connections-subpage-header"><button type="button" className="connections-back" onClick={onCancel}><ArrowLeft size={18}/> Back</button><h2>Choose accounts</h2></header>
     <p className="connections-setup-subtitle">We discovered the following accounts. Select the ones you want to import.</p>
     <div className="connections-account-select-list">
       {accounts.map((account) => <label className="connections-account-select-row" key={account.id}>
@@ -690,7 +690,7 @@ interface AttentionScreenProps {
 function AttentionScreen({ connection, reason, busy, confirming, onBack, onReconnect, onDisconnectRequest, onDisconnectCancel, onDisconnectConfirm }: AttentionScreenProps) {
   const copy = reason ? ATTENTION_REASON_COPY[reason] : null
   return <div className="connections-attention-screen">
-    <header className="connections-subpage-header"><button type="button" className="connections-back" onClick={onBack}><ArrowLeft size={18}/> Back</button><h1>Connections</h1></header>
+    <header className="connections-subpage-header"><button type="button" className="connections-back" onClick={onBack}><ArrowLeft size={18}/> Back</button><h2>Connections</h2></header>
     <div className="connections-attention-icon"><AlertTriangle size={28}/></div>
     <h2 className="connections-attention-title">Connection needs attention</h2>
     <p className="connections-setup-subtitle connections-center">We&apos;re having trouble maintaining this connection. Please reconnect to keep your data up to date.</p>
@@ -727,7 +727,7 @@ interface StatementPreviewScreenProps {
 function StatementPreviewScreen({ preview, fileName, onCancel, onChooseAnother, onImport }: StatementPreviewScreenProps) {
   const reviewRequired = preview.rejected > 0 || preview.transactions.some((transaction) => transaction.category === 'Unkategorisiert')
   return <div className="connections-statement-screen">
-    <header className="connections-subpage-header"><button type="button" className="connections-back" onClick={onCancel}><ArrowLeft size={18}/> Back</button><h1>Statement import preview</h1></header>
+    <header className="connections-subpage-header"><button type="button" className="connections-back" onClick={onCancel}><ArrowLeft size={18}/> Back</button><h2>Statement import preview</h2></header>
     <div className="connections-file-card"><span className="connections-row-icon"><FileUp size={19}/></span><div><strong>{fileName || `${preview.format.toUpperCase()} statement`}</strong><small>Supported format: CSV / CAMT</small></div></div>
     <div className="connections-institution-banner"><span className="connections-row-icon"><Landmark size={18}/></span><strong>{preview.account.name}</strong></div>
     <div className="connections-stat-row">

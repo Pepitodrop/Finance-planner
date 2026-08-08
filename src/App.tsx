@@ -175,11 +175,11 @@ function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
 
   const titles: Record<DestinationId, string> = {
     dashboard: 'Dashboard',
-    transactions: 'Transaktionen',
+    transactions: 'Transactions',
     accounts: 'Accounts',
-    goals: 'Sparziele',
-    recurring: 'Wiederkehrende Zahlungen',
-    connections: 'Banken & PayPal',
+    goals: 'Goals',
+    recurring: 'Recurring',
+    connections: 'Connections',
     subscriptions: 'Subscriptions',
     ai: 'Finance Intelligence',
     assistant: 'Finance Assistant',

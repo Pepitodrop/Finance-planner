@@ -1,6 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from '../App'
+import { AcceptanceCrashTrigger } from '../AcceptanceCrashTrigger'
 import { AuthGate } from '../AuthGate'
 import { AutomaticTransactionAnalysis } from '../AutomaticTransactionAnalysis'
 import { ErrorBoundary } from '../ErrorBoundary'
@@ -57,6 +58,7 @@ const enrollmentRoute = window.location.pathname === '/test-enrollment'
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>
+      <AcceptanceCrashTrigger />
       {enrollmentRoute ? <TestEnrollmentPage /> : <>
         <RuntimeSurfaceCoordinator>
         <WebMobileHardening />
