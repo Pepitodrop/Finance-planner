@@ -751,7 +751,7 @@ async function run() {
       ['receipt-running', 'running', `document.body?.innerText.includes('Reviewing your receipt')`],
       ['receipt-result-overview', 'sufficient', `document.body?.innerText.includes('Good foundation') || document.body?.innerText.includes('Model confidence')`],
       ['receipt-insufficient', 'insufficient', `document.body?.innerText.includes('Not enough to give a reliable review')`],
-      ['receipt-error', 'error', `document.body?.innerText.includes("Couldn't review this receipt") || document.body?.innerText.includes('no automatic substitute')`],
+      ['receipt-error', 'receipt-error', `document.body?.innerText.includes("Couldn't review this receipt") || document.body?.innerText.includes('no automatic substitute')`],
     ]
     for (const [name, mode, waitExpr] of receiptStates) {
       report.states[name] = await captureState(client, sessionId, name, 'data-receipt-ready', {

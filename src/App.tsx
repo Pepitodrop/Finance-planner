@@ -26,7 +26,7 @@ interface AppProps { userId: string; userName?: string; onLockVault?: () => void
 const CONNECTIONS_ACCEPTANCE_MODES: ConnectionsAcceptanceMode[] = ['empty', 'populated', 'institution-selector', 'institution-search', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'checking', 'sync-selection', 'attention', 'manual', 'statement-preview']
 const AI_ACCEPTANCE_MODES: AiPanelAcceptanceMode[] = ['ready', 'progress', 'results', 'anomaly', 'applied', 'error', 'empty']
 const ASSISTANT_ACCEPTANCE_MODES: AssistantAcceptanceMode[] = ['hosted-consent', 'hosted-running', 'success', 'hosted-fallback', 'local-selected', 'local-running']
-const RECEIPT_ACCEPTANCE_MODES: ReceiptAcceptanceMode[] = ['selected', 'running', 'sufficient', 'insufficient', 'error']
+const RECEIPT_ACCEPTANCE_MODES: ReceiptAcceptanceMode[] = ['selected', 'running', 'sufficient', 'insufficient', 'receipt-error']
 
 function App({ userId, userName, onLockVault }: AppProps) {
   const [state, setState] = useState<AppState>(() => loadState())

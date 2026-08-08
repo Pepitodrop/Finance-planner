@@ -53,7 +53,7 @@ describe('ReceiptReview', () => {
   })
 
   it('acceptance: an error state offers no invented deterministic fallback, only retry', () => {
-    render(<ReceiptReview acceptanceMode="error"/>)
+    render(<ReceiptReview acceptanceMode="receipt-error"/>)
     expect(screen.getByText(/no automatic substitute for this feature/i)).toBeInTheDocument()
     expect(screen.queryByText(/rule-based substitute analysis/i)).not.toBeInTheDocument()
   })

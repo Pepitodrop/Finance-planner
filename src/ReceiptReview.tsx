@@ -12,7 +12,7 @@ import {
   type ReceiptReviewResult,
 } from './receiptReview'
 
-export type ReceiptAcceptanceMode = 'selected' | 'running' | 'sufficient' | 'insufficient' | 'error'
+export type ReceiptAcceptanceMode = 'selected' | 'running' | 'sufficient' | 'insufficient' | 'receipt-error'
 
 function scoreLabel(score: number): string {
   if (score >= 80) return 'Very good choice'
@@ -58,7 +58,7 @@ export function ReceiptReview({ acceptanceMode }: { acceptanceMode?: ReceiptAcce
   const [consentedImageId, setConsentedImageId] = useState<number | null>(null)
   const [loading, setLoading] = useState(acceptanceMode === 'running')
   const [preparing, setPreparing] = useState(false)
-  const [error, setError] = useState(acceptanceMode === 'error' ? 'The request to the hosted model failed, and there’s no automatic substitute for this feature — retrying with the same photo, or a clearer one, is the best next step.' : '')
+  const [error, setError] = useState(acceptanceMode === 'receipt-error' ? 'The request to the hosted model failed, and there’s no automatic substitute for this feature — retrying with the same photo, or a clearer one, is the best next step.' : '')
   const [result, setResult] = useState<ReceiptReviewResult | null>(acceptanceMode === 'sufficient' ? acceptanceResult : acceptanceMode === 'insufficient' ? acceptanceInsufficient : null)
   const selectedImageIdRef = useRef(acceptanceMode ? 1 : 0)
   const requestControllerRef = useRef<AbortController | null>(null)
