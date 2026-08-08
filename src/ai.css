@@ -49,7 +49,19 @@
 .ai-applied-banner strong { display: block; color: var(--fp-color-text-primary); font-size: var(--fp-font-size-supporting); }
 
 .ai-result-list { display: grid; gap: 8px; }
-.ai-result { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(165px, .85fr) auto minmax(210px, 1.35fr) auto; align-items: center; gap: 14px; padding: 15px; border: var(--fp-border); border-radius: var(--fp-radius-panel); background: var(--fp-color-surface); }
+/* Real-browser measurement (getBoundingClientRect diagnostic, since
+   removed) showed this row needs ~740px including its own padding, but
+   only has ~682px available inside .ai-result-list at 1440x900 desktop
+   -- a pre-existing ~60px overflow, not something introduced by the
+   wrap-behavior fixes above. Columns 3 and 5 (.ai-scores/.ai-decision)
+   were previously resolving to just 58px/71px, far too little even for
+   word-safe wrapping. Rebalanced so the 5 minimums (125+145+85+130+85
+   = 570px) plus 4x14px gaps plus 30px padding come to 656px, safely
+   under the 682px budget, freeing the most room from column 4
+   (.ai-explanation) since paragraph text wraps cleanly at any
+   reasonable width, and giving columns 3 and 5 more breathing room
+   than they had by default instead of less. */
+.ai-result { display: grid; grid-template-columns: minmax(125px, 1fr) minmax(145px, .85fr) minmax(85px, auto) minmax(130px, 1.1fr) minmax(85px, auto); align-items: center; gap: 14px; padding: 15px; border: var(--fp-border); border-radius: var(--fp-radius-panel); background: var(--fp-color-surface); }
 .ai-result.review-required { border-color: rgb(230 183 90 / 40%); border-left-width: 3px; }
 .ai-result.unanalyzed { grid-template-columns: minmax(0, 1fr) auto; min-height: 64px; padding: 13px 15px; }
 .ai-result.unanalyzed .ai-waiting { justify-self: end; margin: 0; padding: 6px 10px; border: var(--fp-border); border-radius: 999px; color: var(--fp-color-text-muted); background: var(--fp-color-surface-interactive); white-space: nowrap; }

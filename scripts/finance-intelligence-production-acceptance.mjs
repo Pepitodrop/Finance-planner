@@ -629,19 +629,28 @@ async function run() {
     await ensureDestination(client, sessionId, 'Finance Intelligence', 'data-ai-ready')
     await evaluate(client, sessionId, `window.__financePlannerAcceptanceState('results')`)
     await waitFor(client, sessionId, `document.body?.innerText.includes('Review queue')`, 'finance-intelligence results for trusted-vs-review check')
-    // TEMPORARY diagnostic: exact computed widths to size .ai-result's grid
-    // columns correctly instead of guessing against screenshots. Remove once
-    // the layout is confirmed fixed.
+    // Regression guard: a suggestion row's rendered width (including its
+    // own padding) must not exceed its list container's width at desktop.
+    // A real getBoundingClientRect measurement is what caught this exact
+    // defect (the row needed ~740px against a ~682px budget at 1440x900,
+    // silently overflowing .ai-result-list) after two rounds of guessing
+    // column widths from screenshots alone got it wrong -- keeping the
+    // check permanently is cheap and catches any future regression of the
+    // same kind immediately, without needing another visual-inspection cycle.
     await setViewport(client, sessionId, 1440, 900)
     await delay(150)
-    report.interactions.widthDiagnostic = await evaluate(client, sessionId, `(() => {
-      const rect = (el) => el ? { w: Math.round(el.getBoundingClientRect().width), x: Math.round(el.getBoundingClientRect().x) } : null
-      const results = document.querySelector('.ai-results')
+    report.interactions.resultRowFitsContainer = await evaluate(client, sessionId, `(() => {
       const list = document.querySelector('.ai-result-list')
       const row = document.querySelector('.ai-result')
-      const cols = row ? [...row.children].map(rect) : []
-      return { resultsPanel: rect(results), resultList: rect(list), firstRow: rect(row), columns: cols, viewportWidth: innerWidth }
+      if (!list || !row) return { checked: false }
+      return { checked: true, listWidth: Math.round(list.getBoundingClientRect().width), rowWidth: Math.round(row.getBoundingClientRect().width) }
     })()`)
+    if (report.interactions.resultRowFitsContainer.checked) {
+      assert.ok(
+        report.interactions.resultRowFitsContainer.rowWidth <= report.interactions.resultRowFitsContainer.listWidth + 1,
+        `a suggestion row (${report.interactions.resultRowFitsContainer.rowWidth}px) must not be wider than its list container (${report.interactions.resultRowFitsContainer.listWidth}px) at 1440x900 desktop`,
+      )
+    }
     report.interactions.trustedVsReview = await evaluate(client, sessionId, `(() => {
       const rows = [...document.querySelectorAll('.ai-result')]
       const trusted = rows.filter((r) => r.querySelector('.trusted-badge'))
