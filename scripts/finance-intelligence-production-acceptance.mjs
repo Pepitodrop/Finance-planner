@@ -713,9 +713,9 @@ async function run() {
     const agentInteraction = await evaluate(client, sessionId, `(async () => {
       const approveButton = [...document.querySelectorAll('.assistant-agent-row button[aria-label^="Approve "]')][0]
       if (!approveButton) return { present: false }
+      const row = approveButton.closest('.assistant-agent-row')
       approveButton.click()
       await new Promise((r) => setTimeout(r, 150))
-      const row = approveButton.closest('.assistant-agent-row')
       return { present: true, status: row?.querySelector('.pill')?.textContent?.trim() }
     })()`)
     report.interactions.agentApprove = { ...agentInteraction, providerCallsDuringApprove: providerRequests.length - beforeAgentNetworkCount }
@@ -727,9 +727,9 @@ async function run() {
     const rejectInteraction = await evaluate(client, sessionId, `(async () => {
       const rejectButton = [...document.querySelectorAll('.assistant-agent-row button[aria-label^="Reject "]')][0]
       if (!rejectButton) return { present: false }
+      const row = rejectButton.closest('.assistant-agent-row')
       rejectButton.click()
       await new Promise((r) => setTimeout(r, 150))
-      const row = rejectButton.closest('.assistant-agent-row')
       return { present: true, status: row?.querySelector('.pill')?.textContent?.trim() }
     })()`)
     report.interactions.agentReject = { ...rejectInteraction, providerCallsDuringReject: providerRequests.length - beforeRejectNetworkCount }
