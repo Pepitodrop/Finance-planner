@@ -648,7 +648,7 @@ async function run() {
     // Finance Assistant: ASSIST-01 .. ASSIST-07.
     // -----------------------------------------------------------------
     const assistStates = [
-      ['assistant-hosted-consent', null, `document.body?.innerText.includes('How should this run?')`],
+      ['assistant-hosted-consent', null, `document.body?.innerText.includes('Choose how this runs')`],
       ['assistant-hosted-running', 'hosted-running', `document.body?.innerText.includes('Building your financial analysis')`],
       ['assistant-hosted-result', 'success', `document.body?.innerText.includes('Personal financial analysis')`],
       ['assistant-hosted-fallback', 'hosted-fallback', `document.body?.innerText.includes('Rule-based analysis available')`],
