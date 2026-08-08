@@ -16,7 +16,7 @@ export class CloudStateConflictError extends Error {
   readonly currentVersion: number
 
   constructor(currentVersion: number) {
-    super('Der Cloud-Datenstand wurde auf einem anderen Gerät geändert.')
+    super('The cloud data state was changed on another device.')
     this.name = 'CloudStateConflictError'
     this.currentVersion = currentVersion
   }
@@ -49,11 +49,11 @@ export async function fetchCloudState(): Promise<CloudStateDocument> {
     headers: { Accept: 'application/json' },
   })
   const payload = await responsePayload(response)
-  if (!response.ok) throw new Error(errorMessage(payload, 'Der Cloud-Datenstand konnte nicht geladen werden.'))
+  if (!response.ok) throw new Error(errorMessage(payload, 'The cloud data state could not be loaded.'))
   const version = Number(payload.version)
   const updatedAt = typeof payload.updatedAt === 'string' ? payload.updatedAt : null
-  if (!Number.isSafeInteger(version) || version < 0) throw new Error('Der Cloud-Datenstand hat eine ungültige Version.')
-  if (payload.payload !== null && !isVaultPayload(payload.payload)) throw new Error('Der Cloud-Datenstand hat ein ungültiges Format.')
+  if (!Number.isSafeInteger(version) || version < 0) throw new Error('The cloud data state has an invalid version.')
+  if (payload.payload !== null && !isVaultPayload(payload.payload)) throw new Error('The cloud data state has an invalid format.')
   return { payload: payload.payload as VaultPayload | null, version, updatedAt }
 }
 
@@ -62,7 +62,7 @@ export async function saveCloudState(
   expectedVersion: number,
   { keepalive = false }: { keepalive?: boolean } = {},
 ): Promise<CloudStateWriteResult> {
-  if (!isVaultPayload(payload)) throw new Error('Ungültige lokale Daten können nicht synchronisiert werden.')
+  if (!isVaultPayload(payload)) throw new Error('Invalid local data cannot be synchronized.')
   const response = await fetch('/api/finance/state', {
     method: 'POST',
     credentials: 'include',
@@ -76,10 +76,10 @@ export async function saveCloudState(
     const currentVersion = Number(result.currentVersion)
     throw new CloudStateConflictError(Number.isSafeInteger(currentVersion) && currentVersion >= 0 ? currentVersion : expectedVersion)
   }
-  if (!response.ok) throw new Error(errorMessage(result, 'Der Cloud-Datenstand konnte nicht gespeichert werden.'))
+  if (!response.ok) throw new Error(errorMessage(result, 'The cloud data state could not be saved.'))
   const version = Number(result.version)
   if (!Number.isSafeInteger(version) || version < 1 || typeof result.updatedAt !== 'string') {
-    throw new Error('Die Cloud-Speicherbestätigung ist ungültig.')
+    throw new Error('The cloud storage confirmation is invalid.')
   }
   return { version, updatedAt: result.updatedAt }
 }

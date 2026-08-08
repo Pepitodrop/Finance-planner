@@ -1,44 +1,43 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, CloudOff, Database, LoaderCircle, RefreshCw } from 'lucide-react'
-import { getCloudSyncStatus, resolveCloudConflict, subscribeCloudSyncStatus, type CloudSyncStatus as SyncStatus } from '../../storage'
+import { AlertTriangle, CloudOff, Database, LoaderCircle } from 'lucide-react'
+import { getCloudSyncStatus, subscribeCloudSyncStatus, type CloudSyncStatus as SyncStatus } from '../../storage'
 import { shouldDisplayCloudSyncStatus } from './cloudSyncPresentation'
+import { RUNTIME_SURFACE_PRIORITY } from '../../runtime-surfaces/runtimeSurfacePolicy'
+import { runtimeSurfaceRegistration, useRuntimeSurface } from '../../runtime-surfaces/runtimeSurfaceContext'
 
+/**
+ * Ambient, non-blocking sync status. The 'conflict' phase is intentionally
+ * NOT rendered here -- VaultGate owns that as a full-screen VaultConflict
+ * dialog (VAULT-04), since a binary "which version wins" decision deserves
+ * more than a small inline banner and a window.confirm().
+ */
 export function CloudSyncStatus() {
   const [status, setStatus] = useState<SyncStatus>(() => getCloudSyncStatus())
-  const [busy, setBusy] = useState(false)
 
   useEffect(() => subscribeCloudSyncStatus(setStatus), [])
 
-  async function resolve(strategy: 'server' | 'local') {
-    const accepted = window.confirm(strategy === 'server'
-      ? 'Den Serverstand verwenden? Nicht synchronisierte lokale Änderungen werden dabei verworfen.'
-      : 'Den lokalen Stand als neuen Serverstand verwenden? Änderungen des anderen Geräts werden dabei ersetzt.')
-    if (!accepted) return
-    setBusy(true)
-    try {
-      await resolveCloudConflict(strategy)
-      window.location.reload()
-    } catch (error) {
-      setStatus({ phase: 'error', message: error instanceof Error ? error.message : 'Der Konflikt konnte nicht aufgelöst werden.' })
-      setBusy(false)
-    }
-  }
+  const display = shouldDisplayCloudSyncStatus(status.phase) && status.phase !== 'conflict'
+  const critical = status.phase === 'error'
+  const visible = useRuntimeSurface(runtimeSurfaceRegistration(
+    'cloud-sync',
+    display,
+    critical ? RUNTIME_SURFACE_PRIORITY.critical : RUNTIME_SURFACE_PRIORITY.informational,
+    { blocksLower: true },
+  ))
 
-  if (!shouldDisplayCloudSyncStatus(status.phase)) return null
+  if (!visible) return null
 
   const Icon = status.phase === 'syncing' ? LoaderCircle
     : status.phase === 'offline' || status.phase === 'local' ? CloudOff
-      : status.phase === 'conflict' || status.phase === 'error' ? AlertTriangle
+      : status.phase === 'error' ? AlertTriangle
         : Database
-  const title = status.phase === 'syncing' ? 'Synchronisierung'
-    : status.phase === 'conflict' ? 'Datenkonflikt'
-      : status.phase === 'offline' ? 'Lokaler Modus'
-        : status.phase === 'error' ? 'Speicherfehler'
-          : 'Lokaler Speicher'
+  const title = status.phase === 'syncing' ? 'Syncing'
+    : status.phase === 'offline' ? 'Local mode'
+      : status.phase === 'error' ? 'Storage error'
+        : 'Local storage'
 
-  return <aside className={`cloud-sync-status ${status.phase}`} role={status.phase === 'conflict' || status.phase === 'error' ? 'alert' : 'status'} aria-live="polite">
+  return <aside className={`cloud-sync-status runtime-surface ${critical ? 'runtime-surface--critical' : 'runtime-surface--informational'} ${status.phase}`} role={critical ? 'alert' : 'status'} aria-live="polite" lang="en">
     <Icon className={status.phase === 'syncing' ? 'spin' : ''} size={17}/>
     <div><strong>{title}</strong><span>{status.message}</span></div>
-    {status.phase === 'conflict' && <div className="cloud-sync-actions"><button type="button" disabled={busy} onClick={() => void resolve('server')}><RefreshCw size={14}/> Serverstand</button><button type="button" disabled={busy} onClick={() => void resolve('local')}><Database size={14}/> Lokalen Stand</button></div>}
   </aside>
 }

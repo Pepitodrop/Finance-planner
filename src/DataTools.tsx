@@ -1,165 +1,195 @@
-import { useRef, useState } from 'react'
-import { DatabaseBackup, Download, FileKey2, FileSpreadsheet, RotateCcw, ShieldCheck, Trash2, Upload } from 'lucide-react'
-import { exportBackup, exportTransactionsCsv, importBackup } from './backup'
-import { clearUnlockedState } from './storage'
+import { useEffect, useState } from 'react'
+import { DatabaseBackup, FileSpreadsheet, RotateCcw, ShieldCheck, Trash2, Upload } from 'lucide-react'
+import { ConfirmationDialog } from './app/ConfirmationDialog'
+import { CloudDeviceStatus } from './dataTools/CloudDeviceStatus'
+import { CreateBackup } from './dataTools/CreateBackup'
+import { DeleteAccountFlow } from './dataTools/DeleteAccountFlow'
+import { RestoreBackup } from './dataTools/RestoreBackup'
+import { VaultPasswordChange } from './dataTools/VaultPasswordChange'
+import { exportTransactionsCsv } from './backup'
+import { getCloudSyncStatus, subscribeCloudSyncStatus, type CloudSyncStatus as SyncStatus } from './storage'
 import type { AppState } from './types'
-import { changeVaultPassword, removeEncryptedVault } from './vault'
 
 interface DataToolsProps {
   userId: string
   state: AppState
   onRestore: (state: AppState) => void
   onReset: () => void
+  acceptanceMode?: DataToolsAcceptanceMode
 }
 
-const ACCOUNT_DELETE_CONFIRMATION = 'DELETE MY ACCOUNT'
+export type DataToolsAcceptanceMode =
+  | 'overview'
+  | 'vault-password'
+  | 'create-backup'
+  | 'restore-backup'
+  | 'restore-failure'
+  | 'reset'
+  | 'reset-complete'
+  | 'csv-warning'
+  | 'delete-account'
+  | 'delete-account-final'
+  | 'delete-failure'
+  | 'cloud-sync'
+  | 'sync-offline'
+  | 'sync-error'
 
-function apiError(payload: unknown, fallback: string): string {
-  if (!payload || typeof payload !== 'object') return fallback
-  const error = (payload as { error?: unknown }).error
-  if (typeof error === 'string') return error
-  if (error && typeof error === 'object' && typeof (error as { message?: unknown }).message === 'string') return (error as { message: string }).message
-  return fallback
+type DataToolsView = 'overview' | 'vault-password' | 'create-backup' | 'restore-backup' | 'delete-account' | 'cloud-sync'
+
+const DELETE_ACCOUNT_MODES = new Set<DataToolsAcceptanceMode>(['delete-account', 'delete-account-final', 'delete-failure'])
+const VIEW_MODES: Partial<Record<DataToolsAcceptanceMode, DataToolsView>> = {
+  'vault-password': 'vault-password',
+  'create-backup': 'create-backup',
+  'restore-backup': 'restore-backup',
+  'restore-failure': 'restore-backup',
+  'cloud-sync': 'cloud-sync',
+  'sync-offline': 'cloud-sync',
+  'sync-error': 'cloud-sync',
 }
 
-function clearAccountDeviceMetadata(userId: string): void {
-  const suffix = encodeURIComponent(userId)
-  localStorage.removeItem(`finance-planner-cloud-conflict-v2:${suffix}`)
-  localStorage.removeItem(`finance-planner-cloud-metadata-v1:${suffix}`)
+const SYNC_SUMMARY: Record<Exclude<SyncStatus['phase'], 'conflict'>, string> = {
+  syncing: 'Syncing…',
+  synced: 'Synced',
+  offline: 'Offline',
+  local: 'Not synced',
+  error: 'Sync error',
 }
 
-export function DataTools({ userId, state, onRestore, onReset }: DataToolsProps) {
-  const inputRef = useRef<HTMLInputElement>(null)
-  const [backupPassword, setBackupPassword] = useState('')
-  const [currentVaultPassword, setCurrentVaultPassword] = useState('')
-  const [newVaultPassword, setNewVaultPassword] = useState('')
-  const [confirmVaultPassword, setConfirmVaultPassword] = useState('')
-  const [deletionConfirmation, setDeletionConfirmation] = useState('')
-  const [message, setMessage] = useState('')
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
+// DATA-01: Data & Backup overview. Reset (DATA-07/08) and the CSV plaintext
+// warning (DATA-05) stay as dialogs launched from here, since neither needs
+// its own sub-page; every other flow gets a focused sub-page (DataToolsView)
+// matching the approved spec's explicit back-navigation between frames.
+export function DataTools({ userId, state, onRestore, onReset, acceptanceMode }: DataToolsProps) {
+  const [view, setView] = useState<DataToolsView>(() => {
+    if (acceptanceMode && DELETE_ACCOUNT_MODES.has(acceptanceMode)) return 'delete-account'
+    if (acceptanceMode && acceptanceMode in VIEW_MODES) return VIEW_MODES[acceptanceMode] ?? 'overview'
+    return 'overview'
+  })
+  const [csvDialogOpen, setCsvDialogOpen] = useState(acceptanceMode === 'csv-warning')
+  const [resetDialogOpen, setResetDialogOpen] = useState(acceptanceMode === 'reset')
+  // DATA-08: the completed-reset state, without ever performing a real reset
+  // -- acceptance fixtures must not mutate real persistent user data.
+  const [resetMessage, setResetMessage] = useState(acceptanceMode === 'reset-complete' ? 'Your accounts, transactions, and goals now show Finance Planner’s example dataset. Add your own transactions any time — nothing here is permanent.' : '')
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(() => {
+    if (acceptanceMode === 'sync-offline') return { phase: 'offline', message: 'Waiting for a connection.' }
+    if (acceptanceMode === 'sync-error') return { phase: 'error', message: 'The last save attempt failed. Your data is safe on this device.' }
+    return getCloudSyncStatus()
+  })
 
-  const createBackup = async () => {
-    setError(''); setMessage(''); setBusy(true)
-    try {
-      await exportBackup(state, backupPassword)
-      setMessage('Verschlüsseltes Backup wurde erstellt. Bewahre Passwort und Datei getrennt auf.')
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Backup konnte nicht erstellt werden.')
-    } finally { setBusy(false) }
-  }
+  useEffect(() => {
+    // Fixture modes show a fixed, deterministic status instead of the real
+    // (network-dependent) sync state, matching the guard convention already
+    // used by AutomaticTransactionAnalysis's acceptance fixture.
+    if (acceptanceMode) return
+    return subscribeCloudSyncStatus(setSyncStatus)
+  }, [acceptanceMode])
 
-  const restore = async (file?: File) => {
-    if (!file) return
-    setError(''); setMessage(''); setBusy(true)
-    try {
-      const restored = await importBackup(file, backupPassword)
-      onRestore(restored)
-      setMessage('Verschlüsseltes Backup erfolgreich geprüft und wiederhergestellt. Der wiederhergestellte Stand wird mit deinem Konto synchronisiert.')
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Backup konnte nicht importiert werden.')
-    } finally {
-      setBusy(false)
-      if (inputRef.current) inputRef.current.value = ''
-    }
-  }
-
-  const updateVaultPassword = async () => {
-    setError(''); setMessage('')
-    if (newVaultPassword !== confirmVaultPassword) { setError('Die neuen Passwörter stimmen nicht überein.'); return }
-    setBusy(true)
-    try {
-      await changeVaultPassword(currentVaultPassword, newVaultPassword)
-      setCurrentVaultPassword(''); setNewVaultPassword(''); setConfirmVaultPassword('')
-      setMessage('Vault-Passwort geändert. Der komplette lokale Datenspeicher wurde mit einem neuen Salt und Schlüssel neu verschlüsselt.')
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Vault-Passwort konnte nicht geändert werden.')
-    } finally { setBusy(false) }
-  }
-
-  const reset = () => {
-    if (!window.confirm('Alle Finanzdaten, Lernwerte und Einstellungen dieses Kontos zurücksetzen? Der leere Stand wird mit PostgreSQL und deinen anderen Geräten synchronisiert.')) return
+  const runReset = () => {
     onReset()
-    setMessage('Der Kontodatenstand wurde lokal zurückgesetzt und wird als leerer Stand mit der Cloud synchronisiert.')
+    setResetDialogOpen(false)
+    setResetMessage('Your accounts, transactions, and goals now show Finance Planner’s example dataset. Add your own transactions any time — nothing here is permanent.')
   }
 
-  const deleteAccount = async () => {
-    if (deletionConfirmation !== ACCOUNT_DELETE_CONFIRMATION || busy) return
-    const confirmed = window.confirm('Konto wirklich endgültig löschen? Alle Cloud-Finanzdaten, Lernprofile, Bankverbindungen, Passkeys und die Sitzung werden entfernt. Diese Aktion kann nicht rückgängig gemacht werden.')
-    if (!confirmed) return
-    setError(''); setMessage(''); setBusy(true)
-    try {
-      const response = await fetch('/api/auth/account', {
-        method: 'DELETE',
-        credentials: 'include',
-        cache: 'no-store',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ confirmation: ACCOUNT_DELETE_CONFIRMATION }),
-      })
-      const payload = await response.json().catch(() => ({}))
-      if (!response.ok || (payload as { deleted?: unknown }).deleted !== true) {
-        throw new Error(apiError(payload, 'Das Konto konnte nicht vollständig gelöscht werden.'))
-      }
-      clearUnlockedState()
-      removeEncryptedVault(userId)
-      clearAccountDeviceMetadata(userId)
-      sessionStorage.clear()
-      window.location.assign('/')
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Das Konto konnte nicht vollständig gelöscht werden.')
-      setBusy(false)
-    }
+  const runCsvExport = () => {
+    exportTransactionsCsv(state)
+    setCsvDialogOpen(false)
   }
 
-  return <div className="data-tools-page">
+  if (view === 'vault-password') return <VaultPasswordChange onBack={() => setView('overview')}/>
+  if (view === 'create-backup') return <CreateBackup state={state} onBack={() => setView('overview')}/>
+  if (view === 'restore-backup') return <RestoreBackup onRestore={onRestore} onBack={() => setView('overview')} acceptanceShowFailure={acceptanceMode === 'restore-failure'}/>
+  if (view === 'delete-account') return <DeleteAccountFlow
+    userId={userId}
+    onBack={() => setView('overview')}
+    onCreateBackup={() => setView('create-backup')}
+    acceptanceView={acceptanceMode === 'delete-account-final' ? 'final' : acceptanceMode === 'delete-failure' ? 'failure' : undefined}
+  />
+  if (view === 'cloud-sync') return <CloudDeviceStatus onBack={() => setView('overview')}/>
+
+  const phase = syncStatus.phase === 'conflict' ? 'syncing' : syncStatus.phase
+
+  return <div className="data-tools-page" lang="en" data-data-ready="true">
     <section className="panel assistant-hero data-tools-hero">
-      <div><p className="eyebrow">Datensouveränität</p><h2>Verschlüsselung, Backup und Export</h2><p>Der lokale Vault und vollständige Backups sind verschlüsselt. PostgreSQL hält die verschlüsselte kontogebundene Cloud-Kopie. CSV-Dateien sind für Tabellenprogramme bestimmt und bleiben Klartext.</p></div>
+      <div><p className="eyebrow">Personal finance</p><h2>Data and Backup</h2><p>Your local vault and full backups are encrypted. Finance Planner keeps an encrypted, account-bound copy in the cloud. CSV files are for spreadsheets and stay plain text.</p></div>
       <ShieldCheck size={30}/>
     </section>
-    <section className="panel security-form-panel">
-      <div className="security-form-copy"><p className="eyebrow">Vault-Sicherheit</p><h2>Passwort ändern</h2><p className="muted">Das aktuelle Passwort wird geprüft. Danach wird der gesamte lokale Geräte-Vault mit einem neuen Salt und AES-Schlüssel neu verschlüsselt. Das Passwort wird nicht an den Server übertragen.</p></div>
-      <div className="security-fields">
-        <label className="security-field-current">Aktuelles Passwort<input type="password" autoComplete="current-password" value={currentVaultPassword} onChange={(event) => setCurrentVaultPassword(event.target.value)}/></label>
-        <label>Neues Passwort<input type="password" minLength={12} autoComplete="new-password" value={newVaultPassword} onChange={(event) => setNewVaultPassword(event.target.value)}/></label>
-        <label>Neues Passwort wiederholen<input type="password" minLength={12} autoComplete="new-password" value={confirmVaultPassword} onChange={(event) => setConfirmVaultPassword(event.target.value)}/></label>
-        <button type="button" disabled={busy || !currentVaultPassword || newVaultPassword.length < 12} className="primary security-submit" onClick={() => void updateVaultPassword()}><FileKey2 size={17}/> Passwort ändern</button>
+
+    <section className="panel data-tools-status-strip">
+      <div>
+        <span>Vault password</span>
+        <button type="button" className="data-tools-link" onClick={() => setView('vault-password')}>Change</button>
+      </div>
+      <div>
+        <span>{SYNC_SUMMARY[phase]}</span>
+        <button type="button" className="data-tools-link" onClick={() => setView('cloud-sync')}>Cloud and device data →</button>
       </div>
     </section>
-    <section className="panel backup-password-panel">
-      <label>Backup-Passwort<input type="password" minLength={12} autoComplete="new-password" value={backupPassword} onChange={(event) => setBackupPassword(event.target.value)} placeholder="Mindestens 12 Zeichen"/></label>
-      <p className="muted">Dieses Passwort gilt nur für die exportierte Sicherungsdatei. Ohne Passwort ist das Backup nicht wiederherstellbar.</p>
-    </section>
-    <section className="goal-card-grid data-card-grid">
-      <article className="panel big-goal data-card"><div className="goal-hero-icon"><DatabaseBackup size={24}/></div><p className="eyebrow">AES-256-GCM</p><h2>Verschlüsseltes Backup</h2><span>Konten, Transaktionen und Sparziele in einer passwortgeschützten Datei.</span><button type="button" disabled={busy} className="primary data-action" onClick={() => void createBackup()}><Download size={17}/> Backup herunterladen</button></article>
-      <article className="panel big-goal data-card"><div className="goal-hero-icon"><FileSpreadsheet size={24}/></div><p className="eyebrow">Achtung: Klartext</p><h2>CSV-Export</h2><span>Sensible Transaktionsdaten ohne Verschlüsselung. Nur auf einem sicheren Gerät speichern.</span><button type="button" className="secondary data-action" onClick={() => exportTransactionsCsv(state)}><FileSpreadsheet size={17}/> CSV exportieren</button></article>
-      <article className="panel big-goal data-card"><div className="goal-hero-icon"><Upload size={24}/></div><p className="eyebrow">Wiederherstellung</p><h2>Backup importieren</h2><span>Akzeptiert verschlüsselte Finance-Planner-Backups bis 10 MB und synchronisiert den geprüften Stand anschließend.</span><input ref={inputRef} hidden type="file" accept=".fpbackup,application/octet-stream" onChange={(event) => void restore(event.target.files?.[0])}/><button type="button" disabled={busy} className="secondary data-action" onClick={() => inputRef.current?.click()}><Upload size={17}/> Backup auswählen</button></article>
-      <article className="panel big-goal data-card danger-card"><div className="goal-hero-icon"><RotateCcw size={24}/></div><p className="eyebrow">Kontoweit</p><h2>Finanzdaten zurücksetzen</h2><span>Ersetzt Konten, Transaktionen, Sparziele und persönliche Lernwerte durch den leeren Ausgangsstand und synchronisiert ihn auf deine Geräte.</span><button type="button" className="secondary data-action" onClick={reset}><RotateCcw size={17}/> Kontodaten zurücksetzen</button></article>
-    </section>
-    <section className="panel account-deletion-panel" aria-labelledby="account-deletion-title">
-      <div className="account-deletion-copy">
-        <p className="eyebrow">Endgültige Kontolöschung</p>
-        <h2 id="account-deletion-title">Konto und sämtliche Serverdaten löschen</h2>
-        <p>Entfernt den verschlüsselten Cloud-Datenstand, das Lernprofil, Bank- und PayPal-Verbindungen, offene OAuth-Vorgänge, Passkeys und das Anmeldekonto. Bestehende Sitzungen werden widerrufen. Lokale Daten dieses Kontos werden anschließend von diesem Gerät entfernt.</p>
-        <p className="muted">Erstelle vorher ein verschlüsseltes Backup. Eine Kontolöschung kann nicht rückgängig gemacht werden.</p>
+
+    <p className="data-tools-section-eyebrow">Backup &amp; export</p>
+    <div className="data-tools-backup-row">
+      <button type="button" className="panel data-tools-backup-card" onClick={() => setView('create-backup')}>
+        <div className="goal-hero-icon"><DatabaseBackup size={22}/></div>
+        <div><strong>Create encrypted backup</strong><span>Download an encrypted copy of your accounts, transactions, and goals.</span></div>
+      </button>
+      <button type="button" className="panel data-tools-backup-card" onClick={() => setView('restore-backup')}>
+        <div className="goal-hero-icon"><Upload size={22}/></div>
+        <div><strong>Restore from backup</strong><span>Import a previously created encrypted backup file.</span></div>
+      </button>
+    </div>
+    <div className="data-tools-csv-row">
+      <span className="data-tools-csv-row-label"><FileSpreadsheet size={18}/> Export as CSV (unencrypted)</span>
+      <span className="data-tools-plaintext-tag">Plaintext</span>
+      <button type="button" className="secondary" onClick={() => setCsvDialogOpen(true)}>Export</button>
+    </div>
+
+    <article className="panel data-tools-backup-card warning-card">
+      <div className="goal-hero-icon"><RotateCcw size={22}/></div>
+      <div>
+        <p className="eyebrow">Reset</p>
+        <strong>Reset financial data</strong>
+        <span>Replace your accounts, transactions, goals, and learned patterns with Finance Planner's example dataset. Your account and sign-in stay.</span>
+        <button type="button" className="secondary" onClick={() => setResetDialogOpen(true)}>Reset financial data</button>
       </div>
-      <div className="account-deletion-controls">
-        <label>Zur Bestätigung exakt <code>{ACCOUNT_DELETE_CONFIRMATION}</code> eingeben
-          <input
-            autoComplete="off"
-            spellCheck={false}
-            value={deletionConfirmation}
-            onChange={(event) => setDeletionConfirmation(event.target.value)}
-          />
-        </label>
-        <button
-          type="button"
-          className="danger-action"
-          disabled={busy || deletionConfirmation !== ACCOUNT_DELETE_CONFIRMATION}
-          onClick={() => void deleteAccount()}
-        ><Trash2 size={17}/>{busy ? 'Konto wird gelöscht …' : 'Konto endgültig löschen'}</button>
+    </article>
+    {resetMessage && <p className="status-message success-message" role="status">{resetMessage}</p>}
+
+    <article className="panel data-tools-backup-card danger-card">
+      <div className="goal-hero-icon"><Trash2 size={22}/></div>
+      <div>
+        <p className="eyebrow">Permanent</p>
+        <strong>Delete account</strong>
+        <span>Permanently remove your account and all associated data. This cannot be undone.</span>
+        <button type="button" className="danger-action" onClick={() => setView('delete-account')}>Delete account</button>
       </div>
-    </section>
-    {message && <p className="status-message success-message" role="status">{message}</p>}
-    {error && <p className="status-message error-message" role="alert">{error}</p>}
+    </article>
+
+    <ConfirmationDialog
+      open={resetDialogOpen}
+      severity="warning"
+      heading="Reset financial data?"
+      headingId="reset-financial-data-title"
+      confirmLabel="Reset financial data"
+      onConfirm={runReset}
+      onClose={() => setResetDialogOpen(false)}
+    >
+      <p>This replaces your accounts, transactions, savings goals, and learned categorization patterns on this device with Finance Planner's example dataset, then syncs that change to your account and any other signed-in devices.</p>
+      <p><strong>Replaced:</strong> accounts, transactions, goals, and learned patterns — with example data, not an empty state.</p>
+      <p><strong>Kept:</strong> your account, sign-in, and any connected banks, PayPal, or Google subscriptions.</p>
+    </ConfirmationDialog>
+
+    <ConfirmationDialog
+      open={csvDialogOpen}
+      severity="warning"
+      icon={FileSpreadsheet}
+      heading="This file won't be encrypted."
+      headingId="csv-export-title"
+      confirmLabel="Export as CSV"
+      onConfirm={runCsvExport}
+      onClose={() => setCsvDialogOpen(false)}
+      footer={<button type="button" className="data-tools-link" onClick={() => { setCsvDialogOpen(false); setView('create-backup') }}>Use encrypted backup instead</button>}
+    >
+      <p>CSV export creates a plain text file — anyone who can open it, or any other app with access to it on this device, can read your transaction data directly.</p>
+      <p>Dates, descriptions, categories, and amounts are all readable as plain text. Save it only to a storage location and device you trust. For a protected copy, use encrypted backup instead.</p>
+    </ConfirmationDialog>
   </div>
 }

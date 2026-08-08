@@ -5,9 +5,9 @@ import { probeSameOrigin } from './mobile-connectivity'
 import type { Transaction } from './types'
 
 describe('public connectivity probe', () => {
-  it('uses the public healthz endpoint', async () => {
+  it('uses the public health/live endpoint', async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
-      expect(String(input)).toContain('/healthz?connectivity-check=')
+      expect(String(input)).toContain('/health/live?connectivity-check=')
       return new Response(JSON.stringify({ status: 'ok' }), { status: 200 })
     }) as typeof fetch
 

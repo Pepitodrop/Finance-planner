@@ -1,55 +1,79 @@
 import { useEffect, useMemo, useState } from 'react'
-import {
-  ArrowDownRight,
-  ArrowUpRight,
-  BrainCircuit,
-  CalendarClock,
-  DatabaseBackup,
-  Landmark,
-  Link2,
-  MessageCircleQuestion,
-  PiggyBank,
-  Plus,
-  ReceiptText,
-  Repeat2,
-  Target,
-  Undo2,
-  WalletCards,
-} from 'lucide-react'
-import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { AiPanel } from './AiPanel'
+import { Plus, Undo2 } from 'lucide-react'
+import { AccountPage } from './AccountPage'
+import { AiPanel, type AiPanelAcceptanceMode } from './AiPanel'
 import type { AiSuggestion } from './ai'
+import type { AuthUser } from './AuthGate'
 import { learnBehavior } from './behavior'
 import { ConnectionsPanel } from './ConnectionsPanel'
-import { DataTools } from './DataTools'
-import { initialState } from './data'
-import { FinanceAssistant } from './FinanceAssistant'
-import { MerchantLogo } from './MerchantLogo'
-import { ReceiptReview } from './ReceiptReview'
+import type { ConnectionsAcceptanceMode } from './features/connections/connectionsAcceptanceFixtures'
+import { DataTools, type DataToolsAcceptanceMode } from './DataTools'
+import { accountsAcceptanceState, initialState, planningAcceptanceState } from './data'
+import { FinanceAssistant, type AssistantAcceptanceMode } from './FinanceAssistant'
+import { ReceiptReview, type ReceiptAcceptanceMode } from './ReceiptReview'
 import { SavingsGoals } from './SavingsGoals'
 import { TransactionsPage } from './TransactionsPage'
-import { categoryBreakdown, currentMonthTotals, formatMoney, monthlyProjection, recurringPayments, totalBalance } from './finance'
+import { Dashboard } from './features/dashboard/Dashboard'
+import { AccountsPage } from './features/accounts/AccountsPage'
+import { RecurringPaymentsPage } from './features/recurring/RecurringPaymentsPage'
+import { SubscriptionsPage, type SubscriptionsAcceptanceMode } from './features/subscriptions/SubscriptionsPage'
 import { loadState, resetStoredState, saveState } from './storage'
 import { addTransactionToState, deleteTransactionFromState, updateTransactionInState } from './transactionState'
 import type { AppState, Transaction, TransactionType } from './types'
 import { validateTransactionInput } from './validation'
+import { ApplicationShell } from './app/ApplicationShell'
+import type { DestinationId } from './app/navigation'
 
-type Tab = 'dashboard' | 'transactions' | 'goals' | 'recurring' | 'connections' | 'ai' | 'assistant' | 'receipt' | 'data'
-interface AppProps { userId: string; userName?: string }
+interface AppProps { userId: string; userName?: string; user: AuthUser; onLockVault?: () => void; onLogout: () => Promise<void> }
 
-const CATEGORY_COLORS = ['#5878ff', '#5fe0a0', '#ff9f5b', '#ff8b96', '#7dd3fc', '#c084fc', '#f4d35e', '#4dd0c4']
-const ACCOUNT_TYPE_LABELS: Record<string, string> = { checking: 'Girokonto', savings: 'Sparkonto', cash: 'Bargeld', investment: 'Depot' }
+const CONNECTIONS_ACCEPTANCE_MODES: ConnectionsAcceptanceMode[] = ['empty', 'populated', 'institution-selector', 'institution-search', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'checking', 'sync-selection', 'attention', 'manual', 'statement-preview']
+const AI_ACCEPTANCE_MODES: AiPanelAcceptanceMode[] = ['ready', 'progress', 'results', 'anomaly', 'applied', 'error', 'empty']
+const ASSISTANT_ACCEPTANCE_MODES: AssistantAcceptanceMode[] = ['hosted-consent', 'hosted-running', 'success', 'hosted-fallback', 'local-selected', 'local-running']
+const RECEIPT_ACCEPTANCE_MODES: ReceiptAcceptanceMode[] = ['selected', 'running', 'sufficient', 'insufficient', 'receipt-error']
+const DATA_ACCEPTANCE_MODES: DataToolsAcceptanceMode[] = ['overview', 'vault-password', 'create-backup', 'restore-backup', 'restore-failure', 'reset', 'reset-complete', 'csv-warning', 'delete-account', 'delete-account-final', 'delete-failure', 'cloud-sync', 'sync-offline', 'sync-error']
+const SUBSCRIPTIONS_ACCEPTANCE_MODES: SubscriptionsAcceptanceMode[] = ['intro', 'preflight', 'connected', 'syncing', 'no-subscriptions', 'unavailable', 'subscription-sync-error', 'manage']
 
-function App({ userId, userName }: AppProps) {
+function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
   const [state, setState] = useState<AppState>(() => loadState())
-  const [tab, setTab] = useState<Tab>('dashboard')
+  const [tab, setTab] = useState<DestinationId>(() =>
+    typeof window !== 'undefined' && window.location.search.includes('provider=google-subscriptions') ? 'subscriptions' : 'dashboard')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<Transaction | null>(null)
   const [transactionType, setTransactionType] = useState<TransactionType>('expense')
   const [formError, setFormError] = useState('')
   const [deletedTransaction, setDeletedTransaction] = useState<Transaction | null>(null)
+  const [requestedTransactionAccount, setRequestedTransactionAccount] = useState<string | null>(null)
+  const [accountsAcceptanceMode, setAccountsAcceptanceMode] = useState<'accounts' | 'empty' | 'detail' | 'credit' | null>(null)
+  const [planningAcceptanceMode, setPlanningAcceptanceMode] = useState<'goals' | 'goals-empty' | 'goal-editor' | 'recurring' | 'recurring-empty' | 'budget-consent' | 'budget-result' | null>(null)
+  const [connectionsAcceptanceMode, setConnectionsAcceptanceMode] = useState<ConnectionsAcceptanceMode | null>(null)
+  const [aiAcceptanceMode, setAiAcceptanceMode] = useState<AiPanelAcceptanceMode | null>(null)
+  const [assistantAcceptanceMode, setAssistantAcceptanceMode] = useState<AssistantAcceptanceMode | null>(null)
+  const [receiptAcceptanceMode, setReceiptAcceptanceMode] = useState<ReceiptAcceptanceMode | null>(null)
+  const [dataAcceptanceMode, setDataAcceptanceMode] = useState<DataToolsAcceptanceMode | null>(null)
+  const [subscriptionsAcceptanceMode, setSubscriptionsAcceptanceMode] = useState<SubscriptionsAcceptanceMode | null>(null)
 
   useEffect(() => saveState(state), [state])
+  useEffect(() => {
+    if (import.meta.env.VITE_ACCEPTANCE_FIXTURES !== 'true') return
+    const target = window as Window & { __financePlannerAcceptanceState?: (mode: string) => void }
+    target.__financePlannerAcceptanceState = (mode) => {
+      if (['accounts','empty','detail','credit'].includes(mode)) setAccountsAcceptanceMode(mode as 'accounts' | 'empty' | 'detail' | 'credit')
+      if (['goals','goals-empty','goal-editor','recurring','recurring-empty','budget-consent','budget-result'].includes(mode)) setPlanningAcceptanceMode(mode as typeof planningAcceptanceMode)
+      if (CONNECTIONS_ACCEPTANCE_MODES.includes(mode as ConnectionsAcceptanceMode)) setConnectionsAcceptanceMode(mode as ConnectionsAcceptanceMode)
+      if (AI_ACCEPTANCE_MODES.includes(mode as AiPanelAcceptanceMode)) setAiAcceptanceMode(mode as AiPanelAcceptanceMode)
+      if (ASSISTANT_ACCEPTANCE_MODES.includes(mode as AssistantAcceptanceMode)) setAssistantAcceptanceMode(mode as AssistantAcceptanceMode)
+      if (RECEIPT_ACCEPTANCE_MODES.includes(mode as ReceiptAcceptanceMode)) setReceiptAcceptanceMode(mode as ReceiptAcceptanceMode)
+      if (DATA_ACCEPTANCE_MODES.includes(mode as DataToolsAcceptanceMode)) setDataAcceptanceMode(mode as DataToolsAcceptanceMode)
+      if (SUBSCRIPTIONS_ACCEPTANCE_MODES.includes(mode as SubscriptionsAcceptanceMode)) setSubscriptionsAcceptanceMode(mode as SubscriptionsAcceptanceMode)
+    }
+    return () => { delete target.__financePlannerAcceptanceState }
+  }, [])
+  useEffect(() => {
+    if (!window.location.search.includes('provider=google-subscriptions')) return
+    const cleanUrl = new URL(window.location.href)
+    for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'connected']) cleanUrl.searchParams.delete(key)
+    window.history.replaceState({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`)
+  }, [])
   useEffect(() => {
     if (!dialogOpen) return
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -59,17 +83,17 @@ function App({ userId, userName }: AppProps) {
     return () => document.removeEventListener('keydown', closeOnEscape)
   }, [dialogOpen])
 
-  const totals = useMemo(() => currentMonthTotals(state.transactions), [state.transactions])
-  const projection = useMemo(() => monthlyProjection(state), [state])
-  const categories = useMemo(() => categoryBreakdown(state.transactions), [state.transactions])
-  const recurring = useMemo(() => recurringPayments(state.transactions), [state.transactions])
-  const recentTransactions = useMemo(
-    () => [...state.transactions].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 4),
-    [state.transactions],
-  )
-  const net = totals.incomeCents - totals.expenseCents
-  const monthLabel = new Intl.DateTimeFormat('de-DE', { month: 'long' }).format(new Date())
-  const greetingName = userName?.trim().split(/\s+/)[0] || 'Finance'
+  const accountsPresentationState = useMemo(() => {
+    if (accountsAcceptanceMode === 'accounts' || accountsAcceptanceMode === 'detail' || accountsAcceptanceMode === 'credit') return accountsAcceptanceState
+    if (accountsAcceptanceMode === 'empty') return { ...accountsAcceptanceState, accounts: [], transactions: [] }
+    return state
+  }, [accountsAcceptanceMode, state])
+  const planningPresentationState = useMemo(() => {
+    if (planningAcceptanceMode === 'goals-empty') return { ...planningAcceptanceState, goals: [] }
+    if (planningAcceptanceMode === 'recurring-empty') return { ...planningAcceptanceState, transactions: [] }
+    if (planningAcceptanceMode) return planningAcceptanceState
+    return state
+  }, [planningAcceptanceMode, state])
 
   const openNewTransaction = () => {
     setEditing(null)
@@ -149,189 +173,59 @@ function App({ userId, userName }: AppProps) {
     setState(structuredClone(initialState))
   }
 
-  const titles: Record<Tab, string> = {
-    dashboard: 'Finanzübersicht',
-    transactions: 'Transaktionen',
-    goals: 'Sparziele',
-    recurring: 'Wiederkehrende Zahlungen',
-    connections: 'Banken & PayPal',
-    ai: 'KI-Kategorisierung',
-    assistant: 'Finanzanalyse & Planung',
-    receipt: 'Nachhaltiger Beleg-Check',
-    data: 'Daten & Backup',
+  const titles: Record<DestinationId, string> = {
+    dashboard: 'Dashboard',
+    transactions: 'Transactions',
+    accounts: 'Accounts',
+    goals: 'Goals',
+    recurring: 'Recurring',
+    connections: 'Connections',
+    subscriptions: 'Subscriptions',
+    ai: 'Finance Intelligence',
+    assistant: 'Finance Assistant',
+    receipt: 'Receipt Review',
+    data: 'Data and Backup',
+    account: 'Account',
   }
 
-  const navButton = (target: Tab, icon: React.ReactNode, label: string) => (
-    <button
-      type="button"
-      className={tab === target ? 'active' : ''}
-      aria-current={tab === target ? 'page' : undefined}
-      onClick={() => setTab(target)}
-    >
-      {icon}{label}
-    </button>
-  )
+  const navigate = (destination: DestinationId) => {
+    if (destination === 'transactions') setRequestedTransactionAccount(null)
+    setTab(destination)
+  }
+  const viewAccountTransactions = (accountId: string) => { setRequestedTransactionAccount(accountId); setTab('transactions') }
 
-  return <div className="app-shell">
-    <aside className="sidebar">
-      <div className="brand">
-        <div className="brand-mark"><Landmark size={22}/></div>
-        <div><strong>Finance Planner</strong><span>Privat. Leistungsstark. Deins.</span></div>
-      </div>
-      <nav aria-label="Hauptnavigation">
-        {navButton('dashboard', <WalletCards size={19}/>, 'Übersicht')}
-        {navButton('transactions', <ArrowDownRight size={19}/>, 'Transaktionen')}
-        {navButton('goals', <Target size={19}/>, 'Sparziele')}
-        {navButton('recurring', <Repeat2 size={19}/>, 'Verträge')}
-        {navButton('connections', <Link2 size={19}/>, 'Verbindungen')}
-        {navButton('ai', <BrainCircuit size={19}/>, 'KI-Lernen')}
-        {navButton('assistant', <MessageCircleQuestion size={19}/>, 'Assistent')}
-        {navButton('receipt', <ReceiptText size={19}/>, 'Beleg-Check')}
-        {navButton('data', <DatabaseBackup size={19}/>, 'Daten')}
-      </nav>
-      <div className="privacy-note">
-        <strong>Verschlüsselt gespeichert</strong>
-        <span>Bank-Secrets bleiben ausschließlich im Backend.</span>
-      </div>
-    </aside>
-
-    <main id="main-content" tabIndex={-1}>
-      <header className={`topbar ${tab === 'dashboard' ? 'dashboard-topbar' : ''} ${tab === 'transactions' ? 'transactions-topbar' : ''}`}>
+  return <ApplicationShell activeDestination={tab} onNavigate={navigate} onLockVault={onLockVault}>
+      {tab !== 'dashboard' && tab !== 'transactions' && tab !== 'accounts' && tab !== 'goals' && tab !== 'recurring' && <header className="topbar">
         <div>
-          {tab === 'dashboard' ? <>
-            <h1>Guten Abend, {greetingName} <span aria-hidden="true">👋</span></h1>
-            <p className="dashboard-subtitle">Das passiert heute mit deinen Finanzen.</p>
-          </> : tab === 'transactions' ? <>
-            <h1>Transaktionen</h1>
-            <p className="dashboard-subtitle">Durchsuche, verwalte und prüfe alle Buchungen.</p>
-          </> : <>
-            <p className="eyebrow">Persönliche Finanzen</p>
-            <h1>{titles[tab]}</h1>
-          </>}
+          <p className="eyebrow">Personal finance</p>
+          <h1>{titles[tab]}</h1>
         </div>
-        <button type="button" className="primary" onClick={openNewTransaction}><Plus size={18}/> Manuelle Buchung</button>
-      </header>
+        <button type="button" className="primary" onClick={openNewTransaction}><Plus size={18}/> Manual entry</button>
+      </header>}
 
-      {tab === 'dashboard' && <>
-        <section className="stats-grid">
-          <article className="stat-card"><span>Gesamtvermögen</span><strong>{formatMoney(totalBalance(state))}</strong><small><ArrowUpRight size={15}/> Kontenübergreifend</small></article>
-          <article className="stat-card"><span>Einnahmen im {monthLabel}</span><strong>{formatMoney(totals.incomeCents)}</strong><small><ArrowUpRight size={15}/> Erfasst</small></article>
-          <article className="stat-card"><span>Ausgaben im {monthLabel}</span><strong>{formatMoney(totals.expenseCents)}</strong><small className="negative"><ArrowDownRight size={15}/> Inklusive Verträge</small></article>
-          <article className="stat-card highlight"><span>Monatlicher Überschuss</span><strong>{formatMoney(net)}</strong><small><PiggyBank size={15}/> Für Sparziele verfügbar</small></article>
-        </section>
-
-        <section className="dashboard-grid">
-          <article className="panel projection-panel">
-            <div className="panel-header"><div><p className="eyebrow">12 Monate</p><h2>Vermögensprognose</h2></div><span className="pill">Deterministisch</span></div>
-            <div className="chart">
-              <ResponsiveContainer width="100%" height={290}>
-                <AreaChart data={projection}>
-                  <CartesianGrid strokeDasharray="4 4" vertical={false}/>
-                  <XAxis dataKey="month"/>
-                  <YAxis tickFormatter={(value) => `${Math.round(Number(value) / 1000)}k`}/>
-                  <Tooltip formatter={(value) => formatMoney(Number(value) * 100)}/>
-                  <Area type="monotone" dataKey="balance" stroke="currentColor" fill="currentColor" fillOpacity={0.15} strokeWidth={3}/>
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </article>
-          <article className="panel">
-            <div className="panel-header"><div><p className="eyebrow">Ausgaben</p><h2>Kategorien</h2></div></div>
-            <div className="donut-layout">
-              <ResponsiveContainer width="100%" height={210}>
-                <PieChart>
-                  <Pie data={categories} dataKey="value" nameKey="name" innerRadius={58} outerRadius={86} paddingAngle={3}>
-                    {categories.map((category, index) => <Cell key={category.name} fill={CATEGORY_COLORS[index % CATEGORY_COLORS.length]}/>) }
-                  </Pie>
-                  <Tooltip formatter={(value) => formatMoney(Number(value) * 100)}/>
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="category-list">
-                {categories.slice(0, 5).map((category, index) => <div key={category.name}>
-                  <span><i className="category-dot" style={{ background: CATEGORY_COLORS[index % CATEGORY_COLORS.length] }}/>{category.name}</span>
-                  <strong>{formatMoney(category.value * 100)}</strong>
-                </div>)}
-              </div>
-            </div>
-          </article>
-        </section>
-
-        <section className="dashboard-grid lower">
-          <article className="panel">
-            <div className="panel-header"><div><p className="eyebrow">Konten</p><h2>Deine Guthaben</h2></div></div>
-            <div className="account-list">
-              {state.accounts.map((account) => <div className="account-row" key={account.id}>
-                <div className="account-icon"><WalletCards size={19}/></div>
-                <div><strong>{account.name}</strong><span>{ACCOUNT_TYPE_LABELS[account.type] ?? account.type}</span></div>
-                <b>{formatMoney(account.balanceCents)}</b>
-              </div>)}
-            </div>
-          </article>
-
-          <article className="panel">
-            <div className="panel-header"><div><p className="eyebrow">Nächste Schritte</p><h2>Sparziele</h2></div></div>
-            <div className="goal-list">
-              {state.goals.map((goal) => {
-                const progress = Math.min(100, Math.round((goal.currentCents / goal.targetCents) * 100))
-                return <div className="goal-item" key={goal.id}>
-                  <div><strong>{goal.name}</strong><span>{formatMoney(goal.currentCents)} von {formatMoney(goal.targetCents)}</span></div>
-                  <b>{progress}%</b>
-                  <div className="progress"><span style={{ width: `${progress}%` }}/></div>
-                </div>
-              })}
-            </div>
-          </article>
-
-          <article className="panel recent-panel">
-            <div className="panel-header">
-              <div><p className="eyebrow">Aktivität</p><h2>Letzte Transaktionen</h2></div>
-              <button type="button" className="panel-link" onClick={() => setTab('transactions')}>Alle ansehen</button>
-            </div>
-            <div className="recent-transaction-list">
-              {recentTransactions.length > 0 ? recentTransactions.map((transaction) => (
-                <button type="button" className="recent-transaction-row" key={transaction.id} onClick={() => openEditTransaction(transaction)}>
-                  <MerchantLogo description={transaction.description} type={transaction.type}/>
-                  <span className="recent-copy"><strong>{transaction.description}</strong><small>{transaction.category} · {new Date(transaction.date).toLocaleDateString('de-DE')}</small></span>
-                  <b className={transaction.type === 'income' ? 'positive-text' : 'negative-text'}>
-                    {transaction.type === 'income' ? '+' : '-'}{formatMoney(transaction.amountCents)}
-                  </b>
-                </button>
-              )) : <p className="recent-empty">Noch keine Transaktionen vorhanden.</p>}
-            </div>
-          </article>
-        </section>
-      </>}
+      {tab === 'dashboard' && <Dashboard state={state} userName={userName} onAddTransaction={openNewTransaction} onEditTransaction={openEditTransaction} onNavigate={navigate}/>}
 
       {tab === 'transactions' && <TransactionsPage
         transactions={state.transactions}
         accounts={state.accounts}
+        onAdd={openNewTransaction}
         onEdit={openEditTransaction}
         onDelete={deleteTransaction}
+        requestedAccountId={requestedTransactionAccount}
       />}
-      {tab === 'goals' && <SavingsGoals state={state} onChange={setState}/>} 
-      {tab === 'recurring' && <section className="panel table-panel recurring-series-panel">
-        <div className="panel-header">
-          <div><p className="eyebrow">Automatisch gruppiert</p><h2>Verträge & feste Zahlungen</h2></div>
-          <span className="pill"><CalendarClock size={14}/> {formatMoney(recurring.reduce((sum, item) => sum + item.amountCents, 0))} / Monat</span>
-        </div>
-        <div className="transaction-list">
-          {recurring.length > 0 ? recurring.map((series) => <div className="transaction-row recurring-series-row" key={series.id}>
-            <MerchantLogo description={series.description} type={series.type}/>
-            <div><strong>{series.description}</strong><span>{series.category} · {series.occurrenceCount} Buchungen · zuletzt {new Date(series.lastDate).toLocaleDateString('de-DE')}</span></div>
-            <b className={series.type === 'income' ? 'positive-text' : 'negative-text'}>{series.type === 'income' ? '+' : '-'}{formatMoney(series.amountCents)} / Monat</b>
-          </div>) : <p className="recent-empty">Noch keine wiederkehrenden Serien erkannt.</p>}
-        </div>
-      </section>}
-      {tab === 'connections' && <ConnectionsPanel state={state} onApply={setState}/>} 
-      {tab === 'ai' && <AiPanel transactions={state.transactions} onApply={applyAiSuggestion}/>} 
-      {tab === 'assistant' && <FinanceAssistant state={state}/>} 
-      {tab === 'receipt' && <ReceiptReview/>}
-      {tab === 'data' && <DataTools userId={userId} state={state} onRestore={setState} onReset={resetAll}/>} 
-    </main>
-
+      {tab === 'accounts' && <AccountsPage key={accountsAcceptanceMode ?? 'live'} accounts={accountsPresentationState.accounts} transactions={accountsPresentationState.transactions} initialSelectedAccountId={accountsAcceptanceMode === 'detail' ? 'accept-checking' : accountsAcceptanceMode === 'credit' ? 'accept-card' : undefined} onOpenConnections={() => setTab('connections')} onViewTransactions={viewAccountTransactions}/>}
+      {tab === 'goals' && <SavingsGoals key={planningAcceptanceMode ?? 'live'} state={planningPresentationState} onChange={setState} initialEditorOpen={planningAcceptanceMode === 'goal-editor'}/>}
+      {tab === 'recurring' && <RecurringPaymentsPage transactions={planningPresentationState.transactions} onAddTransaction={openNewTransaction} onViewTransactions={() => navigate('transactions')}/>}
+      {tab === 'connections' && <ConnectionsPanel key={connectionsAcceptanceMode ?? 'live'} state={state} onApply={setState} acceptanceMode={connectionsAcceptanceMode ?? undefined}/>}
+      {tab === 'ai' && <AiPanel key={aiAcceptanceMode ?? 'live'} transactions={aiAcceptanceMode === 'empty' ? [] : state.transactions} onApply={applyAiSuggestion} acceptanceMode={aiAcceptanceMode ?? undefined}/>}
+      {tab === 'assistant' && <FinanceAssistant key={assistantAcceptanceMode ?? 'live'} state={state} budgetAcceptanceMode={planningAcceptanceMode === 'budget-result' ? 'result' : planningAcceptanceMode === 'budget-consent' ? 'consent' : undefined} acceptanceMode={assistantAcceptanceMode ?? undefined}/>}
+      {tab === 'receipt' && <ReceiptReview key={receiptAcceptanceMode ?? 'live'} acceptanceMode={receiptAcceptanceMode ?? undefined}/>}
+      {tab === 'data' && <DataTools key={dataAcceptanceMode ?? 'live'} userId={userId} state={state} onRestore={setState} onReset={resetAll} acceptanceMode={dataAcceptanceMode ?? undefined}/>}
+      {tab === 'account' && <AccountPage user={user} onLogout={onLogout} onNavigateToData={() => navigate('data')}/>}
+      {tab === 'subscriptions' && <SubscriptionsPage key={subscriptionsAcceptanceMode ?? 'live'} state={state} onApply={setState} acceptanceMode={subscriptionsAcceptanceMode ?? undefined}/>}
     {deletedTransaction && <div className="undo-toast" role="status">
-      <span>„{deletedTransaction.description}“ wurde gelöscht.</span>
-      <button type="button" onClick={undoDelete}><Undo2 size={16}/> Rückgängig</button>
+      <span>“{deletedTransaction.description}” was deleted.</span>
+      <button type="button" onClick={undoDelete}><Undo2 size={16}/> Undo</button>
     </div>}
 
     {dialogOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setDialogOpen(false)}>
@@ -346,25 +240,25 @@ function App({ userId, userName }: AppProps) {
         }}
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <div className="panel-header"><div><p className="eyebrow">{editing ? 'Buchung ändern' : 'Neue Buchung'}</p><h2 id="transaction-dialog-title">{editing ? 'Transaktion bearbeiten' : 'Transaktion hinzufügen'}</h2></div></div>
+        <div className="panel-header"><div><p className="eyebrow">{editing ? 'Update recorded activity' : 'Record activity'}</p><h2 id="transaction-dialog-title">{editing ? 'Edit transaction' : 'Add transaction'}</h2></div></div>
         <div className="segmented">
-          <button type="button" aria-pressed={transactionType === 'expense'} className={transactionType === 'expense' ? 'active' : ''} onClick={() => setTransactionType('expense')}>Ausgabe</button>
-          <button type="button" aria-pressed={transactionType === 'income'} className={transactionType === 'income' ? 'active' : ''} onClick={() => setTransactionType('income')}>Einnahme</button>
+          <button type="button" aria-pressed={transactionType === 'expense'} className={transactionType === 'expense' ? 'active' : ''} onClick={() => setTransactionType('expense')}>Expense</button>
+          <button type="button" aria-pressed={transactionType === 'income'} className={transactionType === 'income' ? 'active' : ''} onClick={() => setTransactionType('income')}>Income</button>
         </div>
-        <label>Beschreibung<input name="description" required maxLength={160} defaultValue={editing?.description ?? ''} placeholder="z. B. Supermarkt"/></label>
-        <label>Betrag in €<input name="amount" type="number" required min="0.01" max="100000000" step="0.01" inputMode="decimal" defaultValue={editing ? editing.amountCents / 100 : undefined} placeholder="0,00"/></label>
-        <label>Kategorie<input name="category" required maxLength={80} defaultValue={editing?.category ?? ''} placeholder="z. B. Lebensmittel"/></label>
-        <label>Konto<select name="accountId" defaultValue={editing?.accountId ?? state.accounts[0]?.id}>{state.accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
-        <label>Datum<input name="date" type="date" required defaultValue={editing?.date ?? new Date().toISOString().slice(0, 10)}/></label>
-        <label className="checkbox"><input name="recurring" type="checkbox" defaultChecked={Boolean(editing?.recurring)}/> Wiederkehrende Zahlung</label>
+        <label>Description<input name="description" required maxLength={160} defaultValue={editing?.description ?? ''} placeholder="For example, grocery shop"/></label>
+        <label>Amount in €<input name="amount" type="number" required min="0.01" max="100000000" step="0.01" inputMode="decimal" defaultValue={editing ? editing.amountCents / 100 : undefined} placeholder="0.00"/></label>
+        <label>Category<input name="category" required maxLength={80} defaultValue={editing?.category ?? ''} placeholder="For example, Groceries"/></label>
+        <label>Account<select name="accountId" defaultValue={editing?.accountId ?? state.accounts[0]?.id}>{state.accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
+        <label>Date<input name="date" type="date" required defaultValue={editing?.date ?? new Date().toISOString().slice(0, 10)}/></label>
+        <label className="checkbox"><input name="recurring" type="checkbox" defaultChecked={Boolean(editing?.recurring)}/> Recurring payment</label>
         {formError && <p className="status-message error-message" role="alert">{formError}</p>}
         <div className="modal-actions">
-          <button type="button" className="secondary" onClick={() => setDialogOpen(false)}>Abbrechen</button>
-          <button type="submit" className="primary">{editing ? 'Änderungen speichern' : 'Speichern'}</button>
+          <button type="button" className="secondary" onClick={() => setDialogOpen(false)}>Cancel</button>
+          <button type="submit" className="primary">{editing ? 'Save changes' : 'Save'}</button>
         </div>
       </form>
     </div>}
-  </div>
+  </ApplicationShell>
 }
 
 export default App

@@ -17,10 +17,16 @@ function initials(description: string): string {
 export function MerchantLogo({ description, type }: MerchantLogoProps) {
   const [failed, setFailed] = useState(false)
   const logo = resolveMerchantLogo(description)
+  // Acceptance-fixture runs assert that the app never contacts a real
+  // external provider (see the "provider-boundary proof" in the Data &
+  // Privacy acceptance script), so the branded <img> request to
+  // cdn.simpleicons.org must never fire there -- render the same fallback
+  // used when a real logo request fails.
+  const fixturesActive = import.meta.env.VITE_ACCEPTANCE_FIXTURES === 'true'
 
   useEffect(() => setFailed(false), [description])
 
-  if (logo && !failed) {
+  if (logo && !failed && !fixturesActive) {
     return (
       <span className="transaction-merchant-logo branded" title={logo.label} aria-label={`${logo.label} Logo`}>
         <img
@@ -41,7 +47,7 @@ export function MerchantLogo({ description, type }: MerchantLogoProps) {
     <span className={`transaction-merchant-logo fallback ${type}`} aria-hidden="true">
       <span className="merchant-initials">{initials(description)}</span>
       <span className="merchant-direction">
-        {type === 'income' ? <ArrowUpRight size={11}/> : <ArrowDownRight size={11}/>} 
+        {type === 'income' ? <ArrowUpRight size={11}/> : <ArrowDownRight size={11}/>}
       </span>
     </span>
   )

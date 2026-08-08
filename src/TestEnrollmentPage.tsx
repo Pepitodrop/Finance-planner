@@ -9,7 +9,7 @@ export function TestEnrollmentPage() {
   const enroll = async () => {
     if (!token) {
       setStatus('error')
-      setMessage('Der Einladungslink enthält kein Token.')
+      setMessage('The invitation link is missing a token.')
       return
     }
     setStatus('working')
@@ -20,7 +20,7 @@ export function TestEnrollmentPage() {
         cache: 'no-store',
         headers: { Accept: 'application/json' },
       })
-      if (!optionsResponse.ok) throw new Error((await optionsResponse.json().catch(() => null))?.error || 'Einladungslink ist ungültig oder abgelaufen.')
+      if (!optionsResponse.ok) throw new Error((await optionsResponse.json().catch(() => null))?.error || 'The invitation link is invalid or has expired.')
       const credential = await startRegistration({ optionsJSON: await optionsResponse.json() })
       const verifyResponse = await fetch('/api/auth/test-enrollment/verify', {
         method: 'POST',
@@ -28,25 +28,25 @@ export function TestEnrollmentPage() {
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ token, credential }),
       })
-      if (!verifyResponse.ok) throw new Error((await verifyResponse.json().catch(() => null))?.error || 'Passkey konnte nicht eingerichtet werden.')
+      if (!verifyResponse.ok) throw new Error((await verifyResponse.json().catch(() => null))?.error || 'The passkey could not be set up.')
       setStatus('done')
-      setMessage('Der Testzugang wurde eingerichtet. Du wirst zur App weitergeleitet.')
+      setMessage('Test access is set up. You will be redirected to the app.')
       window.setTimeout(() => window.location.assign('/'), 800)
     } catch (error) {
       setStatus('error')
-      setMessage(error instanceof Error ? error.message : 'Passkey konnte nicht eingerichtet werden.')
+      setMessage(error instanceof Error ? error.message : 'The passkey could not be set up.')
     }
   }
 
   return (
     <main className="auth-shell">
       <section className="auth-card" aria-labelledby="test-enrollment-title">
-        <p className="eyebrow">Einmalige Testkonto-Einrichtung</p>
-        <h1 id="test-enrollment-title">Testzugang mit Passkey aktivieren</h1>
-        <p>Dieser Link kann nur einmal und nur für kurze Zeit verwendet werden. Richte jetzt einen Geräte-Passkey ein.</p>
+        <p className="eyebrow">One-time test account setup</p>
+        <h1 id="test-enrollment-title">Activate test access with a passkey</h1>
+        <p>This link can only be used once and only for a short time. Set up a device passkey now.</p>
         {message && <p role={status === 'error' ? 'alert' : 'status'}>{message}</p>}
         <button type="button" className="primary" onClick={() => void enroll()} disabled={status === 'working' || status === 'done'}>
-          {status === 'working' ? 'Passkey wird eingerichtet …' : status === 'done' ? 'Eingerichtet' : 'Passkey einrichten'}
+          {status === 'working' ? 'Setting up passkey…' : status === 'done' ? 'Set up' : 'Set up passkey'}
         </button>
       </section>
     </main>

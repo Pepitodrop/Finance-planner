@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   installDismissalDeadline,
-  isSafeServiceWorkerUpdate,
   isStandaloneDisplay,
   requestServiceWorkerActivation,
   shouldOfferInstall,
@@ -14,9 +13,30 @@ import {
   shouldShowIosInstallGuide,
   type StorageHealth,
 } from './mobile-health'
+import { RUNTIME_SURFACE_PRIORITY } from './runtime-surfaces/runtimeSurfacePolicy'
+import { runtimeSurfaceRegistration, useRuntimeSurface } from './runtime-surfaces/runtimeSurfaceContext'
+
+// Acceptance-only overrides for states that otherwise require either a
+// 30-second real-time delay (install/iOS-guide) or a real, high-usage
+// navigator.storage.estimate() result (storage warning/critical/protection)
+// that a browser automation harness cannot deterministically produce.
+// Self-registers its own global function (rather than reusing App.tsx's
+// __financePlannerAcceptanceState) because this component is mounted
+// directly in bootstrap.tsx, outside AuthGate/App's dispatcher. Gated the
+// same way as every other acceptance-fixture surface in this codebase --
+// never registered, and this prop has no effect, unless
+// VITE_ACCEPTANCE_FIXTURES=true.
+export type MobileRuntimeAcceptanceMode = 'install' | 'ios-guide' | 'storage-warning' | 'storage-critical' | 'storage-protection'
+const RUNTIME_ACCEPTANCE_MODES: MobileRuntimeAcceptanceMode[] = ['install', 'ios-guide', 'storage-warning', 'storage-critical', 'storage-protection']
+const FIXTURE_STORAGE_HEALTH: Record<'storage-warning' | 'storage-critical' | 'storage-protection', StorageHealth> = {
+  'storage-warning': { supported: true, persisted: false, usage: 850_000_000, quota: 1_000_000_000, usageRatio: 0.85, pressure: 'warning' },
+  'storage-critical': { supported: true, persisted: false, usage: 970_000_000, quota: 1_000_000_000, usageRatio: 0.97, pressure: 'critical' },
+  'storage-protection': { supported: true, persisted: false, usage: 100_000_000, quota: 1_000_000_000, usageRatio: 0.1, pressure: 'healthy' },
+}
 
 const DISMISSAL_KEY = 'finance-planner-install-dismissed-until'
 const STORAGE_DISMISSAL_KEY = 'finance-planner-storage-dismissed-until'
+const INSTALL_OFFER_DELAY_MS = 30_000
 const EMPTY_STORAGE_HEALTH: StorageHealth = {
   supported: false,
   persisted: false,
@@ -37,10 +57,12 @@ export function MobileRuntime() {
   const [dismissedUntil, setDismissedUntil] = useState(() => readDeadline(DISMISSAL_KEY))
   const [storageDismissedUntil, setStorageDismissedUntil] = useState(() => readDeadline(STORAGE_DISMISSAL_KEY))
   const [storageHealth, setStorageHealth] = useState<StorageHealth>(EMPTY_STORAGE_HEALTH)
+  const [acceptanceMode, setAcceptanceMode] = useState<MobileRuntimeAcceptanceMode | null>(null)
   const [registration, setRegistration] = useState<ServiceWorkerRegistration>()
   const [updateReady, setUpdateReady] = useState(false)
   const [installing, setInstalling] = useState(false)
   const [protectingStorage, setProtectingStorage] = useState(false)
+  const [installOfferEligible, setInstallOfferEligible] = useState(false)
 
   const standalone = useMemo(() => isStandaloneDisplay(
     window.matchMedia('(display-mode: standalone)').matches,
@@ -54,25 +76,55 @@ export function MobileRuntime() {
   ), [])
 
   const now = Date.now()
-  const canInstall = shouldOfferInstall({
-    standalone,
-    promptAvailable: Boolean(installPrompt),
-    dismissedUntil,
-    now,
-  })
-  const showIosGuide = shouldShowIosInstallGuide({
-    standalone,
-    promptAvailable: Boolean(installPrompt),
-    dismissedUntil,
-    now,
-    iosSafari,
-  })
-  const shouldOfferStorageProtection = standalone
-    && storageHealth.supported
-    && !storageHealth.persisted
-    && storageDismissedUntil <= now
-    && !canInstall
-    && !showIosGuide
+  const effectiveStorageHealth = acceptanceMode && acceptanceMode !== 'install' && acceptanceMode !== 'ios-guide'
+    ? FIXTURE_STORAGE_HEALTH[acceptanceMode]
+    : storageHealth
+  const canInstall = acceptanceMode
+    ? acceptanceMode === 'install'
+    : shouldOfferInstall({
+      standalone,
+      promptAvailable: Boolean(installPrompt),
+      offerEligible: installOfferEligible,
+      dismissedUntil,
+      now,
+    })
+  const showIosGuide = acceptanceMode
+    ? acceptanceMode === 'ios-guide'
+    : installOfferEligible && shouldShowIosInstallGuide({
+      standalone,
+      promptAvailable: Boolean(installPrompt),
+      dismissedUntil,
+      now,
+      iosSafari,
+    })
+  const shouldOfferStorageProtection = acceptanceMode
+    ? acceptanceMode === 'storage-protection'
+    : standalone
+      && effectiveStorageHealth.supported
+      && !effectiveStorageHealth.persisted
+      && storageDismissedUntil <= now
+      && !canInstall
+      && !showIosGuide
+
+  const showOffline = useRuntimeSurface(runtimeSurfaceRegistration('offline', !online, RUNTIME_SURFACE_PRIORITY.critical, { exclusive: true, blocksLower: true }))
+  const showStorageCritical = useRuntimeSurface(runtimeSurfaceRegistration('storage-critical', effectiveStorageHealth.pressure === 'critical', RUNTIME_SURFACE_PRIORITY.critical, { exclusive: true, blocksLower: true }))
+  const showUpdate = useRuntimeSurface(runtimeSurfaceRegistration('update', updateReady, RUNTIME_SURFACE_PRIORITY.userAction, { exclusive: true, blocksLower: true }))
+  const showInstall = useRuntimeSurface(runtimeSurfaceRegistration('install', canInstall || showIosGuide, RUNTIME_SURFACE_PRIORITY.recommendationInstall, { exclusive: true, blocksLower: true }))
+  const showStorageProtection = useRuntimeSurface(runtimeSurfaceRegistration('storage-protection', shouldOfferStorageProtection, RUNTIME_SURFACE_PRIORITY.optional, { exclusive: true, blocksLower: true }))
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setInstallOfferEligible(true), INSTALL_OFFER_DELAY_MS)
+    return () => window.clearTimeout(timer)
+  }, [])
+
+  useEffect(() => {
+    if (import.meta.env.VITE_ACCEPTANCE_FIXTURES !== 'true') return
+    const target = window as Window & { __financePlannerRuntimeAcceptanceState?: (mode: string) => void }
+    target.__financePlannerRuntimeAcceptanceState = (mode) => {
+      setAcceptanceMode(RUNTIME_ACCEPTANCE_MODES.includes(mode as MobileRuntimeAcceptanceMode) ? (mode as MobileRuntimeAcceptanceMode) : null)
+    }
+    return () => { delete target.__financePlannerRuntimeAcceptanceState }
+  }, [])
 
   useEffect(() => {
     document.documentElement.classList.toggle('mobile-standalone', standalone)
@@ -118,35 +170,22 @@ export function MobileRuntime() {
     }
   }, [])
 
+  // Update detection is owned solely by MobileProductionRuntime, which
+  // dispatches finance-planner:update-available once it confirms a safe,
+  // controller-having update (see isSafeServiceWorkerUpdate). This banner is
+  // a pure consumer of that event rather than running its own independent
+  // navigator.serviceWorker.ready/updatefound observation -- registration
+  // (bootstrap.tsx) and the controllerchange -> reload transition
+  // (bootstrap.tsx) also each have exactly one owner.
   useEffect(() => {
-    if (!('serviceWorker' in navigator) || !import.meta.env.PROD) return
-
-    let active = true
-    let refreshing = false
-    const handleControllerChange = () => {
-      if (refreshing) return
-      refreshing = true
-      window.location.reload()
+    const handleUpdateAvailable = (event: Event) => {
+      const detail = (event as CustomEvent<{ registration: ServiceWorkerRegistration }>).detail
+      if (!detail?.registration) return
+      setRegistration(detail.registration)
+      setUpdateReady(true)
     }
-
-    navigator.serviceWorker.ready.then((readyRegistration) => {
-      if (!active) return
-      setRegistration(readyRegistration)
-      setUpdateReady(isSafeServiceWorkerUpdate(readyRegistration))
-
-      readyRegistration.addEventListener('updatefound', () => {
-        const worker = readyRegistration.installing
-        worker?.addEventListener('statechange', () => {
-          if (worker.state === 'installed' && navigator.serviceWorker.controller) setUpdateReady(true)
-        })
-      })
-    }).catch(() => undefined)
-
-    navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange)
-    return () => {
-      active = false
-      navigator.serviceWorker.removeEventListener('controllerchange', handleControllerChange)
-    }
+    window.addEventListener('finance-planner:update-available', handleUpdateAvailable)
+    return () => window.removeEventListener('finance-planner:update-available', handleUpdateAvailable)
   }, [])
 
   async function install() {
@@ -156,6 +195,7 @@ export function MobileRuntime() {
       await installPrompt.prompt()
       const choice = await installPrompt.userChoice
       if (choice.outcome === 'accepted') setInstallPrompt(null)
+      else dismissInstall()
     } finally {
       setInstalling(false)
     }
@@ -186,61 +226,72 @@ export function MobileRuntime() {
     }
   }
 
+  useEffect(() => {
+    if (!showInstall && !showStorageProtection) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (showInstall) dismissInstall()
+      else dismissStorageProtection()
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [showInstall, showStorageProtection])
+
   return (
-    <div className="mobile-runtime" aria-live="polite">
-      {!online && (
-        <div className="mobile-runtime__banner" role="status">
-          Offline-Modus. Deine lokal gespeicherten Finanzdaten bleiben verfügbar.
+    <div className="mobile-runtime">
+      {showOffline && (
+        <div className="mobile-runtime__banner runtime-surface runtime-surface--critical" role="status" aria-live="polite">
+          Offline mode. Your locally stored financial data stays available.
         </div>
       )}
-      {storageHealth.pressure === 'critical' && (
-        <div className="mobile-runtime__banner" role="alert">
-          Der Gerätespeicher ist fast voll. Speicherplatz freigeben, um fehlgeschlagene lokale Speicherungen zu vermeiden.
+      {showStorageCritical && (
+        <div className="mobile-runtime__banner runtime-surface runtime-surface--critical" role="alert">
+          Device storage is almost full. Free up space to avoid failed local saves.
         </div>
       )}
-      {storageHealth.pressure === 'warning' && (
-        <div className="mobile-runtime__banner mobile-runtime__banner--warning" role="status">
-          Der Gerätespeicher wird knapp. Bald Speicherplatz freigeben.
+      {effectiveStorageHealth.pressure === 'warning' && !showStorageCritical && (
+        <div className="mobile-runtime__banner mobile-runtime__banner--warning runtime-surface runtime-surface--informational" role="status" aria-live="polite">
+          Device storage is running low. Free up space soon.
         </div>
       )}
-      {updateReady && (
-        <div className="mobile-runtime__banner mobile-runtime__banner--action" role="status">
-          <span>Eine sicherere, neuere Version ist verfügbar.</span>
-          <button type="button" onClick={() => requestServiceWorkerActivation(registration)}>Jetzt aktualisieren</button>
+      {showUpdate && (
+        <div className="mobile-runtime__banner mobile-runtime__banner--action runtime-surface runtime-surface--action" role="status" aria-live="polite">
+          <span>A safer, newer version is available.</span>
+          <button type="button" onClick={() => requestServiceWorkerActivation(registration)}>Update now</button>
         </div>
       )}
-      {canInstall && (
-        <section className="mobile-install-card" role="region" aria-label="Finance Planner installieren">
+      {showInstall && canInstall && (
+        <section className="mobile-install-card runtime-surface runtime-surface--prompt runtime-optional-surface" role="region" aria-label="Install Finance Planner">
           <div>
-            <strong>Finance Planner installieren</strong>
-            <p>Wie eine App öffnen, den Vollbildmodus nutzen und die Offline-Hülle verfügbar halten.</p>
+            <strong>Install Finance Planner</strong>
+            <p>Open it like an app, use full-screen mode, and keep the offline shell available.</p>
           </div>
           <div className="mobile-install-card__actions">
-            <button type="button" onClick={dismissInstall} className="mobile-install-card__secondary">Nicht jetzt</button>
-            <button type="button" onClick={install} disabled={installing}>{installing ? 'Wird geöffnet …' : 'Installieren'}</button>
+            <button type="button" onClick={dismissInstall} className="mobile-install-card__secondary">Not now</button>
+            <button type="button" onClick={install} disabled={installing}>{installing ? 'Opening…' : 'Install'}</button>
           </div>
         </section>
       )}
-      {showIosGuide && (
-        <section className="mobile-install-card" role="region" aria-label="Finance Planner auf iPhone oder iPad installieren">
+      {showInstall && showIosGuide && (
+        <section className="mobile-install-card runtime-surface runtime-surface--prompt runtime-optional-surface" role="region" aria-label="Add Finance Planner to your iPhone or iPad">
           <div>
-            <strong>Finance Planner zum Home-Bildschirm hinzufügen</strong>
-            <p>In Safari auf „Teilen“ tippen, dann „Zum Home-Bildschirm“ wählen. Das aktiviert die eigenständige App-Ansicht.</p>
+            <strong>Add Finance Planner to your Home Screen</strong>
+            <p>In Safari, tap “Share”, then choose “Add to Home Screen”. That turns on the standalone app view.</p>
           </div>
           <div className="mobile-install-card__actions mobile-install-card__actions--single">
-            <button type="button" onClick={dismissInstall} className="mobile-install-card__secondary">Verstanden</button>
+            <button type="button" onClick={dismissInstall} className="mobile-install-card__secondary">Got it</button>
           </div>
         </section>
       )}
-      {shouldOfferStorageProtection && (
-        <section className="mobile-install-card" role="region" aria-label="Lokal gespeicherte Finanzdaten schützen">
+      {showStorageProtection && (
+        <section className="mobile-install-card runtime-surface runtime-surface--prompt runtime-optional-surface" role="region" aria-label="Protect locally stored financial data">
           <div>
-            <strong>Lokale Daten vor automatischer Bereinigung schützen</strong>
-            <p>Den Browser bitten, den verschlüsselten lokalen Speicher dieser App bei der Gerätebereinigung zu behalten.</p>
+            <strong>Protect local data from automatic cleanup</strong>
+            <p>Ask the browser to keep this app's encrypted local storage during device cleanup.</p>
           </div>
           <div className="mobile-install-card__actions">
-            <button type="button" onClick={dismissStorageProtection} className="mobile-install-card__secondary">Später</button>
-            <button type="button" onClick={protectStorage} disabled={protectingStorage}>{protectingStorage ? 'Wird geprüft …' : 'Daten schützen'}</button>
+            <button type="button" onClick={dismissStorageProtection} className="mobile-install-card__secondary">Later</button>
+            <button type="button" onClick={protectStorage} disabled={protectingStorage}>{protectingStorage ? 'Checking…' : 'Protect data'}</button>
           </div>
         </section>
       )}

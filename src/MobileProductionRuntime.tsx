@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { isSafeServiceWorkerUpdate } from './mobile-runtime'
 
 type NetworkInformation = EventTarget & {
   effectiveType?: string
@@ -59,8 +60,15 @@ export function MobileProductionRuntime() {
       window.dispatchEvent(new CustomEvent('finance-planner:lifecycle', { detail: { phase, at: Date.now() } }))
     }
 
+    // Sole owner of update detection and the `finance-planner:update-available`
+    // event -- MobileRuntime (visible banner) and WebMobileHardening (SR
+    // announcement) are pure consumers of this event rather than each running
+    // their own independent registration.update()/updatefound observation.
+    // isSafeServiceWorkerUpdate requires an existing controller so this never
+    // fires on a first install, when there is no previous version to update
+    // from.
     const announceUpdate = (registration: ServiceWorkerRegistration) => {
-      if (!registration.waiting) return
+      if (!isSafeServiceWorkerUpdate(registration)) return
       window.dispatchEvent(new CustomEvent('finance-planner:update-available', { detail: { registration } }))
     }
 

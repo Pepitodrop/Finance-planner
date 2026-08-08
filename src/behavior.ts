@@ -81,7 +81,7 @@ export function predictFromBehavior(description: string): BehaviorPrediction | n
     category: best.category,
     recurringProbability,
     confidence: Math.round(best.weight * 100),
-    evidence: `${best.confirmations} bestätigte Entscheidung${best.confirmations === 1 ? '' : 'en'} für diesen Händler`,
+    evidence: `${best.confirmations} confirmed decision${best.confirmations === 1 ? '' : 's'} for this merchant`,
   }
 }
 

@@ -10,7 +10,7 @@
   "orientation": "portrait-primary",
   "background_color": "#080c18",
   "theme_color": "#0b1020",
-  "lang": "de-DE",
+  "lang": "en-US",
   "dir": "ltr",
   "categories": ["finance", "productivity"],
   "prefer_related_applications": false,
@@ -19,21 +19,21 @@
   },
   "shortcuts": [
     {
-      "name": "Finanzübersicht öffnen",
-      "short_name": "Übersicht",
-      "description": "Öffnet die persönliche Finanzübersicht.",
+      "name": "Open dashboard",
+      "short_name": "Dashboard",
+      "description": "Opens the personal finance dashboard.",
       "url": "/?source=shortcut&view=dashboard"
     },
     {
-      "name": "Transaktionen öffnen",
-      "short_name": "Transaktionen",
-      "description": "Öffnet den Transaktionsverlauf.",
+      "name": "Open transactions",
+      "short_name": "Transactions",
+      "description": "Opens the transaction history.",
       "url": "/?source=shortcut&view=transactions"
     },
     {
-      "name": "Neue Buchung",
-      "short_name": "Buchung",
-      "description": "Öffnet Finance Planner für eine neue Buchung.",
+      "name": "New transaction",
+      "short_name": "New entry",
+      "description": "Opens Finance Planner for a new transaction.",
       "url": "/?source=shortcut&action=new-transaction"
     }
   ],

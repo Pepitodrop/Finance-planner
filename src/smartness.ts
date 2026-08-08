@@ -39,49 +39,49 @@ export function assessSmartness(
   const dimensions: SmartnessDimension[] = [
     {
       key: 'data',
-      label: 'Datengrundlage',
+      label: 'Data',
       score: clamp(transactions * 1.2 + categories * 4 + months * 5),
-      evidence: `${transactions} Buchungen, ${categories} Kategorien und ${months} Monate Historie`,
+      evidence: `${transactions} transactions, ${categories} categories, and ${months} months of history`,
     },
     {
       key: 'personalization',
-      label: 'Personalisierung',
+      label: 'Personalization',
       score: clamp(20 + learnedDecisions * 3 + recurring * 2),
-      evidence: `${learnedDecisions} bestätigte Lernentscheidungen und ${recurring} wiederkehrende Buchungen`,
+      evidence: `${learnedDecisions} confirmed learning decisions and ${recurring} recurring transactions`,
     },
     {
       key: 'prediction',
-      label: 'Prognosefähigkeit',
+      label: 'Prediction',
       score: clamp(15 + months * 9 + Math.min(transactions, 60) * .5),
-      evidence: months >= 6 ? 'Mehrmonatige Muster sind auswertbar; eine Produktionsfreigabe erfordert zusätzlich Backtests.' : 'Für stabile Prognosen fehlen noch mehrere Monate Historie',
+      evidence: months >= 6 ? 'Multi-month patterns can be evaluated; a production release additionally requires backtests.' : 'Several more months of history are still needed for stable predictions',
     },
     {
       key: 'models',
-      label: 'Modellbetrieb',
+      label: 'Models',
       score: quality ? Math.round((runtime.score + quality.score) / 2) : Math.min(runtime.score, 72),
       evidence: quality
-        ? `${runtime.evidence} Gemessene Qualitätsgates: ${quality.passed.length} bestanden, ${quality.failed.length} offen.`
-        : `${runtime.evidence} Genauigkeits-, Laufzeit- und Forecast-Messwerte fehlen noch.`,
+        ? `${runtime.evidence} Measured quality gates: ${quality.passed.length} passed, ${quality.failed.length} open.`
+        : `${runtime.evidence} Accuracy, runtime, and forecast measurements are still missing.`,
     },
     {
       key: 'bank',
-      label: 'Bankdatenqualität',
+      label: 'Bank',
       score: bank?.score ?? 5,
       evidence: bank
-        ? `${bank.passed.length} Bankintegrationsprüfungen bestanden, ${bank.failed.length} offen.`
-        : 'Noch keine verifizierte, consent-basierte Bankverbindung vorhanden.',
+        ? `${bank.passed.length} bank integration checks passed, ${bank.failed.length} open.`
+        : 'No verified, consent-based bank connection exists yet.',
     },
     {
       key: 'explainability',
-      label: 'Erklärbarkeit',
+      label: 'Explainability',
       score: 82,
-      evidence: 'Regeln, Modellquelle, Unsicherheit und Alternativen werden getrennt ausgewiesen',
+      evidence: 'Rules, model source, uncertainty, and alternatives are reported separately',
     },
     {
       key: 'safety',
-      label: 'Sicherheit',
+      label: 'Safety',
       score: goals > 0 ? 88 : 84,
-      evidence: 'Finanzaktionen bleiben genehmigungspflichtig und verändern keine Konten automatisch',
+      evidence: 'Financial actions stay approval-required and never change accounts automatically',
     },
   ]
 
@@ -90,18 +90,18 @@ export function assessSmartness(
   const level = overall >= 80 ? 'advanced' : overall >= 55 ? 'adaptive' : 'basic'
   const weakest = [...dimensions].sort((a, b) => a.score - b.score)[0]
   const nextMilestone = !evidenceComplete
-    ? 'Einen eingefrorenen Testsatz, Laufzeitmessungen und Forecast-Backtests gegen die Produktionsgates ausführen.'
+    ? 'Run a frozen test set, capture runtime measurements, and backtest forecasts against the production gates.'
     : weakest.key === 'bank'
-      ? 'Eine aktive Bank-Consent-Strecke mit frischem, idempotentem Transaktionssync validieren.'
+      ? 'Validate an active bank-consent path with a fresh, idempotent transaction sync.'
       : weakest.key === 'data'
-        ? 'Mehr bestätigte, unterschiedlich kategorisierte Buchungen erfassen.'
+        ? 'Record more confirmed, differently categorized transactions.'
         : weakest.key === 'prediction'
-          ? 'Mindestens sechs Monate Transaktionshistorie sammeln.'
+          ? 'Collect at least six months of transaction history.'
           : weakest.key === 'personalization'
-            ? 'Weitere KI-Vorschläge bestätigen oder korrigieren.'
+            ? 'Confirm or correct more suggestions.'
             : weakest.key === 'models'
-              ? 'Modell-Ladezeiten, Speicherverbrauch und Fehlerquoten auf Zielgeräten messen.'
-              : 'Qualitätsmetriken mit realen Nutzungsszenarien validieren.'
+              ? 'Measure model load times, memory usage, and error rates on target devices.'
+              : 'Validate quality metrics against real usage scenarios.'
 
   return { overall, level, dimensions, nextMilestone, evidenceComplete }
 }

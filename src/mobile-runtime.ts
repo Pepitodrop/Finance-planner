@@ -10,10 +10,11 @@ export function isStandaloneDisplay(mediaMatches: boolean, navigatorStandalone?:
 export function shouldOfferInstall(input: {
   standalone: boolean
   promptAvailable: boolean
+  offerEligible: boolean
   dismissedUntil: number
   now: number
 }) {
-  return !input.standalone && input.promptAvailable && input.dismissedUntil <= input.now
+  return !input.standalone && input.promptAvailable && input.offerEligible && input.dismissedUntil <= input.now
 }
 
 export function installDismissalDeadline(now: number, days = 14) {

@@ -34,8 +34,8 @@ export function createFinancialAgentPlan(state: AppState): AgentPlan {
   if (recurringTotal > 0) actions.push({
     id: stableId('review-recurring', String(recurringTotal)),
     type: 'review-recurring',
-    title: 'Wiederkehrende Ausgaben prüfen',
-    rationale: `Bestätigte feste Zahlungen summieren sich auf ${(recurringTotal / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}.`,
+    title: 'Review recurring costs',
+    rationale: `Confirmed recurring payments total ${(recurringTotal / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}.`,
     amountCents: recurringTotal,
     priority: 2,
     requiresApproval: true,
@@ -49,8 +49,8 @@ export function createFinancialAgentPlan(state: AppState): AgentPlan {
     if (allocation > 0) actions.push({
       id: stableId('fund-goal', goal.id),
       type: 'fund-goal',
-      title: `Sparziel „${goal.name}“ finanzieren`,
-      rationale: 'Verwendet höchstens 50 % des erfassten freien Cashflows und verändert keine Konten ohne Bestätigung.',
+      title: `Fund goal "${goal.name}"`,
+      rationale: 'Uses at most 50% of your recorded free cash flow and changes no accounts without your approval.',
       amountCents: allocation,
       priority: 1,
       requiresApproval: true,
@@ -61,8 +61,8 @@ export function createFinancialAgentPlan(state: AppState): AgentPlan {
   if (freeCash <= 0) actions.push({
     id: stableId('build-buffer', 'negative-cashflow'),
     type: 'build-buffer',
-    title: 'Liquiditätspuffer priorisieren',
-    rationale: 'Der erfasste Cashflow ist nicht positiv. Der Agent schlägt deshalb keine automatische Zielzuweisung vor.',
+    title: 'Prioritize a cash buffer',
+    rationale: 'Your recorded cash flow is not positive, so the agent does not propose an automatic goal allocation.',
     priority: 1,
     requiresApproval: true,
     status: 'proposed',

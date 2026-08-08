@@ -155,7 +155,7 @@ async function jsonRequest(path: string, init: RequestInit, timeoutMs = 60_000):
   try {
     const response = await fetch(path, { ...init, credentials: 'include', signal: controller.signal })
     const payload = await response.json().catch(() => ({}))
-    if (!response.ok) throw new Error(errorMessage(payload, 'Der lernende Budgetdienst ist momentan nicht erreichbar.'))
+    if (!response.ok) throw new Error(errorMessage(payload, 'The learning budget service is currently unreachable.'))
     return payload
   } finally {
     globalThis.clearTimeout(timeout)
@@ -168,16 +168,16 @@ export async function requestLearningBudgetPlan(input: BudgetPlanRequest): Promi
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   })
-  if (!isBudgetPlan(payload)) throw new Error('Der Budgetdienst hat ein ungültiges Ergebnis geliefert.')
+  if (!isBudgetPlan(payload)) throw new Error('The budget service returned an invalid result.')
   return payload
 }
 
 export async function loadLearningBudgetProfile(): Promise<BudgetProfile | null> {
   const payload = await jsonRequest('/api/ai/budget-profile', { method: 'GET' }, 15_000)
-  if (typeof payload !== 'object' || payload === null) throw new Error('Das Lernprofil konnte nicht gelesen werden.')
+  if (typeof payload !== 'object' || payload === null) throw new Error('The learning profile could not be read.')
   const profile = (payload as { profile?: unknown }).profile
   if (profile === null || profile === undefined) return null
-  if (!isBudgetProfile(profile)) throw new Error('Das gespeicherte Lernprofil ist ungültig.')
+  if (!isBudgetProfile(profile)) throw new Error('The stored learning profile is invalid.')
   return profile
 }
 
@@ -188,7 +188,7 @@ export async function submitBudgetFeedback(planId: string, recommendationId: str
     body: JSON.stringify({ consentBehaviorLearning: true, planId, recommendationId, decision }),
   }, 15_000)
   if (typeof payload !== 'object' || payload === null || !isBudgetProfile((payload as { profile?: unknown }).profile)) {
-    throw new Error('Die Rückmeldung konnte nicht sicher gespeichert werden.')
+    throw new Error('The feedback could not be saved securely.')
   }
   return (payload as { profile: BudgetProfile }).profile
 }

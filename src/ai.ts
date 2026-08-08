@@ -164,16 +164,16 @@ export async function classifyTransaction(description: string, amountCents: numb
   const needsReview = ensembleNeedsReview || confidence < 60 || category === 'Sonstiges'
   const recurringProbability = learned ? Math.max(learned.recurringProbability / 100, estimateRecurring(description, transactions)) : estimateRecurring(description, transactions)
   const explanation = learned
-    ? `Dein persönlicher Verhaltensgraph bevorzugt „${category}“: ${learned.evidence}.`
+    ? `Based on your own past choices: ${learned.evidence}.`
     : source === 'rules'
-      ? `Ein belastbarer Buchungstext-Regelsatz passt zu „${category}“; das Hugging-Face-Modell dient nur als Plausibilitätsprüfung.`
+      ? `Matched a known merchant pattern for "${category}"; the on-device model was used only as a plausibility check.`
       : source === 'ensemble'
-        ? `Zwei unterschiedliche Hugging-Face-Modelle stimmen unabhängig für „${category}“ überein.`
+        ? `Two separate on-device models independently agreed on "${category}".`
         : source === 'zero-shot'
-          ? `Das Zero-Shot-Modell bevorzugt „${category}“, aber die Modellsignale sind nicht vollständig einig.`
+          ? `The zero-shot model favors "${category}", but the model signals are not fully in agreement.`
           : source === 'hugging-face'
-            ? `Das mehrsprachige Embedding-Modell erkennt „${category}“ anhand semantischer Ähnlichkeit.`
-            : 'Die Signale sind nicht eindeutig. Bitte Kategorie bestätigen, damit der persönliche Verhaltensgraph lernen kann.'
+            ? `The multilingual embedding model matched "${category}" based on similar wording.`
+            : 'The signals are not clear enough. Confirm a category so your personal pattern history can learn from it.'
 
   return {
     category,
@@ -195,5 +195,9 @@ export function generateInsights(transactions: Transaction[]): string[] {
   const categoryTotals = new Map<string, number>()
   expenses.forEach((transaction) => categoryTotals.set(transaction.category, (categoryTotals.get(transaction.category) ?? 0) + transaction.amountCents))
   const topCategory = [...categoryTotals.entries()].sort((a, b) => b[1] - a[1])[0]
-  return [recurring.length ? `${recurring.length} feste Zahlungen verursachen zusammen ${(recurring.reduce((sum, item) => sum + item.amountCents, 0) / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })} pro Monat.` : 'Noch keine wiederkehrenden Zahlungen bestätigt.', topCategory ? `Die größte Ausgabenkategorie ist ${topCategory[0]} mit ${(topCategory[1] / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}.` : 'Noch nicht genug Ausgaben für eine Kategorienanalyse.', biggest ? `Die größte einzelne Ausgabe ist „${biggest.description}“ mit ${(biggest.amountCents / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}.` : 'Noch keine Ausgaben vorhanden.']
+  return [
+    recurring.length ? `${recurring.length} recurring payments total ${(recurring.reduce((sum, item) => sum + item.amountCents, 0) / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })} per month.` : 'No recurring payments confirmed yet.',
+    topCategory ? `Your largest expense category is ${topCategory[0]} at ${(topCategory[1] / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}.` : 'Not enough expenses yet for a category analysis.',
+    biggest ? `Your largest single expense is "${biggest.description}" at ${(biggest.amountCents / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}.` : 'No expenses recorded yet.',
+  ]
 }

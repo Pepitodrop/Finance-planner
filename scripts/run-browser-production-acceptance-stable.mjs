@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url'
 const sourcePath = new URL('./browser-production-acceptance.mjs', import.meta.url)
 const generatedPath = new URL('./.browser-production-acceptance.generated.mjs', import.meta.url)
 
-const staleReloadWait = `await waitFor(client, sessionId, 'document.body?.innerText.includes("Finanzübersicht")', 'online reload before offline test')`
+const staleReloadWait = `await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-dashboard-ready=true]"))', 'online reload before offline test')`
 const stableReloadWait = `await waitFor(client, sessionId, 'document.readyState === "complete" && Boolean(document.querySelector("#root")?.children.length) && Boolean(navigator.serviceWorker?.controller) && Boolean(document.querySelector(".app-shell") || document.querySelector(".vault-screen"))', 'online service-worker-controlled shell before offline test')`
 const brittleProfileCleanup = `await rm(launched.profile, { recursive: true, force: true })`
 const retryTolerantProfileCleanup = `for (let attempt = 0; attempt < 5; attempt += 1) {

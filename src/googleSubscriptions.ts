@@ -74,7 +74,7 @@ export function normalizeGoogleSubscriptions(records: GoogleSubscriptionRecord[]
       id: `google:${record.externalId}`,
       externalId: record.externalId,
       provider: record.provider.trim() || 'Google',
-      product: record.product.trim() || 'Unbekanntes Google-Abonnement',
+      product: record.product.trim() || 'Unknown Google subscription',
       amountCents: record.amountCents,
       currency: 'EUR',
       billingInterval: record.billingInterval,
@@ -102,7 +102,7 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
     headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
   })
   const payload = await response.json().catch(() => ({})) as T & { error?: { message?: string } }
-  if (!response.ok) throw new Error(payload.error?.message || `Google-Abonnement-Anfrage fehlgeschlagen (${response.status}).`)
+  if (!response.ok) throw new Error(payload.error?.message || `Google subscriptions request failed (${response.status}).`)
   return payload
 }
 
@@ -110,18 +110,26 @@ export function getGoogleSubscriptionCapability(): Promise<GoogleSubscriptionCap
   return request('/api/subscriptions/google/capability')
 }
 
+// Strips OAuth-specific query params (and any hash) from a candidate return
+// URL before it's sent as redirectUri -- prevents a stale code/state/error
+// from a previous attempt leaking into a fresh connection request if the
+// user retries from the same page without a full navigation in between.
+function cleanReturnUrl(returnUrl: string): string {
+  const url = new URL(returnUrl)
+  url.hash = ''
+  for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'connected']) url.searchParams.delete(key)
+  return url.toString()
+}
+
 export async function startGoogleSubscriptionConnection(returnUrl = window.location.href): Promise<void> {
-  const callback = new URL(returnUrl)
-  callback.hash = ''
-  for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'connected']) callback.searchParams.delete(key)
-  const result = await request<{ redirectUrl?: string }>('/api/subscriptions/google/start', {
-    method: 'POST',
-    body: JSON.stringify({ redirectUri: callback.toString() }),
-  })
-  if (!result.redirectUrl) throw new Error('Google lieferte keine Autorisierungsadresse.')
+  const result = await request<{ redirectUrl?: string }>('/api/subscriptions/google/start', { method: 'POST', body: JSON.stringify({ redirectUri: cleanReturnUrl(returnUrl) }) })
+  if (!result.redirectUrl) throw new Error('Google did not return an authorization address.')
+  // Origin check (not just startsWith) so a redirect URL like
+  // https://accounts.google.com.evil.example/... can never pass -- it would
+  // satisfy a naive prefix check but isn't the real Google origin.
   const authorization = new URL(result.redirectUrl)
   if (authorization.protocol !== 'https:' || authorization.origin !== 'https://accounts.google.com') {
-    throw new Error('Google lieferte keine gültige Autorisierungsadresse.')
+    throw new Error('Google did not return a valid authorization address.')
   }
   window.location.assign(authorization.toString())
 }

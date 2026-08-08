@@ -21,10 +21,10 @@ describe('automatic transaction analysis', () => {
   it('creates a deterministic analysis without external AI consent', () => {
     const result = createAutomaticTransactionAnalysis(state)
     expect(result.length).toBeGreaterThan(40)
-    expect(result).toMatch(/Einnah|Ausgab|Spar|Liquid|Monat/i)
+    expect(result).toMatch(/spending|savings|runway|month|recurring/i)
   })
 
   it('handles an empty transaction history', () => {
-    expect(createAutomaticTransactionAnalysis({ ...state, transactions: [] })).toMatch(/automatisch/i)
+    expect(createAutomaticTransactionAnalysis({ ...state, transactions: [] })).toMatch(/automatically/i)
   })
 })

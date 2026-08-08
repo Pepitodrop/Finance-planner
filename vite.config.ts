@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react'
 const CONNECTOR_URL = 'http://127.0.0.1:8788'
 const proxy = {
   '/api': CONNECTOR_URL,
+  '/health/live': CONNECTOR_URL,
   '/health/ready': CONNECTOR_URL,
 }
 

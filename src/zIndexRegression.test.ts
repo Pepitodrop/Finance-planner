@@ -24,7 +24,7 @@ function readCss(name: string): string {
   return readFileSync(join(srcDir, name), 'utf8')
 }
 
-function zIndexOf(css: string, selector: string): number {
+function zIndexOf(css: string, selector: string, tokens = css): number {
   // A selector can appear in more than one rule (e.g. grouped with other
   // selectors in a base rule that only sets `display: none`, then again
   // inside a media query with the real z-index). Walk every occurrence of
@@ -39,8 +39,13 @@ function zIndexOf(css: string, selector: string): number {
     const braceClose = css.indexOf('}', braceOpen)
     if (braceOpen === -1 || braceClose === -1) break
     const body = css.slice(braceOpen + 1, braceClose)
-    const zMatch = /z-index:\s*(-?\d+)/.exec(body)
-    if (zMatch) return Number(zMatch[1])
+    const zMatch = /z-index:\s*(-?\d+|var\((--[\w-]+)\))/.exec(body)
+    if (zMatch) {
+      if (!zMatch[2]) return Number(zMatch[1])
+      const tokenMatch = new RegExp(`${zMatch[2]}:\\s*(-?\\d+)`).exec(tokens)
+      if (tokenMatch) return Number(tokenMatch[1])
+      throw new Error(`expected to resolve ${zMatch[2]} for ${selector}`)
+    }
     searchFrom = braceClose + 1
   }
   throw new Error(`expected to find a rule with a z-index for ${selector}`)
@@ -48,9 +53,10 @@ function zIndexOf(css: string, selector: string): number {
 
 describe('overlay z-index regression (modal + undo-toast vs. notification banner)', () => {
   const styles = readCss('styles.css')
+  const foundation = readCss('design-foundation.css')
   const usability = readCss('usability.css')
   const mobileConnectivity = readCss('mobile-connectivity.css')
-  const mobileExperience = readCss('mobile-experience.css')
+  const appShell = readCss('app/app-shell.css')
   const mobileEnhancements = readCss('mobile-enhancements.css')
 
   // The other fixed-position overlays that were competing for stacking order.
@@ -59,8 +65,8 @@ describe('overlay z-index regression (modal + undo-toast vs. notification banner
   // so it can cover *everything*, modal included.)
   const bannerTierZIndexes = {
     '.mobile-connectivity-status': zIndexOf(mobileConnectivity, '.mobile-connectivity-status'),
-    '.mobile-bottom-nav': zIndexOf(mobileExperience, '.mobile-bottom-nav'),
-    '.mobile-sheet-backdrop': zIndexOf(mobileExperience, '.mobile-sheet-backdrop'),
+    '.app-mobile-navigation': zIndexOf(appShell, '.app-mobile-navigation', foundation),
+    '.app-more-backdrop': zIndexOf(appShell, '.app-more-backdrop', foundation),
     '.mobile-boot-skeleton': zIndexOf(mobileEnhancements, '.mobile-boot-skeleton'),
     '.mobile-pull-indicator': zIndexOf(mobileEnhancements, '.mobile-pull-indicator'),
   }

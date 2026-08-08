@@ -17,7 +17,7 @@ jobs:
   chromium:
     name: Chromium production acceptance
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     services:
       postgres:
         image: postgres:17-bookworm
@@ -35,6 +35,8 @@ jobs:
       CONNECTOR_MASTER_KEY: acceptance-connector-key-with-more-than-32-characters
       AUTH_MASTER_KEY: acceptance-auth-key-with-more-than-32-characters
       METRICS_TOKEN: acceptance-metrics-token-with-more-than-32-characters
+      RATE_LIMIT_PER_MINUTE: 1000
+      SENSITIVE_RATE_LIMIT_PER_MINUTE: 1000
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -45,6 +47,8 @@ jobs:
         working-directory: server
         run: npm install --no-fund --no-audit --silent
       - name: Build production web bundle
+        env:
+          VITE_ACCEPTANCE_FIXTURES: "true"
         run: npm run build
       - name: Start PostgreSQL-backed connector
         env:
@@ -83,6 +87,36 @@ jobs:
           ACCEPTANCE_APP_URL: http://127.0.0.1:4173
           ACCEPTANCE_ARTIFACT_PATH: artifacts/browser-production-acceptance.json
         run: node scripts/run-browser-production-acceptance-stable.mjs
+      - name: Run exhaustive Connections acceptance
+        if: always()
+        env:
+          ACCEPTANCE_APP_URL: http://127.0.0.1:4173
+          CONNECTIONS_ACCEPTANCE_ARTIFACT_PATH: artifacts/connections-production-acceptance.json
+        run: node scripts/run-connections-production-acceptance-stable.mjs
+      - name: Run Step 11 exhaustive auth/security acceptance
+        if: always()
+        env:
+          ACCEPTANCE_APP_URL: http://127.0.0.1:4173
+          AUTH_SECURITY_ACCEPTANCE_ARTIFACT_PATH: artifacts/auth-security-production-acceptance.json
+        run: node scripts/run-auth-security-production-acceptance-stable.mjs
+      - name: Run Step 12 exhaustive Finance Intelligence acceptance
+        if: always()
+        env:
+          ACCEPTANCE_APP_URL: http://127.0.0.1:4173
+          FINANCE_INTELLIGENCE_ACCEPTANCE_ARTIFACT_PATH: artifacts/finance-intelligence-production-acceptance.json
+        run: node scripts/run-finance-intelligence-production-acceptance-stable.mjs
+      - name: Run Step 13 exhaustive Data, Subscriptions & Account acceptance
+        if: always()
+        env:
+          ACCEPTANCE_APP_URL: http://127.0.0.1:4173
+          DATA_PRIVACY_ACCEPTANCE_ARTIFACT_PATH: artifacts/data-privacy-production-acceptance.json
+        run: node scripts/run-data-privacy-production-acceptance-stable.mjs
+      - name: Run Step 14 whole-product readiness acceptance
+        if: always()
+        env:
+          ACCEPTANCE_APP_URL: http://127.0.0.1:4173
+          WHOLE_PRODUCT_READINESS_ARTIFACT_PATH: artifacts/whole-product-readiness-acceptance.json
+        run: node scripts/run-whole-product-readiness-acceptance-stable.mjs
       - name: Verify authenticated operational metrics
         shell: bash
         run: |
@@ -114,6 +148,62 @@ jobs:
           name: production-browser-acceptance
           path: |
             artifacts/browser-production-acceptance.json
+            artifacts/dashboard-1440x900.png
+            artifacts/dashboard-1024x768.png
+            artifacts/dashboard-390x844.png
+            artifacts/dashboard-360x800.png
+            artifacts/runtime-surfaces-390x844.png
+            artifacts/transactions-1440x900.png
+            artifacts/transactions-1024x768.png
+            artifacts/transactions-430x932.png
+            artifacts/transactions-390x844.png
+            artifacts/transactions-360x800.png
+            artifacts/transactions-filters-390x844.png
+            artifacts/transactions-final-row-390x844.png
+            artifacts/accounts-1440x900.png
+            artifacts/accounts-1024x768.png
+            artifacts/accounts-390x844.png
+            artifacts/accounts-360x800.png
+            artifacts/account-details-390x844.png
+            artifacts/credit-card-details-390x844.png
+            artifacts/account-details-final-row-390x844.png
+            artifacts/credit-card-details-final-row-390x844.png
+            artifacts/accounts-empty-390x844.png
+            artifacts/accounts-final-row-390x844.png
+            artifacts/goals-*.png
+            artifacts/goal-editor-390x844.png
+            artifacts/recurring-*.png
+            artifacts/budget-consent-*.png
+            artifacts/budget-result-*.png
+            artifacts/connections-production-acceptance.json
+            artifacts/connections-*.png
+            artifacts/auth-security-production-acceptance.json
+            artifacts/auth-session-restoration-*.png
+            artifacts/auth-session-error-*.png
+            artifacts/auth-login-*.png
+            artifacts/auth-passkey-unsupported-*.png
+            artifacts/auth-passkey-error-*.png
+            artifacts/auth-passkey-recommendation-*.png
+            artifacts/vault-setup-*.png
+            artifacts/vault-unlock-*.png
+            artifacts/vault-migration-*.png
+            artifacts/vault-conflict-*.png
+            artifacts/security-privacy-shield-*.png
+            artifacts/finance-intelligence-production-acceptance.json
+            artifacts/finance-intelligence-*.png
+            artifacts/auto-analysis-*.png
+            artifacts/assistant-*.png
+            artifacts/receipt-*.png
+            artifacts/data-privacy-production-acceptance.json
+            artifacts/more-*.png
+            artifacts/account-session-*.png
+            artifacts/data-*.png
+            artifacts/vault-password-*.png
+            artifacts/sync-status-*.png
+            artifacts/subscriptions-*.png
+            artifacts/whole-product-readiness-acceptance.json
+            artifacts/wpr-*.png
+            artifacts/runtime-*.png
             artifacts/backend-resilience.json
             artifacts/operational-metrics.prom
             artifacts/production-load-acceptance.json

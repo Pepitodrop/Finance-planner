@@ -45,7 +45,7 @@ let retryTimer: number | null = null
 let saveInFlight: Promise<void> | null = null
 let saveRequested = false
 let retryDelayMs = 2_000
-let status: CloudSyncStatus = { phase: 'local', message: 'Verschlüsselter lokaler Speicher aktiv.' }
+let status: CloudSyncStatus = { phase: 'local', message: 'Encrypted local storage active.' }
 const listeners = new Set<StatusListener>()
 
 function cloneInitialState(): AppState {
@@ -53,7 +53,7 @@ function cloneInitialState(): AppState {
 }
 
 function requireActiveUser(): string {
-  if (!activeUserId) throw new Error('Cloud-Speicher wurde keinem angemeldeten Konto zugeordnet.')
+  if (!activeUserId) throw new Error('Cloud storage was not assigned to a signed-in account.')
   return activeUserId
 }
 
@@ -146,7 +146,7 @@ function setConflict(): void {
   clearRetryTimer()
   emit({
     phase: 'conflict',
-    message: 'Ein anderer oder noch nicht zugeordneter Datenstand wurde gefunden. Lokale Änderungen bleiben verschlüsselt erhalten, bis du auswählst, welcher Stand gelten soll.',
+    message: 'A different or not-yet-linked data state was found. Local changes stay encrypted and safe until you choose which version should apply.',
   })
 }
 
@@ -179,7 +179,7 @@ function scheduleBootstrapRetry(): void {
 async function persistLatestPayload({ keepalive = false }: { keepalive?: boolean } = {}): Promise<void> {
   const payload = getUnlockedVaultPayload()
   if (!payload || !cloudEnabled) return
-  emit({ phase: 'syncing', message: 'Finanzdaten werden verschlüsselt mit PostgreSQL synchronisiert …', lastSyncedAt: status.lastSyncedAt })
+  emit({ phase: 'syncing', message: 'Encrypting and syncing your financial data with PostgreSQL…', lastSyncedAt: status.lastSyncedAt })
   try {
     const result = await saveCloudState(payload, cloudVersion, { keepalive })
     cloudVersion = result.version
@@ -187,7 +187,7 @@ async function persistLatestPayload({ keepalive = false }: { keepalive?: boolean
     retryDelayMs = 2_000
     clearRetryTimer()
     clearConflict()
-    emit({ phase: 'synced', message: 'Alle Konten, Buchungen, Sparziele und persönlichen Lernwerte sind synchronisiert.', lastSyncedAt: result.updatedAt })
+    emit({ phase: 'synced', message: 'All accounts, transactions, goals, and personal learning data are synced.', lastSyncedAt: result.updatedAt })
   } catch (error) {
     if (error instanceof CloudStateConflictError) {
       cloudVersion = error.currentVersion
@@ -195,7 +195,7 @@ async function persistLatestPayload({ keepalive = false }: { keepalive?: boolean
       return
     }
     saveRequested = false
-    emit({ phase: 'offline', message: error instanceof Error ? `Cloud-Synchronisierung pausiert: ${error.message}` : 'Cloud-Synchronisierung ist vorübergehend nicht erreichbar.', lastSyncedAt: status.lastSyncedAt })
+    emit({ phase: 'offline', message: error instanceof Error ? `Cloud sync paused: ${error.message}` : 'Cloud sync is temporarily unreachable.', lastSyncedAt: status.lastSyncedAt })
     scheduleSaveRetry()
   }
 }
@@ -243,7 +243,7 @@ if (typeof window !== 'undefined') {
 
 export function configureAuthenticatedStorage(userId: string): void {
   const normalized = String(userId || '').trim()
-  if (!normalized || normalized.length > 256) throw new Error('Die angemeldete Benutzerkennung ist ungültig.')
+  if (!normalized || normalized.length > 256) throw new Error('The signed-in account identifier is invalid.')
   if (activeUserId === normalized) return
   clearSaveTimer()
   clearRetryTimer()
@@ -257,7 +257,7 @@ export function configureAuthenticatedStorage(userId: string): void {
   saveInFlight = null
   saveRequested = false
   retryDelayMs = 2_000
-  emit({ phase: 'local', message: syncMetadata.dirty ? 'Nicht synchronisierte lokale Änderungen dieses Kontos wurden erkannt.' : 'Verschlüsselter lokaler Speicher für das angemeldete Konto aktiv.', ...(syncMetadata.lastSyncedAt ? { lastSyncedAt: syncMetadata.lastSyncedAt } : {}) })
+  emit({ phase: 'local', message: syncMetadata.dirty ? 'Unsynced local changes were found for this account.' : 'Encrypted local storage active for the signed-in account.', ...(syncMetadata.lastSyncedAt ? { lastSyncedAt: syncMetadata.lastSyncedAt } : {}) })
 }
 
 export function prepareNewDeviceCloudBootstrap(): void {
@@ -322,12 +322,12 @@ export async function synchronizeUnlockedState(localState: AppState): Promise<Ap
   requireActiveUser()
   rememberState(localState)
   if (conflictExists()) {
-    emit({ phase: 'conflict', message: 'Ein ungelöster Cloud-Konflikt schützt deine lokalen Änderungen vor Überschreiben.' })
+    emit({ phase: 'conflict', message: 'An unresolved cloud conflict is protecting your local changes from being overwritten.' })
     return structuredClone(localState)
   }
 
   if (pendingBootstrapFingerprint === null) pendingBootstrapFingerprint = currentVaultFingerprint()
-  emit({ phase: 'syncing', message: 'Verschlüsselter Cloud-Datenstand wird geladen …' })
+  emit({ phase: 'syncing', message: 'Loading your encrypted cloud data…' })
   try {
     const remote = await fetchCloudState()
     cloudVersion = remote.version
@@ -354,7 +354,7 @@ export async function synchronizeUnlockedState(localState: AppState): Promise<Ap
         cloudEnabled = true
         retryDelayMs = 2_000
         clearRetryTimer()
-        emit({ phase: 'syncing', message: 'Lokal gespeicherte Offline-Änderungen werden vor dem Laden des Serverstands hochgeladen …', ...(syncMetadata.lastSyncedAt ? { lastSyncedAt: syncMetadata.lastSyncedAt } : {}) })
+        emit({ phase: 'syncing', message: 'Uploading your locally saved offline changes before loading the server version…', ...(syncMetadata.lastSyncedAt ? { lastSyncedAt: syncMetadata.lastSyncedAt } : {}) })
         scheduleCloudSave(0)
         return loadState()
       }
@@ -366,7 +366,7 @@ export async function synchronizeUnlockedState(localState: AppState): Promise<Ap
       markSynced(remote.version, remote.updatedAt ?? new Date().toISOString())
       retryDelayMs = 2_000
       clearRetryTimer()
-      emit({ phase: 'synced', message: 'Cloud-Datenstand wurde auf diesem Gerät geöffnet.', ...(remote.updatedAt ? { lastSyncedAt: remote.updatedAt } : {}) })
+      emit({ phase: 'synced', message: 'Cloud data was opened on this device.', ...(remote.updatedAt ? { lastSyncedAt: remote.updatedAt } : {}) })
       return structuredClone(remote.payload.state)
     }
 
@@ -379,7 +379,7 @@ export async function synchronizeUnlockedState(localState: AppState): Promise<Ap
     markSynced(created.version, created.updatedAt)
     retryDelayMs = 2_000
     clearRetryTimer()
-    emit({ phase: 'synced', message: 'Der lokale Datenstand wurde als verschlüsselte Cloud-Kopie angelegt.', lastSyncedAt: created.updatedAt })
+    emit({ phase: 'synced', message: 'Your local data was saved as an encrypted cloud copy.', lastSyncedAt: created.updatedAt })
     return structuredClone(localPayload.state)
   } catch (error) {
     if (error instanceof CloudStateConflictError) {
@@ -388,7 +388,7 @@ export async function synchronizeUnlockedState(localState: AppState): Promise<Ap
       return loadState()
     }
     cloudEnabled = false
-    emit({ phase: 'offline', message: error instanceof Error ? `Lokaler Modus: ${error.message}` : 'Lokaler Modus: Cloud-Speicher nicht erreichbar.', ...(syncMetadata.lastSyncedAt ? { lastSyncedAt: syncMetadata.lastSyncedAt } : {}) })
+    emit({ phase: 'offline', message: error instanceof Error ? `Local mode: ${error.message}` : 'Local mode: cloud storage unreachable.', ...(syncMetadata.lastSyncedAt ? { lastSyncedAt: syncMetadata.lastSyncedAt } : {}) })
     scheduleBootstrapRetry()
     return loadState()
   }
@@ -396,14 +396,14 @@ export async function synchronizeUnlockedState(localState: AppState): Promise<Ap
 
 export function saveState(state: AppState): void {
   requireActiveUser()
-  if (!isAppState(state)) throw new Error('Ungültiger Anwendungszustand wurde nicht gespeichert.')
+  if (!isAppState(state)) throw new Error('Invalid application state was not saved.')
   const nextFingerprint = fingerprint(state)
   unlockedState = structuredClone(state)
   if (nextFingerprint === savedStateFingerprint) return
   savedStateFingerprint = nextFingerprint
   markDirty()
   void persistEncryptedState(state).catch((error: unknown) => {
-    emit({ phase: 'error', message: error instanceof Error ? error.message : 'Die lokale Verschlüsselung ist fehlgeschlagen.' })
+    emit({ phase: 'error', message: error instanceof Error ? error.message : 'Local encryption failed.' })
     console.error('Encrypted persistence failed', error)
   })
 }
@@ -427,7 +427,7 @@ export async function resolveCloudConflict(strategy: 'server' | 'local'): Promis
     markSynced(remote.version, remote.updatedAt ?? new Date().toISOString())
   } else {
     const localPayload = getUnlockedVaultPayload()
-    if (!localPayload) throw new Error('Der lokale Vault ist nicht entsperrt.')
+    if (!localPayload) throw new Error('The local vault is not unlocked.')
     const saved = await saveCloudState(localPayload, remote.version)
     cloudVersion = saved.version
     rememberState(localPayload.state)
@@ -438,7 +438,7 @@ export async function resolveCloudConflict(strategy: 'server' | 'local'): Promis
   retryDelayMs = 2_000
   clearRetryTimer()
   clearConflict()
-  emit({ phase: 'synced', message: strategy === 'server' ? 'Der Serverstand wurde übernommen.' : 'Der lokale Stand wurde bewusst als neuer Cloud-Stand gespeichert.', lastSyncedAt: syncMetadata.lastSyncedAt })
+  emit({ phase: 'synced', message: strategy === 'server' ? 'The cloud version was applied.' : "This device's version was deliberately saved as the new cloud version.", lastSyncedAt: syncMetadata.lastSyncedAt })
   return loadState()
 }
 
@@ -451,7 +451,7 @@ export function resetStoredState(): void {
   if (getUnlockedVaultPayload()) {
     void replaceUnlockedVaultPayload(resetPayload)
       .then(() => scheduleCloudSave(0))
-      .catch((error: unknown) => emit({ phase: 'error', message: error instanceof Error ? error.message : 'Zurücksetzen fehlgeschlagen.' }))
+      .catch((error: unknown) => emit({ phase: 'error', message: error instanceof Error ? error.message : 'Reset failed.' }))
   } else {
     removeEncryptedVault(userId)
   }

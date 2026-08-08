@@ -1,0 +1,371 @@
+/*
+ * Finance Planner design foundation
+ *
+ * This file is intentionally imported immediately after styles.css and before
+ * legacy feature/page layers. New shared styles should consume these semantic
+ * tokens; page migrations remain scoped to their dedicated redesign work.
+ */
+
+:root {
+  /* Colour: neutral application structure */
+  --fp-color-canvas: #070a14;
+  --fp-color-canvas-subtle: #0a0f1e;
+  --fp-color-navigation: #080c19;
+  --fp-color-surface: #0f1628;
+  --fp-color-surface-elevated: #151d32;
+  --fp-color-surface-interactive: #19223a;
+  --fp-color-surface-hover: #202a46;
+  --fp-color-surface-pressed: #12192c;
+
+  --fp-color-text-primary: #f4f5fb;
+  --fp-color-text-secondary: #c7ccdc;
+  --fp-color-text-muted: #929ab2;
+  --fp-color-border: rgb(151 160 199 / 22%);
+  --fp-color-border-strong: rgb(174 160 232 / 36%);
+  --fp-color-divider: rgb(143 153 192 / 14%);
+
+  /* Colour: actions and financial meaning */
+  --fp-color-accent: #8b6aee;
+  --fp-color-accent-hover: #9a7af2;
+  --fp-color-accent-pressed: #7657d2;
+  --fp-color-accent-muted: rgb(139 106 238 / 16%);
+  --fp-color-income: #55d991;
+  --fp-color-income-muted: rgb(85 217 145 / 14%);
+  --fp-color-expense: #ff6f7f;
+  --fp-color-expense-muted: rgb(255 111 127 / 14%);
+  --fp-color-transfer: #a786f2;
+  --fp-color-transfer-muted: rgb(167 134 242 / 14%);
+  --fp-color-warning: #e6b75a;
+  --fp-color-warning-muted: rgb(230 183 90 / 14%);
+  --fp-color-focus: #c4b5fd;
+  --fp-color-chart-current: #a99af0;
+  --fp-color-chart-projection: #8b6aee;
+  --fp-color-chart-grid: rgb(145 155 194 / 16%);
+  --fp-color-chart-label: #9aa3bb;
+
+  /* Typography uses only the locally available system stack. */
+  --fp-font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --fp-font-weight-regular: 400;
+  --fp-font-weight-medium: 500;
+  --fp-font-weight-semibold: 600;
+  --fp-font-weight-bold: 700;
+  --fp-font-size-page-title: clamp(1.75rem, 1.4rem + 1.2vw, 2.5rem);
+  --fp-font-size-section-title: clamp(1.125rem, 1.05rem + 0.25vw, 1.25rem);
+  --fp-font-size-body: 1rem;
+  --fp-font-size-supporting: 0.875rem;
+  --fp-font-size-metadata: 0.75rem;
+  --fp-font-size-control: 0.875rem;
+  --fp-line-height-heading: 1.15;
+  --fp-line-height-body: 1.55;
+  --fp-line-height-compact: 1.35;
+  --fp-letter-spacing-heading: -0.03em;
+
+  /* Spacing and dimensions */
+  --fp-space-1: 0.25rem;
+  --fp-space-2: 0.5rem;
+  --fp-space-3: 0.75rem;
+  --fp-space-4: 1rem;
+  --fp-space-5: 1.25rem;
+  --fp-space-6: 1.5rem;
+  --fp-space-8: 2rem;
+  --fp-space-10: 2.5rem;
+  --fp-space-12: 3rem;
+  --fp-space-16: 4rem;
+  --fp-control-height-compact: 2.25rem;
+  --fp-control-height: 2.75rem;
+  --fp-touch-target: 2.75rem;
+  --fp-panel-padding-mobile: 1rem;
+  --fp-panel-padding: 1.25rem;
+  --fp-panel-padding-wide: 1.5rem;
+  --fp-gutter-mobile: 0.875rem;
+  --fp-gutter-compact: 1.25rem;
+  --fp-gutter-desktop: clamp(1.5rem, 2.6vw, 2.5rem);
+  --fp-sidebar-width: 15.875rem;
+  --fp-sidebar-width-compact: 4.75rem;
+  --fp-bottom-navigation-height: 4.5rem;
+  --fp-app-canvas-max: 100rem;
+
+  /* Shape and elevation */
+  --fp-radius-control: 0.75rem;
+  --fp-radius-icon: 0.75rem;
+  --fp-radius-panel: 1.125rem;
+  --fp-radius-dialog: 1.375rem;
+  --fp-border: 1px solid var(--fp-color-border);
+  --fp-divider: 1px solid var(--fp-color-divider);
+  --fp-shadow-raised: 0 0.75rem 2rem rgb(0 3 14 / 20%);
+  --fp-shadow-overlay: 0 1.5rem 4.5rem rgb(0 2 12 / 48%);
+  --fp-illumination: inset 0 1px 0 rgb(255 255 255 / 4%);
+
+  /* Safe areas and fixed-region offsets */
+  --fp-safe-top: env(safe-area-inset-top, 0px);
+  --fp-safe-right: env(safe-area-inset-right, 0px);
+  --fp-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --fp-safe-left: env(safe-area-inset-left, 0px);
+  --fp-mobile-fixed-bottom: calc(var(--fp-bottom-navigation-height) + var(--fp-safe-bottom));
+
+  /* Motion */
+  --fp-duration-instant: 80ms;
+  --fp-duration-fast: 140ms;
+  --fp-duration-standard: 200ms;
+  --fp-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --fp-ease-emphasized: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* Layer scale: do not introduce one-off z-index values in new work. */
+  --fp-z-base: 0;
+  --fp-z-sticky-navigation: 100;
+  --fp-z-dropdown: 200;
+  --fp-z-status: 300;
+  --fp-z-bottom-navigation: 400;
+  --fp-z-drawer-backdrop: 500;
+  --fp-z-drawer: 600;
+  --fp-z-dialog-backdrop: 700;
+  --fp-z-dialog: 800;
+  --fp-z-system-overlay: 900;
+
+  /* Canonical viewport policy (documentation tokens; CSS custom properties
+     cannot be used in media-query conditions). */
+  --fp-breakpoint-mobile-max: 768px;
+  --fp-breakpoint-compact-min: 769px;
+  --fp-breakpoint-compact-max: 1023px;
+  --fp-breakpoint-desktop-min: 1024px;
+  --fp-breakpoint-wide-min: 1280px;
+
+  font-family: var(--fp-font-family);
+  color: var(--fp-color-text-primary);
+  background: var(--fp-color-canvas);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+html {
+  min-width: 20rem;
+  min-height: 100%;
+  color-scheme: dark;
+  background: var(--fp-color-canvas);
+  text-size-adjust: 100%;
+}
+
+body {
+  min-height: 100dvh;
+  color: var(--fp-color-text-primary);
+  font-family: var(--fp-font-family);
+  line-height: var(--fp-line-height-body);
+  overflow-wrap: anywhere;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+[role='button'],
+a[href],
+input,
+select,
+textarea {
+  touch-action: manipulation;
+}
+
+:where(button, [role='button'], a[href], input, select, textarea):focus-visible {
+  outline: 3px solid var(--fp-color-focus);
+  outline-offset: 3px;
+}
+
+:where(h1, h2, h3, p) {
+  overflow-wrap: anywhere;
+}
+
+:where(h1) {
+  font-size: var(--fp-font-size-page-title);
+  font-weight: var(--fp-font-weight-semibold);
+  line-height: var(--fp-line-height-heading);
+  letter-spacing: var(--fp-letter-spacing-heading);
+  text-wrap: balance;
+}
+
+:where(h2, h3) {
+  line-height: var(--fp-line-height-heading);
+  text-wrap: balance;
+}
+
+::selection {
+  color: var(--fp-color-text-primary);
+  background: rgb(139 106 238 / 42%);
+}
+
+/* Small, reusable foundation utilities. */
+.fp-app-canvas {
+  width: min(100%, var(--fp-app-canvas-max));
+  margin-inline: auto;
+}
+
+.fp-safe-page {
+  padding:
+    max(var(--fp-gutter-mobile), var(--fp-safe-top))
+    max(var(--fp-gutter-mobile), var(--fp-safe-right))
+    calc(var(--fp-gutter-mobile) + var(--fp-mobile-fixed-bottom))
+    max(var(--fp-gutter-mobile), var(--fp-safe-left));
+}
+
+.fp-panel-surface {
+  border: var(--fp-border);
+  border-radius: var(--fp-radius-panel);
+  background: var(--fp-color-surface);
+  box-shadow: var(--fp-illumination), var(--fp-shadow-raised);
+}
+
+.fp-interactive-surface {
+  border: var(--fp-border);
+  border-radius: var(--fp-radius-control);
+  color: var(--fp-color-text-secondary);
+  background: var(--fp-color-surface-interactive);
+  transition:
+    color var(--fp-duration-fast) var(--fp-ease-standard),
+    border-color var(--fp-duration-fast) var(--fp-ease-standard),
+    background-color var(--fp-duration-fast) var(--fp-ease-standard),
+    transform var(--fp-duration-instant) var(--fp-ease-standard);
+}
+
+.fp-interactive-surface:hover {
+  color: var(--fp-color-text-primary);
+  background: var(--fp-color-surface-hover);
+}
+
+.fp-interactive-surface:active {
+  background: var(--fp-color-surface-pressed);
+  transform: translateY(1px);
+}
+
+.fp-money,
+.fp-tabular-numbers,
+.positive-text,
+.negative-text,
+.transaction-amount,
+.stat-card strong {
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: 'tnum' 1, 'lnum' 1;
+}
+
+.fp-income,
+.positive-text {
+  color: var(--fp-color-income);
+}
+
+.fp-expense,
+.negative-text {
+  color: var(--fp-color-expense);
+}
+
+.fp-transfer {
+  color: var(--fp-color-transfer);
+}
+
+.fp-metadata {
+  color: var(--fp-color-text-muted);
+  font-size: var(--fp-font-size-metadata);
+  line-height: var(--fp-line-height-compact);
+}
+
+.fp-visually-hidden,
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (pointer: coarse) {
+  :where(button, [role='button'], a[href], input, select) {
+    min-width: var(--fp-touch-target);
+    min-height: var(--fp-touch-target);
+  }
+}
+
+/* Mobile: 0–768px */
+@media (max-width: 768px) {
+  .fp-app-canvas {
+    padding-inline: var(--fp-gutter-mobile);
+  }
+
+  .fp-panel-surface {
+    padding: var(--fp-panel-padding-mobile);
+  }
+}
+
+/* Compact/tablet: 769–1023px */
+@media (min-width: 769px) and (max-width: 1023px) {
+  .fp-app-canvas {
+    padding-inline: var(--fp-gutter-compact);
+  }
+
+  .fp-safe-page {
+    padding:
+      max(var(--fp-gutter-compact), var(--fp-safe-top))
+      max(var(--fp-gutter-compact), var(--fp-safe-right))
+      max(var(--fp-gutter-compact), var(--fp-safe-bottom))
+      max(var(--fp-gutter-compact), var(--fp-safe-left));
+  }
+}
+
+/* Desktop: 1024px and above */
+@media (min-width: 1024px) {
+  .fp-app-canvas {
+    padding-inline: var(--fp-gutter-desktop);
+  }
+
+  .fp-safe-page {
+    padding:
+      max(var(--fp-gutter-desktop), var(--fp-safe-top))
+      max(var(--fp-gutter-desktop), var(--fp-safe-right))
+      max(var(--fp-gutter-desktop), var(--fp-safe-bottom))
+      max(var(--fp-gutter-desktop), var(--fp-safe-left));
+  }
+
+  .fp-panel-surface {
+    padding: var(--fp-panel-padding);
+  }
+}
+
+/* Wide refinement: 1280px and above */
+@media (min-width: 1280px) {
+  .fp-panel-surface {
+    padding: var(--fp-panel-padding-wide);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  /* :is(), not :where() -- :where() always contributes zero specificity, so
+     it can never beat a plain-class rule like styles.css's
+     ".primary, .secondary { border: 0 }" regardless of import order, making
+     this forced-colors border silently never apply to those two classes.
+     :is() takes on its most specific argument (equal to a single class
+     selector here), which wins on source order since this file loads after
+     styles.css. Found via a real forced-colors accessibility check on the
+     Finance Intelligence page failing on exactly this class pair. */
+  :is(.fp-panel-surface, .fp-interactive-surface, .primary, .secondary, .active) {
+    border: 1px solid ButtonText;
+  }
+
+  :where(button, [role='button'], a[href], input, select, textarea):focus-visible {
+    outline-color: Highlight;
+  }
+}

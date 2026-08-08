@@ -28,7 +28,7 @@ requirePattern('server/src/user-state-store.js', /StateVersionConflictError/, 'C
 requirePattern('server/src/finance-router.js', /\/api\/finance\/state/, 'Authenticated state API route is missing')
 requirePattern('server/src/finance-router.js', /MAX_CLOUD_STATE_REQUEST_BYTES = 10_000_000/, 'Backend cloud-state upload limit is missing')
 requirePattern('server/src/auth-store.js', /INSERT INTO auth_store/, 'Auth profiles and passkeys are not persisted to PostgreSQL')
-requirePattern('src/AuthGate.tsx', /children: ReactNode \| \(\(user: AuthUser\) => ReactNode\)/, 'Authenticated user identity must be available to the vault layer')
+requirePattern('src/AuthGate.tsx', /children: ReactNode \| \(\(user: AuthUser[^)]*\) => ReactNode\)/, 'Authenticated user identity must be available to the vault layer')
 requirePattern('src/app/bootstrap.tsx', /VaultGate key=\{user\.id\} userId=\{user\.id\}/, 'App bootstrap must scope the device vault to the authenticated account')
 requirePattern('src/VaultGate.tsx', /configureAuthenticatedStorage\(userId\)/, 'Sync state must be configured for the authenticated account')
 requirePattern('src/VaultGate.tsx', /if \(!migrating\) prepareNewDeviceCloudBootstrap\(\)/, 'Only a genuinely new device may accept a remote state without migration conflict checks')
