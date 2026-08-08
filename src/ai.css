@@ -28,7 +28,7 @@
 .ai-results { max-width: none; overflow: hidden; }
 .ai-results-header { align-items: flex-end; gap: 18px; }
 .ai-filter { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--fp-color-text-muted); }
-.ai-filter button { min-height: 36px; padding: 7px 12px; border: var(--fp-border); border-radius: 999px; color: var(--fp-color-text-secondary); background: var(--fp-color-surface-interactive); font-size: var(--fp-font-size-metadata); }
+.ai-filter button { min-height: var(--fp-touch-target); padding: 7px 12px; border: var(--fp-border); border-radius: 999px; color: var(--fp-color-text-secondary); background: var(--fp-color-surface-interactive); font-size: var(--fp-font-size-metadata); }
 .ai-filter button.active { border-color: var(--fp-color-border-strong); color: #d9d0ff; background: var(--fp-color-accent-muted); }
 
 .ai-applied-banner { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; padding: 13px 14px; border: 1px solid rgb(85 217 145 / 30%); border-radius: var(--fp-radius-control); color: var(--fp-color-text-secondary); background: var(--fp-color-income-muted); font-size: var(--fp-font-size-metadata); line-height: 1.5; }
