@@ -46,8 +46,8 @@ export function createSmartBriefing(state: AppState, now = new Date()): SmartBri
     const change = Math.round(((currentExpenses - previousExpenses) / previousExpenses) * 100)
     if (Math.abs(change) >= 10) items.push({
       id: 'spending-trend',
-      title: change > 0 ? 'Ausgaben steigen' : 'Ausgaben sinken',
-      detail: `Deine Ausgaben liegen im laufenden Monat bis heute ${Math.abs(change)} % ${change > 0 ? 'über' : 'unter'} dem gleichen Zeitraum des Vormonats.`,
+      title: change > 0 ? 'Spending rising' : 'Spending falling',
+      detail: `Your expenses this month so far are ${Math.abs(change)}% ${change > 0 ? 'above' : 'below'} the same period last month.`,
       severity: change > 0 ? 'attention' : 'positive',
       priority: change > 0 ? 95 : 70,
     })
@@ -57,8 +57,8 @@ export function createSmartBriefing(state: AppState, now = new Date()): SmartBri
     const savingsRate = Math.round(((currentIncome - currentExpenses) / currentIncome) * 100)
     items.push({
       id: 'savings-rate',
-      title: `Sparquote ${savingsRate} %`,
-      detail: savingsRate >= 20 ? 'Du hältst derzeit eine solide Sparquote.' : savingsRate >= 0 ? 'Schon kleine Ausgabenkürzungen würden deine Sparquote sichtbar erhöhen.' : 'Deine Ausgaben übersteigen aktuell die Einnahmen.',
+      title: `Savings rate ${savingsRate}%`,
+      detail: savingsRate >= 20 ? 'You are currently holding a solid savings rate.' : savingsRate >= 0 ? 'Even small spending cuts would noticeably increase your savings rate.' : 'Your expenses currently exceed your income.',
       severity: savingsRate >= 20 ? 'positive' : savingsRate >= 0 ? 'neutral' : 'attention',
       priority: savingsRate < 0 ? 100 : 80,
     })
@@ -66,8 +66,8 @@ export function createSmartBriefing(state: AppState, now = new Date()): SmartBri
 
   if (currentIncome > 0 && recurring > currentIncome * 0.35) items.push({
     id: 'recurring-load',
-    title: 'Hohe Fixkostenquote',
-    detail: `${Math.round((recurring / currentIncome) * 100)} % deiner Einnahmen im laufenden Monat sind durch wiederkehrende Ausgaben gebunden.`,
+    title: 'High recurring-cost share',
+    detail: `${Math.round((recurring / currentIncome) * 100)}% of your income this month is committed to recurring expenses.`,
     severity: 'attention',
     priority: 90,
   })
@@ -77,8 +77,8 @@ export function createSmartBriefing(state: AppState, now = new Date()): SmartBri
     const runway = available / monthlyBurn
     items.push({
       id: 'cash-runway',
-      title: `${runway.toFixed(1).replace('.', ',')} Monate Reichweite`,
-      detail: runway >= 3 ? 'Deine verfügbaren Guthaben decken mindestens drei aktuelle Ausgabenmonate.' : 'Ein größerer Liquiditätspuffer würde unerwartete Kosten besser abfangen.',
+      title: `${runway.toFixed(1)} months runway`,
+      detail: runway >= 3 ? 'Your available balance covers at least three months of current spending.' : 'A larger cash buffer would better absorb unexpected costs.',
       severity: runway >= 3 ? 'positive' : 'attention',
       priority: runway < 1 ? 98 : runway < 3 ? 85 : 55,
     })
@@ -91,8 +91,8 @@ export function createSmartBriefing(state: AppState, now = new Date()): SmartBri
     .sort((a, b) => a.days - b.days)[0]
   if (urgentGoal) items.push({
     id: `goal-${urgentGoal.goal.id}`,
-    title: `${urgentGoal.goal.name}: noch ${urgentGoal.days} Tage`,
-    detail: `Es fehlen ${((urgentGoal.goal.targetCents - urgentGoal.goal.currentCents) / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}.`,
+    title: `${urgentGoal.goal.name}: ${urgentGoal.days} days left`,
+    detail: `${((urgentGoal.goal.targetCents - urgentGoal.goal.currentCents) / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })} still needed.`,
     severity: 'neutral',
     priority: 75,
   })

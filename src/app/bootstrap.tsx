@@ -17,6 +17,7 @@ import { RuntimeSurfaceCoordinator } from '../runtime-surfaces/RuntimeSurfaceCoo
 import { CloudSyncStatus } from '../features/sync/CloudSyncStatus'
 import '../styles.css'
 import '../design-foundation.css'
+import '../intelligence-badge.css'
 import '../ai.css'
 import '../assistant.css'
 import '../receipt.css'

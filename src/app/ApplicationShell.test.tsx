@@ -50,7 +50,7 @@ describe('ApplicationShell navigation', () => {
       'Close more destinations',
       'Recurring payments',
       'Bank and PayPal connections',
-      'AI categorisation',
+      'Finance intelligence',
       'Finance assistant',
       'Receipt review',
       'Data and backup',

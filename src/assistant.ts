@@ -61,17 +61,17 @@ export function clearAssistantMemory(): void { removeSecureValue(SECURE_MEMORY_K
 export function assistantMemoryCount(): number { return loadMemory().length }
 
 function exactAnswer(state: AppState, question: string): string | null {
-  const normalized = question.toLocaleLowerCase('de-DE')
+  const normalized = question.toLocaleLowerCase('en-GB')
   const expenses = state.transactions.filter((item) => item.type === 'expense')
   const income = state.transactions.filter((item) => item.type === 'income')
   const expenseTotal = expenses.reduce((sum, item) => sum + item.amountCents, 0)
   const incomeTotal = income.reduce((sum, item) => sum + item.amountCents, 0)
-  if (/gesamtvermögen|wie viel.*habe ich|kontostand/.test(normalized)) return `Dein aktuell erfasstes Gesamtvermögen beträgt ${formatMoney(totalBalance(state))}.`
-  if (/feste.*zahlung|wiederkehr|vertrag|abos?/.test(normalized)) return `Deine bestätigten wiederkehrenden Ausgaben betragen ${formatMoney(expenses.filter((item) => item.recurring).reduce((sum, item) => sum + item.amountCents, 0))}.`
-  if (/einnahmen/.test(normalized) && /ausgaben/.test(normalized)) return `Erfasste Einnahmen: ${formatMoney(incomeTotal)}. Erfasste Ausgaben: ${formatMoney(expenseTotal)}. Netto: ${formatMoney(incomeTotal - expenseTotal)}.`
-  if (/größte.*ausgabe/.test(normalized)) {
+  if (/net worth|how much.*(do i have|money)|account balance/.test(normalized)) return `Your currently recorded net worth is ${formatMoney(totalBalance(state))}.`
+  if (/recurring|subscription|fixed payment/.test(normalized)) return `Your confirmed recurring expenses total ${formatMoney(expenses.filter((item) => item.recurring).reduce((sum, item) => sum + item.amountCents, 0))}.`
+  if (/income/.test(normalized) && /expense/.test(normalized)) return `Recorded income: ${formatMoney(incomeTotal)}. Recorded expenses: ${formatMoney(expenseTotal)}. Net: ${formatMoney(incomeTotal - expenseTotal)}.`
+  if (/biggest.*expense|largest.*expense/.test(normalized)) {
     const biggest = [...expenses].sort((a, b) => b.amountCents - a.amountCents)[0]
-    return biggest ? `Deine größte erfasste Ausgabe ist ${biggest.description} mit ${formatMoney(biggest.amountCents)}.` : 'Es sind noch keine Ausgaben vorhanden.'
+    return biggest ? `Your largest recorded expense is ${biggest.description} at ${formatMoney(biggest.amountCents)}.` : 'No expenses have been recorded yet.'
   }
   return null
 }
@@ -80,9 +80,9 @@ function fallbackAnswer(mode: AssistantMode, state: AppState, question: string):
   const expenses = state.transactions.filter((item) => item.type === 'expense')
   const recurringTotal = expenses.filter((item) => item.recurring).reduce((sum, item) => sum + item.amountCents, 0)
   const freeCash = state.transactions.reduce((sum, item) => sum + (item.type === 'income' ? item.amountCents : -item.amountCents), 0)
-  if (mode === 'planning') return `Plan: 1. Baue zuerst einen Notgroschen auf. 2. Reserviere monatlich bis zu ${formatMoney(Math.max(0, Math.round(freeCash * 0.7)))} für priorisierte Sparziele. 3. Prüfe feste Zahlungen von ${formatMoney(recurringTotal)}. 4. Aktualisiere den Plan monatlich.`
-  if (mode === 'analysis') return `Analyse: Der erfasste Netto-Cashflow beträgt ${formatMoney(freeCash)}. Wiederkehrende Ausgaben liegen bei ${formatMoney(recurringTotal)}.`
-  return exactAnswer(state, question) ?? `Für eine genaue Antwort auf „${question}“ reichen die aktuell gespeicherten Daten nicht aus.`
+  if (mode === 'planning') return `Plan: 1. Build a cash buffer first. 2. Reserve up to ${formatMoney(Math.max(0, Math.round(freeCash * 0.7)))} per month for prioritized savings goals. 3. Review recurring payments of ${formatMoney(recurringTotal)}. 4. Update the plan monthly.`
+  if (mode === 'analysis') return `Analysis: Your recorded net cash flow is ${formatMoney(freeCash)}. Recurring expenses stand at ${formatMoney(recurringTotal)}.`
+  return exactAnswer(state, question) ?? `The currently stored data isn't enough for a precise answer to "${question}".`
 }
 
 function snapshot(state: AppState) {
@@ -117,26 +117,26 @@ function buildFinancialContext(state: AppState): string {
   const categoryTotals = new Map<string, number>()
   expenses.forEach((item) => categoryTotals.set(item.category, (categoryTotals.get(item.category) ?? 0) + item.amountCents))
   const categories = [...categoryTotals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
-  const history = loadMemory().slice(0, 4).map((item) => `Frage: ${item.question}; Antwort: ${item.answer.slice(0, 300)}`).join(' | ')
+  const history = loadMemory().slice(0, 4).map((item) => `Question: ${item.question}; Answer: ${item.answer.slice(0, 300)}`).join(' | ')
 
   return [
-    `Gesamtvermögen: ${formatMoney(totalBalance(state))}.`,
-    `Erfasste Einnahmen: ${formatMoney(incomeTotal)}.`,
-    `Erfasste Ausgaben: ${formatMoney(expenseTotal)}.`,
-    `Netto-Cashflow: ${formatMoney(incomeTotal - expenseTotal)}.`,
-    `Feste Zahlungen: ${formatMoney(recurring.reduce((sum, item) => sum + item.amountCents, 0))}.`,
-    `Prognose nach 12 Monaten: ${formatMoney(Math.round((projection.at(-1)?.balance ?? 0) * 100))}.`,
-    `Kategorien: ${categories.map(([name, amount]) => `${name} ${formatMoney(amount)}`).join(', ') || 'keine'}.`,
-    `Sparziele: ${state.goals.map((goal) => `${goal.name}: ${formatMoney(goal.currentCents)} von ${formatMoney(goal.targetCents)} bis ${goal.targetDate}`).join('; ') || 'keine'}.`,
-    `Letzte Buchungen: ${[...state.transactions].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 20).map((item) => `${item.date} ${item.description} ${item.type === 'expense' ? '-' : '+'}${formatMoney(item.amountCents)} ${item.category}`).join('; ')}.`,
-    history ? `Frühere Assistenteninteraktionen: ${history}.` : '',
+    `Net worth: ${formatMoney(totalBalance(state))}.`,
+    `Recorded income: ${formatMoney(incomeTotal)}.`,
+    `Recorded expenses: ${formatMoney(expenseTotal)}.`,
+    `Net cash flow: ${formatMoney(incomeTotal - expenseTotal)}.`,
+    `Recurring payments: ${formatMoney(recurring.reduce((sum, item) => sum + item.amountCents, 0))}.`,
+    `12-month projection: ${formatMoney(Math.round((projection.at(-1)?.balance ?? 0) * 100))}.`,
+    `Categories: ${categories.map(([name, amount]) => `${name} ${formatMoney(amount)}`).join(', ') || 'none'}.`,
+    `Savings goals: ${state.goals.map((goal) => `${goal.name}: ${formatMoney(goal.currentCents)} of ${formatMoney(goal.targetCents)} by ${goal.targetDate}`).join('; ') || 'none'}.`,
+    `Recent transactions: ${[...state.transactions].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 20).map((item) => `${item.date} ${item.description} ${item.type === 'expense' ? '-' : '+'}${formatMoney(item.amountCents)} ${item.category}`).join('; ')}.`,
+    history ? `Earlier assistant interactions: ${history}.` : '',
   ].filter(Boolean).join(' ')
 }
 
 function formatAiResponse(result: AiResponse, mode: AssistantMode, question: string): string {
-  const heading = mode === 'planning' ? `Plan für „${question}“` : mode === 'question' ? `Antwort auf „${question}“` : 'Persönliche Finanzanalyse'
-  const signals = result.signals?.map((signal, index) => `${index + 1}. ${signal.title}: ${signal.explanation}${signal.suggestedAction ? ` Nächster Schritt: ${signal.suggestedAction}` : ''}`).join('\n')
-  return `${heading}\n\n${result.summary}${signals ? `\n\n${signals}` : ''}\n\nKonfidenz: ${Math.round((result.confidence || 0) * 100)} %.`
+  const heading = mode === 'planning' ? `Plan for "${question}"` : mode === 'question' ? `Answer to "${question}"` : 'Personal financial analysis'
+  const signals = result.signals?.map((signal, index) => `${index + 1}. ${signal.title}: ${signal.explanation}${signal.suggestedAction ? ` Next step: ${signal.suggestedAction}` : ''}`).join('\n')
+  return `${heading}\n\n${result.summary}${signals ? `\n\n${signals}` : ''}\n\nConfidence: ${Math.round((result.confidence || 0) * 100)}%.`
 }
 
 function supportsWebGpu(): boolean {
@@ -170,12 +170,12 @@ async function getLocalGenerator(): Promise<{ generator: Generator; model: strin
 function fallbackReason(payload: AiResponse): string {
   const warning = payload.warnings?.find((value) => typeof value === 'string' && value.trim())?.trim()
   return warning
-    ? `Die gehosteten KI-Modelle lieferten keine verifizierbare Antwort. Grund: ${warning.slice(0, 240)}`
-    : 'Die gehosteten KI-Modelle lieferten keine verifizierbare Antwort. Eine regelbasierte Ersatzanalyse wurde angezeigt.'
+    ? `The hosted models did not return a verifiable answer. Reason: ${warning.slice(0, 240)}`
+    : 'The hosted models did not return a verifiable answer. A rule-based substitute analysis was shown instead.'
 }
 
 async function runHostedAssistant(mode: AssistantMode, state: AppState, question: string, consentExternalAi: boolean): Promise<string> {
-  if (!consentExternalAi) throw new Error('Bitte stimme der Übermittlung aggregierter Finanzkennzahlen an die gehosteten KI-Modelle zu.')
+  if (!consentExternalAi) throw new Error('Please agree to sending aggregated financial metrics to the hosted AI models.')
   const controller = new AbortController()
   const timeout = globalThis.setTimeout(() => controller.abort(), 55_000)
   try {
@@ -187,7 +187,7 @@ async function runHostedAssistant(mode: AssistantMode, state: AppState, question
     const payload = await response.json().catch(() => ({})) as AiResponse & { error?: string | { message?: string } }
     if (!response.ok) {
       const message = typeof payload.error === 'string' ? payload.error : payload.error?.message
-      throw new Error(message || 'Die KI-Analyse ist momentan nicht erreichbar.')
+      throw new Error(message || 'The AI analysis is not reachable right now.')
     }
     const formattedAnswer = formatAiResponse(payload, mode, question)
     if (payload.source === 'deterministic-fallback') {
@@ -200,11 +200,11 @@ async function runHostedAssistant(mode: AssistantMode, state: AppState, question
 async function runLocalAssistant(mode: AssistantMode, state: AppState, question: string): Promise<string> {
   const loaded = await getLocalGenerator()
   const instruction = mode === 'analysis'
-    ? 'Erstelle eine vorsichtige persönliche Finanzanalyse mit Mustern, Risiken, Einsparpotenzial und drei priorisierten Maßnahmen.'
+    ? 'Create a careful personal financial analysis covering patterns, risks, savings potential, and three prioritized actions.'
     : mode === 'planning'
-      ? `Erstelle einen realistischen Plan für: ${question || 'meine finanzielle Situation verbessern'}. Gliedere in Sofort, diesen Monat, 3 Monate und 12 Monate.`
-      : `Beantworte ausschließlich aus dem Kontext. Frage: ${question}`
-  const prompt = `System: Du bist ein vorsichtiger deutschsprachiger persönlicher Finanzassistent. Erfinde keine Daten.\nAufgabe: ${instruction}\nFinanzkontext: ${buildFinancialContext(state)}\nAntwort:`
+      ? `Create a realistic plan for: ${question || 'improving my financial situation'}. Structure it into Immediately, This month, 3 months, and 12 months.`
+      : `Answer using only the given context. Question: ${question}`
+  const prompt = `System: You are a careful personal finance assistant. Do not invent data.\nTask: ${instruction}\nFinancial context: ${buildFinancialContext(state)}\nAnswer:`
   const output = await loaded.generator(prompt, { max_new_tokens: mode === 'question' ? 220 : 360, temperature: 0.15, top_p: 0.9, repetition_penalty: 1.12, do_sample: false, return_full_text: false })
   return output[0]?.generated_text?.trim() || fallbackAnswer(mode, state, question)
 }

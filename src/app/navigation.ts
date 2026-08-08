@@ -41,7 +41,7 @@ export const NAVIGATION_DESTINATIONS: readonly NavigationDestination[] = [
   { id: 'goals', label: 'Goals', accessibilityLabel: 'Savings goals', icon: Target, desktopOrder: 4, mobilePrimary: true },
   { id: 'recurring', label: 'Recurring', accessibilityLabel: 'Recurring payments', icon: Repeat2, desktopOrder: 5, mobilePrimary: false, moreOrder: 1 },
   { id: 'connections', label: 'Connections', accessibilityLabel: 'Bank and PayPal connections', icon: Link2, desktopOrder: 6, mobilePrimary: false, moreOrder: 2 },
-  { id: 'ai', label: 'AI Categorisation', accessibilityLabel: 'AI categorisation', icon: BrainCircuit, desktopOrder: 7, mobilePrimary: false, moreOrder: 3 },
+  { id: 'ai', label: 'Finance Intelligence', accessibilityLabel: 'Finance intelligence', icon: BrainCircuit, desktopOrder: 7, mobilePrimary: false, moreOrder: 3 },
   { id: 'assistant', label: 'Finance Assistant', accessibilityLabel: 'Finance assistant', icon: MessageCircleQuestion, desktopOrder: 8, mobilePrimary: false, moreOrder: 4 },
   { id: 'receipt', label: 'Receipt Review', accessibilityLabel: 'Receipt review', icon: ReceiptText, desktopOrder: 9, mobilePrimary: false, moreOrder: 5 },
   { id: 'data', label: 'Data and Backup', accessibilityLabel: 'Data and backup', icon: DatabaseBackup, desktopOrder: 10, mobilePrimary: false, moreOrder: 6 },
