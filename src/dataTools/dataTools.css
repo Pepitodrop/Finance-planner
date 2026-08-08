@@ -1,0 +1,96 @@
+/* Step 13: Data & Backup redesign (DATA-01..11, SYNC-01). */
+
+.data-tools-page { display: grid; gap: 14px; }
+
+/* Shared sub-page shell used by every DATA-0X destination reached from the
+   overview (vault password, create/restore backup, reset, delete account,
+   cloud/device status) -- a narrower constrained-width column even on wide
+   desktop, deliberately, so serious content (especially account deletion)
+   reads like a careful document rather than a wide settings grid. */
+.data-tools-subpage { display: grid; gap: 14px; max-width: 640px; }
+.data-tools-subpage h1 { margin: 0; font-size: var(--fp-font-size-page-title); letter-spacing: var(--fp-letter-spacing-heading); }
+.data-tools-subpage > p { margin: 0; color: var(--fp-color-text-secondary); line-height: var(--fp-line-height-body); }
+
+.data-tools-back { justify-self: start; display: inline-flex; align-items: center; gap: 6px; min-height: var(--fp-touch-target); padding: 4px 6px; border: 0; color: var(--fp-color-text-secondary); background: transparent; font-weight: var(--fp-font-weight-medium); }
+.data-tools-back:hover { color: var(--fp-color-text-primary); }
+
+.data-tools-form { display: grid; gap: 16px; padding: var(--fp-panel-padding-wide); }
+.data-tools-form label { display: grid; gap: 8px; color: var(--fp-color-text-secondary); font-size: var(--fp-font-size-metadata); font-weight: 650; }
+.data-tools-form input { width: 100%; border: var(--fp-border); border-radius: var(--fp-radius-control); padding: 12px; color: var(--fp-color-text-primary); background: var(--fp-color-surface-interactive); outline: none; }
+.data-tools-form input:focus { border-color: var(--fp-color-accent); }
+.data-tools-form small { color: var(--fp-color-text-muted); font-weight: 500; }
+.data-tools-form code { padding: 2px 6px; border-radius: 6px; background: var(--fp-color-surface-interactive); font-family: ui-monospace, monospace; }
+
+.data-tools-field-error { color: var(--fp-color-expense); font-weight: 650; }
+.data-tools-hint { margin: 0; color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); line-height: 1.5; }
+
+.data-tools-file-picker button { justify-content: flex-start; gap: 10px; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.data-tools-alert { display: flex; align-items: flex-start; gap: 12px; padding: 14px; border: 1px solid rgb(230 183 90 / 35%); border-radius: var(--fp-radius-control); color: var(--fp-color-warning); background: var(--fp-color-warning-muted); }
+.data-tools-alert svg { flex: 0 0 auto; margin-top: 2px; }
+.data-tools-alert strong { display: block; color: var(--fp-color-text-primary); }
+.data-tools-alert p { margin: 4px 0 0; color: var(--fp-color-text-secondary); font-size: var(--fp-font-size-metadata); line-height: 1.5; }
+
+.data-tools-restore-actions { display: flex; gap: 10px; }
+.data-tools-restore-actions button { flex: 1; }
+
+.data-tools-link { justify-self: start; border: 0; padding: 0; color: var(--fp-color-accent); background: transparent; font-weight: 650; }
+.data-tools-link:hover { color: var(--fp-color-accent-hover); }
+
+/* Delete-account page: the highest-severity content in this feature. */
+.data-tools-subpage--danger { border-left: 3px solid #ff6b74; padding-left: 18px; }
+.data-tools-danger-list { display: grid; gap: 8px; margin: 0; padding-left: 20px; color: var(--fp-color-text-secondary); line-height: 1.5; }
+.data-tools-danger-list li::marker { color: #ff6b74; }
+.data-tools-irreversible { display: flex; align-items: center; gap: 8px; color: var(--fp-color-text-primary); }
+
+/* SYNC-01 */
+.data-tools-sync-panel { display: grid; gap: 10px; padding: var(--fp-panel-padding-wide); }
+.data-tools-sync-row { display: flex; align-items: center; gap: 10px; color: var(--fp-color-text-secondary); }
+.data-tools-sync-row + .data-tools-sync-row { padding-top: 10px; border-top: var(--fp-divider); }
+.data-tools-sync-value { margin-left: auto; color: var(--fp-color-text-primary); font-size: var(--fp-font-size-metadata); }
+.data-tools-sync-value--ok { color: var(--fp-color-income); }
+
+/* Overview (DATA-01) */
+.data-tools-status-strip { display: flex; align-items: center; gap: 14px; padding: 14px 18px; }
+.data-tools-status-strip > div { flex: 1; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.data-tools-status-strip .data-tools-link { font-size: var(--fp-font-size-metadata); }
+
+.data-tools-section-eyebrow { margin: 4px 0 0; color: var(--fp-color-text-muted); font-size: 11px; font-weight: 750; letter-spacing: .13em; text-transform: uppercase; }
+
+.data-tools-backup-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.data-tools-backup-card { display: flex; align-items: flex-start; gap: 12px; padding: var(--fp-panel-padding-wide); text-align: left; }
+.data-tools-backup-card .goal-hero-icon { flex: 0 0 auto; }
+.data-tools-backup-card div { display: grid; gap: 4px; }
+.data-tools-backup-card strong { color: var(--fp-color-text-primary); }
+.data-tools-backup-card span { color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); line-height: 1.4; }
+
+/* flex-wrap plus flex-shrink:0/white-space:nowrap on the tag and button:
+   without these, three items (label + "Plaintext" tag + "Export" button)
+   in one row at 390px squeeze so tightly that the tag and button's own
+   text wraps internally ("PLAINTEXT" -> "PLAINT"/"EXT", "Export" ->
+   "Expo"/"rt") -- found via a real screenshot review at 390x844. The
+   label is the one allowed to wrap across lines instead; a button or
+   pill breaking its own word never reads as intentional. */
+.data-tools-csv-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 12px 4px; border-top: var(--fp-divider); background: transparent; }
+.data-tools-csv-row-label { display: flex; flex: 1 1 auto; min-width: 0; align-items: center; gap: 10px; color: var(--fp-color-text-secondary); font-weight: 650; }
+.data-tools-plaintext-tag { flex-shrink: 0; white-space: nowrap; padding: 3px 8px; border: 1px solid var(--fp-color-warning); border-radius: 999px; color: var(--fp-color-warning); font-size: 0.6875rem; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.data-tools-csv-row button { flex-shrink: 0; white-space: nowrap; }
+
+.warning-card { border-color: rgb(230 183 90 / 35%); }
+.warning-card .goal-hero-icon { color: var(--fp-color-warning); }
+
+@media (max-width: 900px) {
+  .data-tools-backup-row { grid-template-columns: 1fr; }
+  .data-tools-status-strip { flex-direction: column; align-items: stretch; }
+}
+
+@media (forced-colors: active) {
+  .data-tools-alert, .data-tools-subpage--danger { border: 1px solid CanvasText; }
+  /* .data-tools-link sets border: 0 unconditionally (a plain text-link
+     treatment, e.g. "Change", "Use encrypted backup instead") -- under
+     forced-colors it would otherwise have no visible boundary at all,
+     found via a real forced-colors accessibility check on DATA-05's CSV
+     warning dialog, matching the same fix already applied to
+     .assistant-modes button / .assistant-consent-toggle. */
+  .data-tools-link, .data-tools-back { border: 1px solid CanvasText; }
+}

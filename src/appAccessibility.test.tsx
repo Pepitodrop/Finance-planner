@@ -1,20 +1,22 @@
 import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import axe from 'axe-core'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
+import type { AuthUser } from './AuthGate'
 import { FrontendExperience } from './FrontendExperience'
 import { WebMobileHardening } from './WebMobileHardening'
 import { initialState } from './data'
 import { configureAuthenticatedStorage, setUnlockedState } from './storage'
 
 const TEST_USER_ID = 'test-user-a11y'
+const TEST_USER: AuthUser = { id: TEST_USER_ID, email: 'test-user@finance-planner.test', name: 'Test User', passkeyCount: 1 }
 
 function Shell() {
   return <>
     <WebMobileHardening />
     <FrontendExperience />
-    <App userId={TEST_USER_ID} userName="Test User" />
+    <App userId={TEST_USER_ID} userName="Test User" user={TEST_USER} onLogout={vi.fn()} />
   </>
 }
 

@@ -49,7 +49,7 @@ function download(filename: string, content: string, type: string): void {
 }
 
 export async function exportBackup(state: AppState, password: string): Promise<void> {
-  if (password.length < 12) throw new Error('Das Backup-Passwort muss mindestens 12 Zeichen lang sein.')
+  if (password.length < 12) throw new Error('The backup password must be at least 12 characters long.')
   const salt = crypto.getRandomValues(new Uint8Array(16))
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const key = await deriveKey(password, salt, BACKUP_ITERATIONS)
@@ -73,7 +73,7 @@ function csvCell(value: string | number | boolean | undefined): string {
 }
 
 export function exportTransactionsCsv(state: AppState): void {
-  const header = ['Datum', 'Beschreibung', 'Kategorie', 'Typ', 'Betrag_EUR', 'Konto', 'Wiederkehrend']
+  const header = ['Date', 'Description', 'Category', 'Type', 'Amount_EUR', 'Account', 'Recurring']
   const accountNames = new Map(state.accounts.map((account) => [account.id, account.name]))
   const rows = state.transactions.map((transaction) => [
     transaction.date,
@@ -85,14 +85,14 @@ export function exportTransactionsCsv(state: AppState): void {
     Boolean(transaction.recurring),
   ])
   const csv = [header, ...rows].map((row) => row.map(csvCell).join(';')).join('\n')
-  download(`finance-planner-transaktionen-${new Date().toISOString().slice(0, 10)}.csv`, `\uFEFF${csv}`, 'text/csv;charset=utf-8')
+  download(`finance-planner-transactions-${new Date().toISOString().slice(0, 10)}.csv`, `\uFEFF${csv}`, 'text/csv;charset=utf-8')
 }
 
 export async function importBackup(file: File, password: string): Promise<AppState> {
-  if (file.size > 10_000_000) throw new Error('Die Sicherungsdatei ist größer als 10 MB.')
-  if (!password) throw new Error('Bitte gib das Backup-Passwort ein.')
+  if (file.size > 10_000_000) throw new Error('The backup file is larger than 10 MB.')
+  if (!password) throw new Error('Enter the backup password.')
   const parsed: unknown = JSON.parse(await file.text())
-  if (typeof parsed !== 'object' || parsed === null) throw new Error('Die Datei enthält kein gültiges verschlüsseltes Backup.')
+  if (typeof parsed !== 'object' || parsed === null) throw new Error("This file isn't a valid encrypted backup.")
   const envelope = parsed as Partial<EncryptedBackupEnvelope>
   if (
     envelope.format !== 'finance-planner-encrypted-backup'
@@ -103,7 +103,7 @@ export async function importBackup(file: File, password: string): Promise<AppSta
     || typeof envelope.salt !== 'string'
     || typeof envelope.iv !== 'string'
     || typeof envelope.ciphertext !== 'string'
-  ) throw new Error('Das Backup-Format ist ungültig.')
+  ) throw new Error('The backup format is invalid.')
 
   try {
     const key = await deriveKey(password, base64ToBytes(envelope.salt), envelope.iterations)
@@ -113,9 +113,9 @@ export async function importBackup(file: File, password: string): Promise<AppSta
       base64ToBytes(envelope.ciphertext),
     )
     const state: unknown = JSON.parse(decoder.decode(decrypted))
-    if (!isAppState(state)) throw new Error('Die entschlüsselten Daten sind ungültig.')
+    if (!isAppState(state)) throw new Error('The decrypted data is invalid.')
     return state
   } catch {
-    throw new Error('Backup-Passwort falsch oder Sicherungsdatei beschädigt.')
+    throw new Error('Wrong password, or the backup file is corrupted.')
   }
 }

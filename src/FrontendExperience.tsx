@@ -46,12 +46,21 @@ function restoreModalBackground(states: BackgroundState[]) {
 }
 
 function enhanceModal(modal: HTMLElement) {
-  modal.setAttribute('role', 'dialog')
+  // Dialogs built on useDialog (ConfirmationDialog, VaultConflict) already
+  // set their own correct role (e.g. "alertdialog" for a point-of-no-return
+  // confirmation) and aria-labelledby before this global, class-based
+  // enhancer ever sees them -- respect those instead of overwriting them
+  // back to the generic legacy default, which this file's own MutationObserver
+  // was doing unconditionally and silently downgrading every alertdialog to
+  // a plain dialog.
+  const hasOwnRole = modal.hasAttribute('role')
+  const hasOwnLabelledBy = modal.hasAttribute('aria-labelledby')
+  if (!hasOwnRole) modal.setAttribute('role', 'dialog')
   modal.setAttribute('aria-modal', 'true')
   if (!modal.hasAttribute('tabindex')) modal.tabIndex = -1
 
   const title = modal.querySelector<HTMLElement>('h2')
-  if (title) {
+  if (title && !hasOwnLabelledBy) {
     if (!title.id) title.id = 'finance-dialog-title'
     modal.setAttribute('aria-labelledby', title.id)
   }

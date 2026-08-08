@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Plus, Undo2 } from 'lucide-react'
+import { AccountPage } from './AccountPage'
 import { AiPanel, type AiPanelAcceptanceMode } from './AiPanel'
 import type { AiSuggestion } from './ai'
+import type { AuthUser } from './AuthGate'
 import { learnBehavior } from './behavior'
 import { ConnectionsPanel } from './ConnectionsPanel'
 import type { ConnectionsAcceptanceMode } from './features/connections/connectionsAcceptanceFixtures'
-import { DataTools } from './DataTools'
+import { DataTools, type DataToolsAcceptanceMode } from './DataTools'
 import { accountsAcceptanceState, initialState, planningAcceptanceState } from './data'
 import { FinanceAssistant, type AssistantAcceptanceMode } from './FinanceAssistant'
 import { ReceiptReview, type ReceiptAcceptanceMode } from './ReceiptReview'
@@ -14,6 +16,7 @@ import { TransactionsPage } from './TransactionsPage'
 import { Dashboard } from './features/dashboard/Dashboard'
 import { AccountsPage } from './features/accounts/AccountsPage'
 import { RecurringPaymentsPage } from './features/recurring/RecurringPaymentsPage'
+import { SubscriptionsPage, type SubscriptionsAcceptanceMode } from './features/subscriptions/SubscriptionsPage'
 import { loadState, resetStoredState, saveState } from './storage'
 import { addTransactionToState, deleteTransactionFromState, updateTransactionInState } from './transactionState'
 import type { AppState, Transaction, TransactionType } from './types'
@@ -21,16 +24,19 @@ import { validateTransactionInput } from './validation'
 import { ApplicationShell } from './app/ApplicationShell'
 import type { DestinationId } from './app/navigation'
 
-interface AppProps { userId: string; userName?: string; onLockVault?: () => void }
+interface AppProps { userId: string; userName?: string; user: AuthUser; onLockVault?: () => void; onLogout: () => Promise<void> }
 
 const CONNECTIONS_ACCEPTANCE_MODES: ConnectionsAcceptanceMode[] = ['empty', 'populated', 'institution-selector', 'institution-search', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'checking', 'sync-selection', 'attention', 'manual', 'statement-preview']
 const AI_ACCEPTANCE_MODES: AiPanelAcceptanceMode[] = ['ready', 'progress', 'results', 'anomaly', 'applied', 'error', 'empty']
 const ASSISTANT_ACCEPTANCE_MODES: AssistantAcceptanceMode[] = ['hosted-consent', 'hosted-running', 'success', 'hosted-fallback', 'local-selected', 'local-running']
 const RECEIPT_ACCEPTANCE_MODES: ReceiptAcceptanceMode[] = ['selected', 'running', 'sufficient', 'insufficient', 'receipt-error']
+const DATA_ACCEPTANCE_MODES: DataToolsAcceptanceMode[] = ['overview', 'vault-password', 'create-backup', 'restore-backup', 'restore-failure', 'reset', 'reset-complete', 'csv-warning', 'delete-account', 'delete-account-final', 'delete-failure', 'cloud-sync', 'sync-offline', 'sync-error']
+const SUBSCRIPTIONS_ACCEPTANCE_MODES: SubscriptionsAcceptanceMode[] = ['intro', 'preflight', 'connected', 'syncing', 'no-subscriptions', 'unavailable', 'subscription-sync-error', 'manage']
 
-function App({ userId, userName, onLockVault }: AppProps) {
+function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
   const [state, setState] = useState<AppState>(() => loadState())
-  const [tab, setTab] = useState<DestinationId>('dashboard')
+  const [tab, setTab] = useState<DestinationId>(() =>
+    typeof window !== 'undefined' && window.location.search.includes('provider=google-subscriptions') ? 'subscriptions' : 'dashboard')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<Transaction | null>(null)
   const [transactionType, setTransactionType] = useState<TransactionType>('expense')
@@ -43,6 +49,8 @@ function App({ userId, userName, onLockVault }: AppProps) {
   const [aiAcceptanceMode, setAiAcceptanceMode] = useState<AiPanelAcceptanceMode | null>(null)
   const [assistantAcceptanceMode, setAssistantAcceptanceMode] = useState<AssistantAcceptanceMode | null>(null)
   const [receiptAcceptanceMode, setReceiptAcceptanceMode] = useState<ReceiptAcceptanceMode | null>(null)
+  const [dataAcceptanceMode, setDataAcceptanceMode] = useState<DataToolsAcceptanceMode | null>(null)
+  const [subscriptionsAcceptanceMode, setSubscriptionsAcceptanceMode] = useState<SubscriptionsAcceptanceMode | null>(null)
 
   useEffect(() => saveState(state), [state])
   useEffect(() => {
@@ -55,8 +63,16 @@ function App({ userId, userName, onLockVault }: AppProps) {
       if (AI_ACCEPTANCE_MODES.includes(mode as AiPanelAcceptanceMode)) setAiAcceptanceMode(mode as AiPanelAcceptanceMode)
       if (ASSISTANT_ACCEPTANCE_MODES.includes(mode as AssistantAcceptanceMode)) setAssistantAcceptanceMode(mode as AssistantAcceptanceMode)
       if (RECEIPT_ACCEPTANCE_MODES.includes(mode as ReceiptAcceptanceMode)) setReceiptAcceptanceMode(mode as ReceiptAcceptanceMode)
+      if (DATA_ACCEPTANCE_MODES.includes(mode as DataToolsAcceptanceMode)) setDataAcceptanceMode(mode as DataToolsAcceptanceMode)
+      if (SUBSCRIPTIONS_ACCEPTANCE_MODES.includes(mode as SubscriptionsAcceptanceMode)) setSubscriptionsAcceptanceMode(mode as SubscriptionsAcceptanceMode)
     }
     return () => { delete target.__financePlannerAcceptanceState }
+  }, [])
+  useEffect(() => {
+    if (!window.location.search.includes('provider=google-subscriptions')) return
+    const cleanUrl = new URL(window.location.href)
+    for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'connected']) cleanUrl.searchParams.delete(key)
+    window.history.replaceState({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`)
   }, [])
   useEffect(() => {
     if (!dialogOpen) return
@@ -164,10 +180,12 @@ function App({ userId, userName, onLockVault }: AppProps) {
     goals: 'Sparziele',
     recurring: 'Wiederkehrende Zahlungen',
     connections: 'Banken & PayPal',
+    subscriptions: 'Subscriptions',
     ai: 'Finance Intelligence',
     assistant: 'Finance Assistant',
     receipt: 'Receipt Review',
-    data: 'Daten & Backup',
+    data: 'Data and Backup',
+    account: 'Account',
   }
 
   const navigate = (destination: DestinationId) => {
@@ -202,7 +220,9 @@ function App({ userId, userName, onLockVault }: AppProps) {
       {tab === 'ai' && <AiPanel key={aiAcceptanceMode ?? 'live'} transactions={aiAcceptanceMode === 'empty' ? [] : state.transactions} onApply={applyAiSuggestion} acceptanceMode={aiAcceptanceMode ?? undefined}/>}
       {tab === 'assistant' && <FinanceAssistant key={assistantAcceptanceMode ?? 'live'} state={state} budgetAcceptanceMode={planningAcceptanceMode === 'budget-result' ? 'result' : planningAcceptanceMode === 'budget-consent' ? 'consent' : undefined} acceptanceMode={assistantAcceptanceMode ?? undefined}/>}
       {tab === 'receipt' && <ReceiptReview key={receiptAcceptanceMode ?? 'live'} acceptanceMode={receiptAcceptanceMode ?? undefined}/>}
-      {tab === 'data' && <DataTools userId={userId} state={state} onRestore={setState} onReset={resetAll}/>} 
+      {tab === 'data' && <DataTools key={dataAcceptanceMode ?? 'live'} userId={userId} state={state} onRestore={setState} onReset={resetAll} acceptanceMode={dataAcceptanceMode ?? undefined}/>}
+      {tab === 'account' && <AccountPage user={user} onLogout={onLogout} onNavigateToData={() => navigate('data')}/>}
+      {tab === 'subscriptions' && <SubscriptionsPage key={subscriptionsAcceptanceMode ?? 'live'} state={state} onApply={setState} acceptanceMode={subscriptionsAcceptanceMode ?? undefined}/>}
     {deletedTransaction && <div className="undo-toast" role="status">
       <span>“{deletedTransaction.description}” was deleted.</span>
       <button type="button" onClick={undoDelete}><Undo2 size={16}/> Undo</button>

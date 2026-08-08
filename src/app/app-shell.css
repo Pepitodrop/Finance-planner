@@ -335,7 +335,31 @@
 
   .app-more-sheet__destinations {
     display: grid;
-    gap: var(--fp-space-2);
+    /* ai.css's legacy ".ai-results" mobile breakpoint sets a bare `nav {
+       grid-template-columns: repeat(5, 1fr) }` for the old bottom nav --
+       this <nav> (the grouped More sheet, a real destination list, not
+       that 5-item bar) inherits it too since nothing here ever overrode
+       the property, splitting every group into a cramped multi-column row
+       and truncating labels like "Connections" to "Conn". Found via a
+       real screenshot review, not caught by any automated overflow check
+       (the truncation happens via ellipsis, not layout overflow). */
+    grid-template-columns: 1fr;
+    gap: var(--fp-space-4);
+  }
+
+  .app-more-sheet__group {
+    display: grid;
+    gap: var(--fp-space-1);
+  }
+
+  .app-more-sheet__group-label {
+    margin: 0;
+    padding: 0 var(--fp-space-3) var(--fp-space-1);
+    color: var(--fp-color-text-muted);
+    font-size: 0.6875rem;
+    font-weight: var(--fp-font-weight-semibold);
+    letter-spacing: .08em;
+    text-transform: uppercase;
   }
 
   .app-more-sheet__button {

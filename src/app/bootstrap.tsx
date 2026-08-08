@@ -39,12 +39,16 @@ import '../reference-dashboard-fidelity.css'
 import '../remaining-pages-redesign.css'
 import '../reference-page-compositions.css'
 import '../glossy-finance.css'
+import '../account.css'
 import './app-shell.css'
+import './confirmation-dialog.css'
+import '../dataTools/dataTools.css'
 import '../features/dashboard/dashboard.css'
 import '../features/transactions/transactions.css'
 import '../features/accounts/accounts.css'
 import '../features/goals/goals.css'
 import '../features/recurring/recurring.css'
+import '../features/subscriptions/subscriptions.css'
 import '../features/planning/planning.css'
 import '../runtime-surfaces/runtime-surfaces.css'
 
@@ -62,7 +66,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <MobileConnectivityStatus />
         <MobileEnhancements />
         <MobileExperience />
-        <AuthGate>{(user) => <VaultGate key={user.id} userId={user.id}>{(lock) => <><App userId={user.id} userName={user.name} onLockVault={lock}/><CloudSyncStatus /><AutomaticTransactionAnalysis /></>}</VaultGate>}</AuthGate>
+        <AuthGate>{(user, { logout }) => <VaultGate key={user.id} userId={user.id}>{(lock) => <><App userId={user.id} userName={user.name} user={user} onLockVault={lock} onLogout={logout}/><CloudSyncStatus /><AutomaticTransactionAnalysis /></>}</VaultGate>}</AuthGate>
         </RuntimeSurfaceCoordinator>
       </>}
     </ErrorBoundary>

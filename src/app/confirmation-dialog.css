@@ -1,0 +1,88 @@
+/* Step 13: shared confirmation dialog, replacing window.confirm() across
+   CSV export, reset financial data, account deletion, and disconnect flows.
+   Reuses .modal/.modal-backdrop for chrome; severity only changes the icon
+   tint and left border, matching the app's restrained-danger convention
+   (see .danger-action in production-readiness.css) without recreating it. */
+
+.confirmation-dialog {
+  border-left-width: 3px;
+}
+
+.confirmation-dialog h2 {
+  margin: var(--fp-space-3) 0 0;
+  font-size: var(--fp-font-size-section-title);
+}
+
+.confirmation-dialog__icon {
+  display: grid;
+  width: var(--fp-control-height);
+  height: var(--fp-control-height);
+  place-items: center;
+  border-radius: var(--fp-radius-control);
+  background: var(--fp-color-surface-interactive);
+}
+
+.confirmation-dialog__body {
+  margin-top: var(--fp-space-2);
+  color: var(--fp-color-text-secondary);
+  line-height: var(--fp-line-height-body);
+}
+
+.confirmation-dialog__body p {
+  margin: 0 0 var(--fp-space-3);
+}
+
+.confirmation-dialog__body p:last-child {
+  margin-bottom: 0;
+}
+
+.confirmation-dialog--info {
+  border-left-color: var(--fp-color-accent);
+}
+
+.confirmation-dialog--info .confirmation-dialog__icon {
+  color: var(--fp-color-accent);
+}
+
+.confirmation-dialog--warning {
+  border-left-color: var(--fp-color-warning);
+}
+
+.confirmation-dialog--warning .confirmation-dialog__icon {
+  color: var(--fp-color-warning);
+}
+
+.confirmation-dialog--danger {
+  border-left-color: #ff6b74;
+}
+
+.confirmation-dialog--danger .confirmation-dialog__icon {
+  color: #ff6b74;
+}
+
+.confirmation-dialog__confirm--warning {
+  border: 1px solid var(--fp-color-warning);
+  border-radius: var(--fp-radius-control);
+  padding: 0.75rem 1rem;
+  color: var(--fp-color-warning);
+  background: color-mix(in srgb, var(--fp-color-warning) 14%, transparent);
+  font-weight: var(--fp-font-weight-bold);
+}
+
+.confirmation-dialog__confirm--warning:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fp-color-warning) 24%, transparent);
+}
+
+.confirmation-dialog__confirm--warning:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.confirmation-dialog__footer {
+  margin-top: var(--fp-space-3);
+  text-align: center;
+}
+
+@media (forced-colors: active) {
+  .confirmation-dialog { border: 1px solid CanvasText; }
+}
