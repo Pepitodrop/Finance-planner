@@ -17,10 +17,16 @@ function initials(description: string): string {
 export function MerchantLogo({ description, type }: MerchantLogoProps) {
   const [failed, setFailed] = useState(false)
   const logo = resolveMerchantLogo(description)
+  // Acceptance-fixture runs assert that the app never contacts a real
+  // external provider (see the "provider-boundary proof" in the Data &
+  // Privacy acceptance script), so the branded <img> request to
+  // cdn.simpleicons.org must never fire there -- render the same fallback
+  // used when a real logo request fails.
+  const fixturesActive = import.meta.env.VITE_ACCEPTANCE_FIXTURES === 'true'
 
   useEffect(() => setFailed(false), [description])
 
-  if (logo && !failed) {
+  if (logo && !failed && !fixturesActive) {
     return (
       <span className="transaction-merchant-logo branded" title={logo.label} aria-label={`${logo.label} Logo`}>
         <img
