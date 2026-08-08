@@ -1,0 +1,65 @@
+/* ACCOUNT-01/ACCOUNT-DESKTOP-01: session identity and sign-out. Stays
+   single-column and compact at every width per spec -- this is not a
+   generic multi-column "account settings" page. */
+
+.account-page {
+  display: grid;
+  gap: var(--fp-space-4);
+  max-width: 640px;
+}
+
+.account-identity-row {
+  display: flex;
+  align-items: center;
+  gap: var(--fp-space-3);
+  margin-top: var(--fp-space-2);
+}
+
+.account-avatar {
+  display: grid;
+  flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 50%;
+  color: var(--fp-color-accent);
+  background: var(--fp-color-surface-interactive);
+  font-weight: var(--fp-font-weight-bold);
+}
+
+.account-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.account-name {
+  margin: 0;
+  color: var(--fp-color-text-primary);
+  font-weight: var(--fp-font-weight-bold);
+  font-size: var(--fp-font-size-section-title);
+}
+
+.account-email {
+  margin: 2px 0 0;
+}
+
+.account-note {
+  margin: var(--fp-space-3) 0 0;
+  font-size: var(--fp-font-size-metadata);
+}
+
+.account-security-panel > p:not(.eyebrow) {
+  margin: var(--fp-space-2) 0 var(--fp-space-2);
+  color: var(--fp-color-text-secondary);
+}
+
+.account-signout-panel h2 {
+  margin: var(--fp-space-2) 0 var(--fp-space-1);
+  font-size: var(--fp-font-size-section-title);
+}
+
+.account-signout-panel button {
+  margin-top: var(--fp-space-3);
+}

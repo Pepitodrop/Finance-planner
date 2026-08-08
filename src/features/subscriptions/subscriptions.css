@@ -1,0 +1,319 @@
+/* SUB-01..07: Provider Subscriptions. Deliberately its own visual language
+   (source badge, status pills, callout lists) so it never reads as the same
+   surface as transaction-derived Recurring Payments -- the two are
+   different data sources and must look it. */
+
+.subscriptions-page {
+  display: grid;
+  gap: var(--fp-space-5);
+}
+
+.subscriptions-loading {
+  display: grid;
+  justify-items: center;
+  gap: var(--fp-space-3);
+  padding: var(--fp-space-8) 0;
+  color: var(--fp-color-text-secondary);
+}
+
+/* SUB-01 / SUB-02: centered intro and preflight panels */
+.subscriptions-intro,
+.subscriptions-preflight {
+  display: grid;
+  justify-items: center;
+  gap: var(--fp-space-4);
+  max-width: 32rem;
+  margin: var(--fp-space-6) auto 0;
+  text-align: center;
+}
+
+.subscriptions-intro-icon,
+.subscriptions-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: var(--fp-radius-icon);
+  color: var(--fp-color-accent);
+  background: var(--fp-color-accent-muted);
+  border: 1px solid color-mix(in srgb, var(--fp-color-accent) 35%, transparent);
+}
+
+.subscriptions-intro h2,
+.subscriptions-preflight h2 {
+  margin: 0;
+}
+
+.subscriptions-intro > p,
+.subscriptions-preflight > p {
+  margin: 0;
+  color: var(--fp-color-text-secondary);
+  line-height: var(--fp-line-height-body);
+}
+
+.subscriptions-scope-callout {
+  display: grid;
+  gap: var(--fp-space-3);
+  width: 100%;
+  padding: var(--fp-space-5);
+  border: var(--fp-border);
+  border-radius: var(--fp-radius-panel);
+  text-align: left;
+}
+
+.subscriptions-scope-callout p {
+  margin: 0;
+  font-weight: var(--fp-font-weight-semibold, 600);
+}
+
+.subscriptions-scope-callout ul {
+  display: grid;
+  gap: var(--fp-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.subscriptions-scope-callout li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--fp-space-2);
+  color: var(--fp-color-text-secondary);
+  line-height: var(--fp-line-height-body);
+}
+
+.subscriptions-scope-callout li svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.subscriptions-scope-callout .subscriptions-does svg { color: var(--fp-color-income); }
+.subscriptions-scope-callout .subscriptions-does-not svg { color: var(--fp-color-text-muted); }
+
+.subscriptions-preflight-lines {
+  display: grid;
+  gap: var(--fp-space-2);
+  text-align: left;
+}
+
+.subscriptions-preflight-lines p {
+  margin: 0;
+  color: var(--fp-color-text-secondary);
+  line-height: var(--fp-line-height-body);
+}
+
+.subscriptions-preflight-actions {
+  display: flex;
+  gap: var(--fp-space-3);
+  width: 100%;
+}
+
+.subscriptions-preflight-actions button {
+  flex: 1;
+}
+
+/* SUB-03 / SUB-04 / SUB-05 / SUB-06: status header + list */
+.subscriptions-status-row {
+  display: flex;
+  align-items: center;
+  gap: var(--fp-space-3);
+  padding: var(--fp-space-4) var(--fp-panel-padding-wide, var(--fp-space-5));
+}
+
+.subscriptions-status-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--fp-color-income);
+}
+
+.subscriptions-status-text {
+  display: grid;
+  gap: 2px;
+}
+
+.subscriptions-status-text > strong {
+  color: var(--fp-color-text-primary);
+}
+
+.subscriptions-status-text > span {
+  color: var(--fp-color-text-muted);
+  font-size: var(--fp-font-size-metadata);
+}
+
+.subscriptions-sync-button {
+  margin-left: auto;
+}
+
+.subscriptions-list {
+  display: grid;
+  gap: var(--fp-space-3);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.subscription-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--fp-space-2) var(--fp-space-3);
+  padding: var(--fp-panel-padding-wide, var(--fp-space-5));
+}
+
+.subscription-row-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--fp-space-2);
+  min-width: 0;
+}
+
+.subscription-row-name strong {
+  overflow: hidden;
+  color: var(--fp-color-text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subscription-source-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  padding: 3px 9px;
+  color: var(--fp-color-accent);
+  background: var(--fp-color-accent-muted);
+  font-size: 0.6875rem;
+  font-weight: var(--fp-font-weight-semibold, 600);
+  white-space: nowrap;
+}
+
+.subscription-row-amount {
+  grid-column: 1 / 2;
+  color: var(--fp-color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.subscription-row-status {
+  grid-row: 1;
+  grid-column: 2;
+  justify-self: end;
+}
+
+.subscription-row-next-charge {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--fp-color-text-muted);
+  font-size: var(--fp-font-size-metadata);
+}
+
+.pill--active { color: var(--fp-color-income); background: var(--fp-color-income-muted); }
+.pill--paused, .pill--unknown { color: var(--fp-color-text-muted); background: var(--fp-color-surface-interactive); }
+.pill--cancelled, .pill--expired { color: var(--fp-color-expense); background: var(--fp-color-expense-muted); }
+
+.subscriptions-list-footer {
+  margin: 0;
+  color: var(--fp-color-text-muted);
+  font-size: var(--fp-font-size-metadata);
+}
+
+.subscriptions-manage-link {
+  justify-self: start;
+  border: 0;
+  padding: 0;
+  color: var(--fp-color-accent);
+  background: transparent;
+  font-weight: var(--fp-font-weight-semibold, 600);
+  min-height: var(--fp-touch-target);
+}
+
+/* SUB-05: empty-but-connected */
+.subscriptions-empty {
+  display: grid;
+  justify-items: center;
+  gap: var(--fp-space-3);
+  padding: var(--fp-space-8) var(--fp-space-5);
+  text-align: center;
+}
+
+.subscriptions-empty h2 { margin: 0; }
+.subscriptions-empty p { margin: 0; max-width: 30rem; color: var(--fp-color-text-secondary); line-height: var(--fp-line-height-body); }
+
+/* SUB-06: unavailable / sync error */
+.subscriptions-alert {
+  display: grid;
+  gap: var(--fp-space-2);
+  padding: var(--fp-panel-padding-wide, var(--fp-space-5));
+  border-left: 3px solid var(--fp-color-warning);
+}
+
+.subscriptions-alert-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--fp-space-2);
+  margin: 0;
+  color: var(--fp-color-text-primary);
+}
+
+.subscriptions-alert-heading svg { color: var(--fp-color-warning); }
+.subscriptions-alert p { margin: 0; color: var(--fp-color-text-secondary); line-height: var(--fp-line-height-body); }
+
+/* SUB-07: manage/disconnect */
+.subscriptions-manage-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--fp-space-3);
+  padding: var(--fp-space-4) var(--fp-panel-padding-wide, var(--fp-space-5));
+  color: var(--fp-color-text-secondary);
+}
+
+.subscriptions-manage-options {
+  display: grid;
+  gap: var(--fp-space-4);
+}
+
+.subscriptions-manage-option {
+  display: grid;
+  gap: var(--fp-space-2);
+  padding: var(--fp-panel-padding-wide, var(--fp-space-5));
+}
+
+.subscriptions-manage-option--remove {
+  border-left: 3px solid var(--fp-color-warning);
+}
+
+.subscriptions-manage-option h3 {
+  margin: 0;
+}
+
+.subscriptions-manage-option p {
+  margin: 0;
+  color: var(--fp-color-text-secondary);
+  line-height: var(--fp-line-height-body);
+}
+
+.subscriptions-manage-option button {
+  justify-self: start;
+  margin-top: var(--fp-space-1);
+}
+
+.subscriptions-manage-option--remove .confirmation-dialog__confirm--warning,
+.subscriptions-manage-option--remove > button {
+  border: 1px solid var(--fp-color-warning);
+  color: var(--fp-color-warning);
+  background: color-mix(in srgb, var(--fp-color-warning) 14%, transparent);
+}
+
+@media (min-width: 900px) {
+  .subscriptions-manage-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .subscription-row { grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; }
+  .subscription-row-amount { grid-column: auto; justify-self: end; }
+  .subscription-row-next-charge { grid-column: auto; justify-self: end; }
+}
+
+@media (forced-colors: active) {
+  .subscriptions-alert { border-left: 1px solid CanvasText; }
+  .subscriptions-manage-option--remove { border-left: 1px solid CanvasText; }
+}

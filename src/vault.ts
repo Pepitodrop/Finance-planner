@@ -146,7 +146,7 @@ function queueSessionPersistence(): Promise<void> {
     const raw = localStorage.getItem(storageKey)
     if (!raw) throw new Error('The account-bound encrypted vault is missing.')
     const current = parseEnvelope(raw)
-    if (current.version !== 2 || current.ownerId !== ownerId) throw new Error('Der lokale Vault ist nicht korrekt an dieses Konto gebunden.')
+    if (current.version !== 2 || current.ownerId !== ownerId) throw new Error('This local vault is not correctly bound to this account.')
     const envelope = await encryptPayload(payload, key, base64ToBytes(current.salt), current.iterations, ownerId)
     localStorage.setItem(storageKey, JSON.stringify(envelope))
   })
@@ -237,7 +237,7 @@ export async function changeVaultPassword(currentPassword: string, newPassword: 
   const raw = localStorage.getItem(storageKey)
   if (!raw) throw new Error('The encrypted vault is missing.')
   const current = parseEnvelope(raw)
-  if (current.version !== 2 || current.ownerId !== sessionOwnerId) throw new Error('Der lokale Vault ist nicht korrekt an dieses Konto gebunden.')
+  if (current.version !== 2 || current.ownerId !== sessionOwnerId) throw new Error('This local vault is not correctly bound to this account.')
   const verificationKey = await deriveKey(currentPassword, base64ToBytes(current.salt), current.iterations)
   try {
     await decryptEnvelope(current, verificationKey, sessionOwnerId)

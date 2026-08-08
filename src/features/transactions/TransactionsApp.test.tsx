@@ -1,15 +1,17 @@
 import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../../App'
+import type { AuthUser } from '../../AuthGate'
 import { FrontendExperience } from '../../FrontendExperience'
 import { initialState } from '../../data'
 import { configureAuthenticatedStorage, setUnlockedState } from '../../storage'
 
 const USER_ID = 'transactions-integration-user'
+const USER: AuthUser = { id: USER_ID, email: 'alex@finance-planner.test', name: 'Alex', passkeyCount: 0 }
 
 function renderApp() {
-  return render(<><FrontendExperience/><App userId={USER_ID} userName="Alex"/></>)
+  return render(<><FrontendExperience/><App userId={USER_ID} userName="Alex" user={USER} onLogout={vi.fn()}/></>)
 }
 
 describe('Transactions App integration', () => {

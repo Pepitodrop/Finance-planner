@@ -18,6 +18,14 @@ export interface GoogleSubscriptionConnection {
   unavailableReason?: string
 }
 
+export interface GoogleSubscriptionDisconnectResult {
+  disconnected: boolean
+  revoked: boolean
+  deletedImportedData: boolean
+  deletedSubscriptionCount: number
+  cloudStateUpdated: boolean
+}
+
 function normalizeText(value: string): string {
   return value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, ' ').trim().toLowerCase()
 }
@@ -49,7 +57,7 @@ export function normalizeGoogleSubscriptions(records: GoogleSubscriptionRecord[]
       id: `google:${record.externalId}`,
       externalId: record.externalId,
       provider: record.provider.trim() || 'Google',
-      product: record.product.trim() || 'Unbekanntes Google-Abonnement',
+      product: record.product.trim() || 'Unknown Google subscription',
       amountCents: record.amountCents,
       currency: 'EUR',
       billingInterval: record.billingInterval,
@@ -72,13 +80,23 @@ export function reconcileGoogleSubscriptions(state: AppState, imported: Subscrip
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(url, { ...init, credentials: 'include', headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers } })
   const payload = await response.json().catch(() => ({})) as T & { error?: { message?: string } }
-  if (!response.ok) throw new Error(payload.error?.message || `Google-Abonnement-Anfrage fehlgeschlagen (${response.status}).`)
+  if (!response.ok) throw new Error(payload.error?.message || `Google subscriptions request failed (${response.status}).`)
   return payload
 }
 
+// Strips OAuth-specific query params from a candidate return URL before it's
+// sent as redirectUri -- prevents a stale code/state/error from a previous
+// attempt leaking into a fresh connection request if the user retries from
+// the same page without a full navigation in between.
+function cleanReturnUrl(returnUrl: string): string {
+  const url = new URL(returnUrl)
+  for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider']) url.searchParams.delete(key)
+  return url.toString()
+}
+
 export async function startGoogleSubscriptionConnection(returnUrl = window.location.href): Promise<void> {
-  const result = await request<{ redirectUrl?: string }>('/api/subscriptions/google/start', { method: 'POST', body: JSON.stringify({ redirectUri: returnUrl }) })
-  if (!result.redirectUrl?.startsWith('https://')) throw new Error('Google lieferte keine sichere Weiterleitungsadresse.')
+  const result = await request<{ redirectUrl?: string }>('/api/subscriptions/google/start', { method: 'POST', body: JSON.stringify({ redirectUri: cleanReturnUrl(returnUrl) }) })
+  if (!result.redirectUrl?.startsWith('https://accounts.google.com/')) throw new Error('Google did not return a valid authorization address.')
   window.location.assign(result.redirectUrl)
 }
 
@@ -86,6 +104,6 @@ export async function syncGoogleSubscriptions(): Promise<GoogleSubscriptionConne
   return request<GoogleSubscriptionConnection>('/api/subscriptions/google/sync', { method: 'POST' })
 }
 
-export async function disconnectGoogleSubscriptions(deleteImportedData = false): Promise<void> {
-  await request<{ disconnected: boolean }>('/api/subscriptions/google', { method: 'DELETE', body: JSON.stringify({ deleteImportedData }) })
+export async function disconnectGoogleSubscriptions(deleteImportedData = false): Promise<GoogleSubscriptionDisconnectResult> {
+  return request<GoogleSubscriptionDisconnectResult>('/api/subscriptions/google', { method: 'DELETE', body: JSON.stringify({ deleteImportedData }) })
 }

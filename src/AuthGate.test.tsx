@@ -163,3 +163,37 @@ describe('AuthGate: passkey recommendation (AUTH-05)', () => {
     expect(localStorage.getItem('finance-planner-passkey-prompt-dismissed-v1')).toBe('true')
   })
 })
+
+describe('AuthGate: sign-out (ACCOUNT-01)', () => {
+  it('exposes a logout action that clears the session cookie and returns to the sign-in screen', async () => {
+    const fetchMock = vi.spyOn(window, 'fetch').mockImplementation((input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/auth/logout')) return jsonResponse({ authenticated: false })
+      return jsonResponse({ authenticated: true, user: AUTHENTICATED_USER })
+    })
+
+    render(<AuthGate>{(user, { logout }) => <button onClick={() => void logout()}>Sign out as {user.name}</button>}</AuthGate>)
+    await waitFor(() => screen.getByRole('button', { name: /sign out as demo user/i }))
+    fireEvent.click(screen.getByRole('button', { name: /sign out as demo user/i }))
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: /sign in to finance planner/i })).toBeInTheDocument())
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/logout', expect.objectContaining({ method: 'POST' }))
+  })
+
+  it('leaves the session untouched when the logout request fails over the network', async () => {
+    vi.spyOn(window, 'fetch').mockImplementation((input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/auth/logout')) return Promise.reject(new Error('Network error'))
+      return jsonResponse({ authenticated: true, user: AUTHENTICATED_USER })
+    })
+
+    let rejected = false
+    render(<AuthGate>{(user, { logout }) => <button onClick={() => { void logout().catch(() => { rejected = true }) }}>Sign out as {user.name}</button>}</AuthGate>)
+    await waitFor(() => screen.getByRole('button', { name: /sign out as demo user/i }))
+    fireEvent.click(screen.getByRole('button', { name: /sign out as demo user/i }))
+
+    await waitFor(() => expect(rejected).toBe(true))
+    expect(screen.getByRole('button', { name: /sign out as demo user/i })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: /sign in to finance planner/i })).not.toBeInTheDocument()
+  })
+})

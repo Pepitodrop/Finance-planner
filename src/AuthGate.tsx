@@ -5,7 +5,8 @@ import { RUNTIME_SURFACE_PRIORITY } from './runtime-surfaces/runtimeSurfacePolic
 import { runtimeSurfaceRegistration, useRuntimeSurface } from './runtime-surfaces/runtimeSurfaceContext'
 
 export interface AuthUser { id: string; email: string; name: string; picture?: string; passkeyCount: number }
-interface AuthGateProps { children: ReactNode | ((user: AuthUser) => ReactNode) }
+export interface AuthActions { logout: () => Promise<void> }
+interface AuthGateProps { children: ReactNode | ((user: AuthUser, actions: AuthActions) => ReactNode) }
 const PASSKEY_PROMPT_KEY = 'finance-planner-passkey-prompt-dismissed-v1'
 
 /**
@@ -131,6 +132,17 @@ export function AuthGate({ children }: AuthGateProps) {
 
   const dismissPrompt = () => { localStorage.setItem(PASSKEY_PROMPT_KEY, 'true'); setPromptDismissed(true) }
 
+  // Clears the session cookie for this browser only -- the server does not
+  // track or revoke sessions on other devices for this endpoint, so copy
+  // shown to the user must never claim "everywhere" or "all devices". Lets
+  // network failures propagate so the caller can show an inline error and
+  // retry, rather than clearing local state on a request that never reached
+  // the server.
+  const logout = useCallback(async () => {
+    await api('/api/auth/logout', { method: 'POST' })
+    setUser(null)
+  }, [])
+
   if (loading || acceptanceMode === 'loading') return (
     <main className="auth-screen" lang="en">
       <section className="auth-loading" role="status" aria-live="polite">
@@ -199,7 +211,7 @@ export function AuthGate({ children }: AuthGateProps) {
     </main>
   )
 
-  const content = typeof children === 'function' ? children(user) : children
+  const content = typeof children === 'function' ? children(user, { logout }) : children
   return <>
     {showPasskeyRecommendation && (
       <div className="passkey-enrolment runtime-surface runtime-surface--prompt runtime-optional-surface" role="status" lang="en">

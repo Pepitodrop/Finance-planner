@@ -4,6 +4,7 @@ import {
   DESKTOP_DESTINATIONS,
   MOBILE_PRIMARY_DESTINATIONS,
   MORE_DESTINATIONS,
+  MORE_DESTINATION_GROUPS,
   type DestinationId,
   type NavigationDestination,
 } from './navigation'
@@ -196,13 +197,16 @@ export function ApplicationShell({ activeDestination, onNavigate, children, over
           </button>
         </div>
         <nav aria-label="More destinations" className="app-more-sheet__destinations">
-          {MORE_DESTINATIONS.map((destination) => <DestinationButton
-            key={destination.id}
-            destination={destination}
-            activeDestination={activeDestination}
-            onNavigate={navigateFromMore}
-            className="app-more-sheet__button"
-          />)}
+          {MORE_DESTINATION_GROUPS.map((group) => <div className="app-more-sheet__group" key={group.id}>
+            <p className="app-more-sheet__group-label">{group.label}</p>
+            {group.destinations.map((destination) => <DestinationButton
+              key={destination.id}
+              destination={destination}
+              activeDestination={activeDestination}
+              onNavigate={navigateFromMore}
+              className="app-more-sheet__button"
+            />)}
+          </div>)}
         </nav>
         {onLockVault && <button type="button" className="app-more-sheet__security" onClick={() => {
           closeMore(false)

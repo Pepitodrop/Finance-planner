@@ -19,7 +19,7 @@ describe('ApplicationShell navigation', () => {
   it('renders one desktop model and the staged mobile destinations', () => {
     render(<><MobileExperience/><TestShell /></>)
     const desktop = screen.getByRole('navigation', { name: 'Primary navigation' })
-    expect(within(desktop).getAllByRole('button')).toHaveLength(10)
+    expect(within(desktop).getAllByRole('button')).toHaveLength(12)
     expect(within(desktop).getByRole('button', { name: 'Dashboard' })).toHaveAttribute('aria-current', 'page')
 
     const mobile = screen.getByRole('navigation', { name: 'Mobile primary navigation' })
@@ -50,10 +50,15 @@ describe('ApplicationShell navigation', () => {
       'Close more destinations',
       'Recurring payments',
       'Bank and PayPal connections',
+      'Provider subscriptions',
       'Finance intelligence',
       'Finance assistant',
       'Receipt review',
       'Data and backup',
+      'Account and session',
+    ])
+    expect([...dialog.querySelectorAll('.app-more-sheet__group-label')].map((el) => el.textContent)).toEqual([
+      'Planning', 'Connections', 'Intelligence', 'Data & account',
     ])
     expect(document.querySelector('.app-shell__frame')).toHaveAttribute('inert')
     expect(within(dialog).getByRole('button', { name: 'Close more destinations' })).toHaveFocus()

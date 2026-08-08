@@ -62,7 +62,16 @@ test('rolls back a failed PostgreSQL deletion after sessions are revoked', async
   assert.equal(events.at(-1), 'RELEASE')
 })
 
-test('removes every supported connector in file-backed development mode', async () => {
+test('removes every supported connector in file-backed development mode, including google-subscriptions', async () => {
+  // Regression test for a real persistence-mode asymmetry: PostgreSQL mode
+  // deletes every connector_connections row for the user unconditionally
+  // (no provider filter), but file mode has to enumerate providers by name,
+  // and 'google-subscriptions' was missing from that list -- so a deleted
+  // user's stored Google-subscriptions connection survived account deletion
+  // in file-persistence mode even though it was correctly removed under
+  // PostgreSQL. This only concerns Finance Planner's own stored connection
+  // record; it says nothing about provider-side (Google) token revocation,
+  // which is handled independently by the disconnect flow.
   const removed = []
   const result = await deleteAccountData({
     userId: 'local-user',
@@ -74,6 +83,7 @@ test('removes every supported connector in file-backed development mode', async 
     ['local-user', 'gocardless'],
     ['local-user', 'finapi'],
     ['local-user', 'paypal'],
+    ['local-user', 'google-subscriptions'],
   ])
   assert.equal(result.persistence, 'file')
 })
