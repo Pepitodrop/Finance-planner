@@ -19,6 +19,25 @@ describe('AiPanel', () => {
     expect(screen.queryByText('Analyzed')).not.toBeInTheDocument()
   })
 
+  it('acceptance: progress mode shows the progress screen, not the pre-analysis ready screen', () => {
+    // Regression: the progress fixture branch once set hasAnalyzed(false)
+    // (copy-pasted from the unrelated 'ready' branch), which satisfied the
+    // render function's earlier `if (!hasAnalyzed) return <ready>` check
+    // before its later `if (loading && progressIndex) return <progress>`
+    // check ever ran -- so this state silently rendered as the ready screen
+    // regardless of loading/progressIndex. Caught by Step 12C real-browser
+    // acceptance, not by any test, because no test exercised this mode.
+    render(<AiPanel transactions={transactions} onApply={vi.fn()} acceptanceMode="progress"/>)
+    expect(screen.getByText(/Analyzing 46 of 142/)).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: /transaction analysis progress/i })).toBeInTheDocument()
+    // The ready screen's CTA and transaction count are pre-analysis-only
+    // affordances; the progress screen must not show them alongside its
+    // own progress bar (both states share the same H1/intro panel shell,
+    // so that heading being present in both is correct, not a symptom).
+    expect(screen.queryByRole('button', { name: /analyze transactions/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/transactions ready to analyze/)).not.toBeInTheDocument()
+  })
+
   it('shows a guided empty state instead of meaningless zero metrics when there is no history', () => {
     const { container } = render(<AiPanel transactions={[]} onApply={vi.fn()}/>)
     expect(screen.getByText('Finance Intelligence needs transaction history')).toBeInTheDocument()

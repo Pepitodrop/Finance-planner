@@ -46,7 +46,13 @@ export function AiPanel({ transactions, onApply, acceptanceMode }: AiPanelProps)
     if (!acceptanceMode || acceptanceMode === 'empty') return
     if (acceptanceMode === 'ready') { setHasAnalyzed(false); setSuggestions({}); setError(''); return }
     if (acceptanceMode === 'error') { setHasAnalyzed(true); setError('The on-device model did not load or run correctly this time. Nothing was sent anywhere, and no changes were made to your transactions.'); return }
-    if (acceptanceMode === 'progress') { setHasAnalyzed(false); setLoading(true); setProgressIndex({ index: 46, total: 142, description: transactions[0]?.description ?? 'Rewe SAGT' }); return }
+    // hasAnalyzed must be true here, matching the real analyze() function
+    // (which sets it true the instant a run starts, not once it finishes):
+    // the render logic checks `!hasAnalyzed` for the pre-analysis "ready"
+    // screen before it checks `loading && progressIndex` for this progress
+    // screen, so leaving it false here would make the ready screen win
+    // regardless of loading/progressIndex.
+    if (acceptanceMode === 'progress') { setHasAnalyzed(true); setLoading(true); setProgressIndex({ index: 46, total: 142, description: transactions[0]?.description ?? 'Rewe SAGT' }); return }
     const next: Record<string, AiSuggestion> = {}
     transactions.forEach((transaction, index) => {
       if (acceptanceMode === 'anomaly' && index % 3 !== 0) return

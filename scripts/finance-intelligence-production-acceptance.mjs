@@ -274,15 +274,15 @@ async function captureState(client, sessionId, name, readyAttribute, { beforeEac
     await setViewport(client, sessionId, width, height)
     await ensureVaultUnlocked(client, sessionId)
     await resolveConflictIfPresent(client, sessionId)
-    // beforeEach (almost always: a fixture window.__financePlannerAcceptanceState
-    // call) has been observed to occasionally not take effect on the first
-    // attempt -- root cause not conclusively isolated (the acceptance-fixture
-    // hook is confirmed present and callable at these points; retrying the
-    // exact same call is what actually resolves it, which points to a one-
-    // time race rather than a permanently broken hook). Retry the
-    // beforeEach+waitFor pair a bounded number of times with a short
-    // per-attempt deadline before falling through to the full-deadline
-    // final attempt, whose failure is what actually surfaces to the caller.
+    // The finance-intelligence-progress investigation (multiple identical
+    // failures here, root-caused via the diagnostics above to a real
+    // AiPanel bug -- see the fix to its 'progress' fixture branch) turned
+    // out to be deterministic, not a timing race. This retry loop is kept
+    // regardless as general defensive infrastructure against genuine CDP/
+    // React-timing flakiness elsewhere in a 90-plus-capture run, matching
+    // this repo's established retry conventions -- it does not paper over
+    // a real failure, since a consistently-wrong render still exhausts all
+    // attempts and throws.
     let settled = false
     for (let attempt = 0; attempt < 3 && !settled; attempt += 1) {
       await beforeEach(width, height)
