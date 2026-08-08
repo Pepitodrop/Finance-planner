@@ -643,7 +643,15 @@ async function run() {
       const list = document.querySelector('.ai-result-list')
       const row = document.querySelector('.ai-result')
       if (!list || !row) return { checked: false }
-      return { checked: true, listWidth: Math.round(list.getBoundingClientRect().width), rowWidth: Math.round(row.getBoundingClientRect().width) }
+      const badge = row.querySelector('.ai-prediction .intel-badge')
+      const predictionColumn = row.querySelector('.ai-prediction')
+      return {
+        checked: true,
+        listWidth: Math.round(list.getBoundingClientRect().width),
+        rowWidth: Math.round(row.getBoundingClientRect().width),
+        predictionColumnWidth: predictionColumn ? Math.round(predictionColumn.getBoundingClientRect().width) : null,
+        badgeWidth: badge ? Math.round(badge.getBoundingClientRect().width) : null,
+      }
     })()`)
     if (report.interactions.resultRowFitsContainer.checked) {
       assert.ok(
