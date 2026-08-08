@@ -257,6 +257,12 @@ async function ensureVaultUnlocked(client, sessionId) {
   })()`)
   await clickButton(client, sessionId, 'Unlock')
   await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-dashboard-ready=true]"))', 'vault re-unlocked after unexpected lock')
+  // The unlock re-mounts App.tsx fresh; window.__financePlannerAcceptanceState
+  // is (re-)registered by a useEffect there, which runs after paint -- wait
+  // for it explicitly (authenticateFreshVault does the same after the
+  // original unlock) so a mode-set called immediately after this returns
+  // can't race a not-yet-registered hook.
+  await waitFor(client, sessionId, 'typeof window.__financePlannerAcceptanceState === "function"', 'acceptance fixture bridge re-registered after unlock')
   return true
 }
 
