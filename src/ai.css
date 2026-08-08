@@ -28,7 +28,7 @@
 .ai-results { max-width: none; overflow: hidden; }
 .ai-results-header { align-items: flex-end; gap: 18px; }
 .ai-filter { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--fp-color-text-muted); }
-.ai-filter button { min-height: var(--fp-touch-target); padding: 7px 12px; border: var(--fp-border); border-radius: 999px; color: var(--fp-color-text-secondary); background: var(--fp-color-surface-interactive); font-size: var(--fp-font-size-metadata); }
+.ai-filter button { min-height: var(--fp-touch-target); padding: 7px 12px; border: var(--fp-border); border-radius: 999px; color: var(--fp-color-text-secondary); background: var(--fp-color-surface-interactive); font-size: var(--fp-font-size-metadata); white-space: nowrap; }
 .ai-filter button.active { border-color: var(--fp-color-border-strong); color: #d9d0ff; background: var(--fp-color-accent-muted); }
 
 .ai-applied-banner { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; padding: 13px 14px; border: 1px solid rgb(85 217 145 / 30%); border-radius: var(--fp-radius-control); color: var(--fp-color-text-secondary); background: var(--fp-color-income-muted); font-size: var(--fp-font-size-metadata); line-height: 1.5; }
@@ -36,7 +36,16 @@
 .ai-applied-banner strong { display: block; color: var(--fp-color-text-primary); font-size: var(--fp-font-size-supporting); }
 
 .ai-result-list { display: grid; gap: 8px; }
-.ai-result { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(165px, .85fr) auto minmax(210px, 1.35fr) auto; align-items: center; gap: 14px; padding: 15px; border: var(--fp-border); border-radius: var(--fp-radius-panel); background: var(--fp-color-surface); }
+/* The scores column's 3rd track was a bare "auto", with no protection
+   against being squeezed by its minmax() neighbors when the row's total
+   minimums exceed available width. Combined with the site-wide
+   `body { overflow-wrap: anywhere }` safety net (design-foundation.css),
+   an over-squeezed column doesn't just wrap at word boundaries -- it
+   breaks mid-word, one character per line ("Re/cu/rri/ng/12/%"), found
+   via real-browser visual inspection of finance-intelligence-mixed.
+   130px comfortably fits "Unusual pattern" (the longest label) on one
+   line, with its percentage wrapping cleanly onto its own line at worst. */
+.ai-result { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(165px, .85fr) minmax(130px, auto) minmax(210px, 1.35fr) minmax(100px, auto); align-items: center; gap: 14px; padding: 15px; border: var(--fp-border); border-radius: var(--fp-radius-panel); background: var(--fp-color-surface); }
 .ai-result.review-required { border-color: rgb(230 183 90 / 40%); border-left-width: 3px; }
 .ai-result.unanalyzed { grid-template-columns: minmax(0, 1fr) auto; min-height: 64px; padding: 13px 15px; }
 .ai-result.unanalyzed .ai-waiting { justify-self: end; margin: 0; padding: 6px 10px; border: var(--fp-border); border-radius: 999px; color: var(--fp-color-text-muted); background: var(--fp-color-surface-interactive); white-space: nowrap; }
@@ -49,10 +58,10 @@
 .ai-scores .warning { color: var(--fp-color-warning); }
 .ai-explanation p { margin: 0; color: var(--fp-color-text-secondary); font-size: var(--fp-font-size-metadata); line-height: 1.5; }
 .ai-alternatives { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; color: var(--fp-color-text-muted); font-size: 0.6875rem; }
-.ai-alternatives span { padding: 3px 7px; border-radius: 999px; background: var(--fp-color-surface-interactive); }
+.ai-alternatives span { padding: 3px 7px; border-radius: 999px; background: var(--fp-color-surface-interactive); white-space: nowrap; }
 .ai-decision { display: grid; justify-items: end; gap: 8px; }
 .ai-result .secondary { min-height: 44px; padding: 8px 12px; font-size: var(--fp-font-size-metadata); white-space: nowrap; }
-.review-badge, .trusted-badge { padding: 4px 8px; border-radius: 999px; font-size: 0.625rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
+.review-badge, .trusted-badge { padding: 4px 8px; border-radius: 999px; font-size: 0.625rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
 .review-badge { color: var(--fp-color-warning); background: var(--fp-color-warning-muted); }
 .trusted-badge { color: var(--fp-color-text-secondary); background: var(--fp-color-surface-interactive); }
 .ai-empty { padding: 26px; text-align: center; color: var(--fp-color-text-muted); }

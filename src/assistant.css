@@ -5,8 +5,16 @@
 .ai-model { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: var(--fp-border); border-radius: var(--fp-radius-control); background: var(--fp-color-surface-interactive); min-width: 260px; }
 .ai-model div { min-width: 0; }
 .ai-model strong, .ai-model span { display: block; }
-.ai-model strong { overflow: hidden; text-overflow: ellipsis; font-size: var(--fp-font-size-supporting); }
-.ai-model span { margin-top: 4px; color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); }
+/* text-overflow: ellipsis is a no-op without white-space: nowrap -- it
+   was declared without it, so the model name never actually truncated
+   to one line; combined with the parent's min-width: 0 and the
+   site-wide `overflow-wrap: anywhere`, it wrapped one character per
+   line instead ("Qw/en3/4B/ana/lyst..."), found via real-browser visual
+   inspection of assistant-planning/assistant-hosted-consent. overflow-wrap:
+   normal on both restores plain word-boundary wrapping as a fallback
+   for the subtitle span, which has no ellipsis truncation of its own. */
+.ai-model strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; font-size: var(--fp-font-size-supporting); }
+.ai-model span { margin-top: 4px; color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); overflow-wrap: normal; }
 
 .assistant-controls { display: grid; gap: 14px; }
 .assistant-modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; padding: 5px; border-radius: var(--fp-radius-control); background: var(--fp-color-surface-interactive); }

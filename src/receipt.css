@@ -51,7 +51,7 @@
 .receipt-item-heading strong, .receipt-item-heading span { display: block; }
 .receipt-item-heading span { margin-top: 4px; color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); font-variant-numeric: tabular-nums; }
 .receipt-labels { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.receipt-labels span { display: inline-flex; align-items: center; gap: 4px; margin: 0; padding: 5px 9px; border-radius: 999px; color: var(--fp-color-text-secondary); background: var(--fp-color-surface-interactive); font-size: var(--fp-font-size-metadata); }
+.receipt-labels span { display: inline-flex; align-items: center; gap: 4px; margin: 0; padding: 5px 9px; border-radius: 999px; color: var(--fp-color-text-secondary); background: var(--fp-color-surface-interactive); font-size: var(--fp-font-size-metadata); white-space: nowrap; }
 .receipt-item > p { margin-top: 13px; color: var(--fp-color-text-secondary); font-size: var(--fp-font-size-metadata); line-height: 1.55; }
 .receipt-alternatives { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin-top: 14px; }
 .receipt-alternatives div { padding: 12px; border-radius: var(--fp-radius-control); background: var(--fp-color-surface-interactive); }
