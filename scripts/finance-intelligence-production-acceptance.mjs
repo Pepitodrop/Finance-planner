@@ -111,8 +111,10 @@ async function waitFor(client, sessionId, expression, description, timeoutMs = D
     href: location.href,
     readyState: document.readyState,
     hasAiHook: typeof window.__financePlannerAcceptanceState === 'function',
+    aiHookSource: window.__financePlannerAcceptanceState?.toString()?.slice(0, 700),
     hasAutoHook: typeof window.__financePlannerAutoAcceptanceState === 'function',
     bodyTextSample: document.body?.innerText?.slice(0, 800),
+    aiPageRootOuterHTMLStart: document.querySelector('.ai-page')?.outerHTML?.slice(0, 200),
   }))()`).catch((reason) => ({ diagnosticError: reason instanceof Error ? reason.message : String(reason) }))
   throw new Error(`Timed out waiting for ${description}. Last value: ${JSON.stringify(lastValue)}. Last eval error: ${lastEvalError || 'none'}. Diagnostics: ${JSON.stringify(diagnostics)}`)
 }
