@@ -816,7 +816,12 @@ async function run() {
     await waitFor(client, sessionId, `document.body?.innerText.includes('Model confidence')`, 'receipt-sufficient for privacy-claim check')
     report.interactions.receiptNoLivePriceClaim = await evaluate(client, sessionId, `document.body.innerText.includes('No live price, offer, or inventory data')`)
     assert.equal(report.interactions.receiptNoLivePriceClaim, true, 'must always disclose no live price/inventory data')
-    report.interactions.receiptNoCertificationLanguage = await evaluate(client, sessionId, `!/verified certif|certified organic|official seal/i.test(document.body.innerText)`)
+    // The limitations panel's own correct copy explicitly denies being a
+    // verified certification ("...the model's best reading, not verified
+    // certifications") -- allow that exact legitimate denial while still
+    // catching any other, wrongly certification-claiming use (matches the
+    // same not-a-fraud-check pattern used for the FI-04 geometry check).
+    report.interactions.receiptNoCertificationLanguage = await evaluate(client, sessionId, `!/(?<!not )verified certif|certified organic|official seal/i.test(document.body.innerText)`)
     assert.equal(report.interactions.receiptNoCertificationLanguage, true, 'model-inferred labels must never read as verified certifications')
 
     // -----------------------------------------------------------------
