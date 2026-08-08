@@ -155,7 +155,6 @@ main {
 .panel { border-radius: 18px; padding: 20px 22px; }
 .panel-header { margin-bottom: 10px; }
 .panel-header h2 { font-size: 18px; font-weight: 560; }
-.panel-header .eyebrow { display: none; }
 .pill {
   border: 1px solid rgba(126, 134, 181, .17);
   border-radius: 10px;
