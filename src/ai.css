@@ -25,7 +25,20 @@
 .ai-metrics strong { font-size: 1.6875rem; font-variant-numeric: tabular-nums; }
 .ai-metrics small { font-size: 0.625rem; }
 
-.ai-results { max-width: none; overflow: hidden; }
+/* overflow: hidden (rather than overflow-x: auto) meant that whenever a
+   suggestion row's natural content width exceeded this panel's
+   available width, the excess -- specifically the Apply button and
+   trusted/review badge, the row's last column -- was silently clipped
+   off-screen and unreachable, not just visually squeezed. Confirmed by
+   comparing real-browser screenshots before and after fixing the
+   mid-word text-wrap defect elsewhere on this page: making the wrapped
+   text word-safe (wider, more natural min-content) was enough on its
+   own to push some rows past the clip boundary. overflow-x: auto keeps
+   the page itself from gaining a horizontal scrollbar (the scrolling is
+   contained to this panel) while guaranteeing the row's own interactive
+   controls are always reachable, worst case via a horizontal scroll
+   within the panel, never invisible. */
+.ai-results { max-width: none; overflow-x: auto; overflow-y: visible; }
 .ai-results-header { align-items: flex-end; gap: 18px; }
 .ai-filter { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--fp-color-text-muted); }
 .ai-filter button { min-height: var(--fp-touch-target); padding: 7px 12px; border: var(--fp-border); border-radius: 999px; color: var(--fp-color-text-secondary); background: var(--fp-color-surface-interactive); font-size: var(--fp-font-size-metadata); white-space: nowrap; }
