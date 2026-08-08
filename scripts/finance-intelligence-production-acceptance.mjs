@@ -629,6 +629,19 @@ async function run() {
     await ensureDestination(client, sessionId, 'Finance Intelligence', 'data-ai-ready')
     await evaluate(client, sessionId, `window.__financePlannerAcceptanceState('results')`)
     await waitFor(client, sessionId, `document.body?.innerText.includes('Review queue')`, 'finance-intelligence results for trusted-vs-review check')
+    // TEMPORARY diagnostic: exact computed widths to size .ai-result's grid
+    // columns correctly instead of guessing against screenshots. Remove once
+    // the layout is confirmed fixed.
+    await setViewport(client, sessionId, 1440, 900)
+    await delay(150)
+    report.interactions.widthDiagnostic = await evaluate(client, sessionId, `(() => {
+      const rect = (el) => el ? { w: Math.round(el.getBoundingClientRect().width), x: Math.round(el.getBoundingClientRect().x) } : null
+      const results = document.querySelector('.ai-results')
+      const list = document.querySelector('.ai-result-list')
+      const row = document.querySelector('.ai-result')
+      const cols = row ? [...row.children].map(rect) : []
+      return { resultsPanel: rect(results), resultList: rect(list), firstRow: rect(row), columns: cols, viewportWidth: innerWidth }
+    })()`)
     report.interactions.trustedVsReview = await evaluate(client, sessionId, `(() => {
       const rows = [...document.querySelectorAll('.ai-result')]
       const trusted = rows.filter((r) => r.querySelector('.trusted-badge'))
