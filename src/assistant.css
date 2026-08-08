@@ -67,6 +67,11 @@
 
 @media (forced-colors: active) {
   .assistant-engine-card, .smart-briefing-item { border: 1px solid CanvasText; }
+  /* .assistant-modes button and .assistant-consent-toggle both set
+     border: 0 unconditionally, so under forced-colors they'd otherwise
+     have no boundary at all -- found via a real forced-colors
+     accessibility check on assistant-hosted-consent. */
+  .assistant-modes button, .assistant-consent-toggle { border: 1px solid CanvasText; }
 }
 
 @media (max-width: 900px) {
