@@ -165,12 +165,15 @@ async function setViewport(client, sessionId, width, height) {
 
 async function ensureDestination(client, sessionId, label, readyAttribute) {
   if (await evaluate(client, sessionId, `Boolean(document.querySelector('[${readyAttribute}=true]'))`)) return
-  // A real VaultConflict dialog (see resolveConflictIfPresent) can appear
-  // between an earlier check and this navigation attempt -- its backdrop
-  // makes the nav/topbar inert, which is why the marker check above can
-  // legitimately see "not there yet" while a click on a nav button would
-  // otherwise silently do nothing. Clear it first so navigation isn't
-  // attempted against an inert background.
+  // The vault can end up unexpectedly locked mid-script (see
+  // ensureVaultUnlocked) or a real VaultConflict dialog (see
+  // resolveConflictIfPresent) can appear between an earlier check and this
+  // navigation attempt -- the latter's backdrop makes the nav/topbar inert,
+  // which is why the marker check above can legitimately see "not there
+  // yet" while a click on a nav button would otherwise silently do nothing.
+  // Clear both first so navigation isn't attempted against a locked or
+  // inert page.
+  await ensureVaultUnlocked(client, sessionId)
   await resolveConflictIfPresent(client, sessionId)
   // Decide mobile-vs-desktop navigation from the browser's *actual* current
   // viewport, not a caller-supplied value -- callers may invoke this before
@@ -236,10 +239,32 @@ async function resolveConflictIfPresent(client, sessionId) {
   return true
 }
 
+// Re-unlocks the vault if it's found locked (a real "Unlock Finance
+// Planner" screen was hit unexpectedly, mid-script, well after the vault
+// was already successfully unlocked once by authenticateFreshVault). This
+// is a long-running script (dozens of navigations/captures over several
+// minutes), and headless Chrome under CI resource contention can plausibly
+// cause spurious visibility-state changes that trip the app's real
+// auto-lock-on-background behavior (see SECURITY-01) -- not a fixture or
+// assertion problem, so self-heal by re-entering the same password rather
+// than treating it as fatal.
+async function ensureVaultUnlocked(client, sessionId) {
+  const locked = await evaluate(client, sessionId, `document.body?.innerText.includes('Unlock Finance Planner') || false`)
+  if (!locked) return false
+  await evaluate(client, sessionId, `(() => {
+    const input = document.querySelector('input[type=password]')
+    if (input) { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(VAULT_PASSWORD)}); input.dispatchEvent(new Event('input', { bubbles: true })) }
+  })()`)
+  await clickButton(client, sessionId, 'Unlock')
+  await waitFor(client, sessionId, 'Boolean(document.querySelector("[data-dashboard-ready=true]"))', 'vault re-unlocked after unexpected lock')
+  return true
+}
+
 async function captureState(client, sessionId, name, readyAttribute, { beforeEach, waitExpr, waitDescription, scrollTo } = {}) {
   const results = []
   for (const [width, height] of VIEWPORTS) {
     await setViewport(client, sessionId, width, height)
+    await ensureVaultUnlocked(client, sessionId)
     await resolveConflictIfPresent(client, sessionId)
     await beforeEach(width, height)
     if (waitExpr) await waitFor(client, sessionId, waitExpr, `${waitDescription || name} @ ${width}x${height}`)
