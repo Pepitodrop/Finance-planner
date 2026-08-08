@@ -295,6 +295,15 @@ table {
   border-color: color-mix(in srgb, var(--fp-color-transfer) 45%, transparent);
   background: var(--fp-color-accent-muted);
 }
+/* Sizes the merchant logo (from main's MerchantLogo/merchant-logos.ts,
+   integrated here during the release-integration merge) to match this
+   list's existing 2.25rem .transactions-icon slot. */
+.transactions-table-row .transaction-merchant-logo,
+.transactions-mobile-list .transaction-merchant-logo {
+  width: 2.25rem;
+  height: 2.25rem;
+  flex-basis: 2.25rem;
+}
 .transactions-category {
   display: inline-block;
   max-width: 100%;
@@ -749,6 +758,11 @@ table {
     width: 2.6rem;
     height: 2.6rem;
   }
+  .transactions-mobile-list .transaction-merchant-logo {
+    width: 2.6rem;
+    height: 2.6rem;
+    flex-basis: 2.6rem;
+  }
   .transaction-tabs button {
     min-width: 0;
     padding-inline: 0.3rem;
@@ -760,6 +774,7 @@ table {
 }
 @media (forced-colors: active) {
   .transactions-icon,
+  .transaction-merchant-logo,
   .transaction-tabs button.active,
   .transactions-pagination button.active {
     forced-color-adjust: auto;

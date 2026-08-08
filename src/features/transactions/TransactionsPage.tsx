@@ -2,9 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, Ref } from "react";
 import { createPortal } from "react-dom";
 import {
-  ArrowDownRight,
   ArrowLeftRight,
-  ArrowUpRight,
   ChevronLeft,
   ChevronRight,
   Filter,
@@ -18,6 +16,7 @@ import {
 } from "lucide-react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { formatMoney } from "../../finance";
+import { MerchantLogo } from "../../MerchantLogo";
 import { presentedTransactionType } from "../../transactionClassification";
 import type { Account, Transaction } from "../../types";
 import {
@@ -68,20 +67,14 @@ function typeLabel(transaction: Transaction) {
 
 function TransactionIcon({ transaction }: { transaction: Transaction }) {
   const type = presentedTransactionType(transaction);
-  return (
-    <span
-      className={`transactions-icon transactions-icon--${type}`}
-      aria-hidden="true"
-    >
-      {type === "income" ? (
-        <ArrowUpRight />
-      ) : type === "transfer" ? (
+  if (type === "transfer") {
+    return (
+      <span className="transactions-icon transactions-icon--transfer" aria-hidden="true">
         <ArrowLeftRight />
-      ) : (
-        <ArrowDownRight />
-      )}
-    </span>
-  );
+      </span>
+    );
+  }
+  return <MerchantLogo description={transaction.description} type={transaction.type} />;
 }
 
 function TransactionActions({ transaction, onEdit, onDelete }: { transaction: Transaction; onEdit: (transaction: Transaction) => void; onDelete: (id: string) => void }) {

@@ -9,6 +9,24 @@ vi.mock('../../connectors', async (importOriginal) => {
   return { ...actual, startConnector: vi.fn(async () => {}), synchronizeConnections: vi.fn(async () => []), disconnectConnector: vi.fn(async () => {}) }
 })
 
+// Amount owed / available credit for a manual credit-card account come from
+// the real, server-side COBOL banking core (see manualCreditCard.ts) --
+// mocked here the same way the connector calls above are, rather than
+// exercising a real network request in a component test.
+vi.mock('../../manualCreditCard', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../manualCreditCard')>()
+  return {
+    ...actual,
+    normalizeManualCreditCard: vi.fn(async ({ providerBalanceCents, creditLimitCents }: { providerBalanceCents: number; creditLimitCents?: number }) => ({
+      amountOwedCents: providerBalanceCents,
+      ledgerBalanceCents: -providerBalanceCents,
+      ...(creditLimitCents ? { availableCreditCents: Math.max(0, creditLimitCents - providerBalanceCents) } : {}),
+      pendingAmountCents: 0,
+      calculationEngine: 'cobol' as const,
+    })),
+  }
+})
+
 import { disconnectConnector, startConnector, synchronizeConnections } from '../../connectors'
 
 const baseState: AppState = { accounts: [], transactions: [], goals: [] }
@@ -244,8 +262,22 @@ describe('manual account', () => {
     await user.type(screen.getByLabelText('Account name'), 'Everyday credit card')
     await user.type(screen.getByLabelText(/Current balance/), '250.75')
     await user.click(screen.getByRole('button', { name: 'Save account' }))
+    await waitFor(() => expect(onApply).toHaveBeenCalled())
     const [nextState] = onApply.mock.calls[0]
-    expect(nextState.accounts[0]).toMatchObject({ name: 'Everyday credit card', type: 'credit-card', balanceCents: -25_075 })
+    expect(nextState.accounts[0]).toMatchObject({ name: 'Everyday credit card', type: 'credit-card', balanceCents: -25_075, creditCard: { amountOwedCents: 25_075 } })
+  })
+
+  it('surfaces a credit-card calculation failure without saving a local fallback', async () => {
+    const { normalizeManualCreditCard } = await import('../../manualCreditCard')
+    vi.mocked(normalizeManualCreditCard).mockRejectedValueOnce(new Error('Compiled COBOL banking core is unavailable.'))
+    const user = userEvent.setup()
+    const { onApply } = renderConnections({ acceptanceMode: 'manual' })
+    await user.selectOptions(screen.getByLabelText('Account type'), 'credit-card')
+    await user.type(screen.getByLabelText('Account name'), 'Everyday credit card')
+    await user.type(screen.getByLabelText(/Current balance/), '250.75')
+    await user.click(screen.getByRole('button', { name: 'Save account' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Compiled COBOL banking core is unavailable.'))
+    expect(onApply).not.toHaveBeenCalled()
   })
 
   it('never asks for card, PIN or password fields', () => {

@@ -38,6 +38,7 @@ import {
   type ConnectorProvider,
   type SyncPreview,
 } from '../../connectors'
+import { normalizeManualCreditCard } from '../../manualCreditCard'
 import { applyStatementImport, buildStatementPreview, parseStatement, type StatementPreview } from '../../statementImport'
 import type { Account, AppState } from '../../types'
 import { useDialog } from '../../app/useDialog'
@@ -259,13 +260,31 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setSetupStep(nextSetupStepAfterInstitution(institution))
   }
 
-  const saveManualAccount = () => {
+  const saveManualAccount = async () => {
     const result = validateManualAccount({ name: manualName, accountType: manualAccountType, balanceInput: manualBalance, creditLimitInput: manualLimit })
     if (result.error) { setManualError(result.error); return }
     const id = `manual:${typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Date.now()}`
-    const account: Account = manualAccountType === 'credit-card'
-      ? { id, name: manualName.trim(), type: 'credit-card', balanceCents: -result.balanceCents, currency: 'EUR', creditCard: { amountOwedCents: result.balanceCents, creditLimitCents: result.creditLimitCents, availableCreditCents: result.creditLimitCents !== undefined ? Math.max(0, result.creditLimitCents - result.balanceCents) : undefined, pendingAmountCents: 0 } }
-      : { id, name: manualName.trim(), type: manualAccountType, balanceCents: result.balanceCents, currency: 'EUR' }
+    const name = manualName.trim()
+    if (manualAccountType === 'credit-card') {
+      setBusy(true)
+      setManualError('')
+      try {
+        // Amount owed, ledger balance, and available credit come from the
+        // authoritative server-side COBOL banking core rather than local JS
+        // arithmetic -- no local fallback calculation is stored if it fails.
+        const normalized = await normalizeManualCreditCard({ providerBalanceCents: result.balanceCents, creditLimitCents: result.creditLimitCents })
+        const account: Account = { id, name, type: 'credit-card', balanceCents: normalized.ledgerBalanceCents, currency: 'EUR', creditCard: { amountOwedCents: normalized.amountOwedCents, creditLimitCents: result.creditLimitCents, availableCreditCents: normalized.availableCreditCents, pendingAmountCents: normalized.pendingAmountCents } }
+        onApply({ ...state, accounts: [...state.accounts, account] })
+        setManualOpen(false)
+        setMessage(`${name} was added as a manual account.`)
+      } catch (reason) {
+        setManualError(reason instanceof Error ? reason.message : 'The credit-card calculation failed.')
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
+    const account: Account = { id, name, type: manualAccountType, balanceCents: result.balanceCents, currency: 'EUR' }
     onApply({ ...state, accounts: [...state.accounts, account] })
     setManualOpen(false)
     setMessage(`${account.name} was added as a manual account.`)
@@ -442,8 +461,8 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
         <div className="connections-privacy-box"><ShieldCheck size={17}/><span>Finance Planner never requests card number, expiry, CVC, PIN or login credentials.</span></div>
         {manualError && <p className="status-message error-message" role="alert">{manualError}</p>}
         <div className="connections-modal-actions">
-          <button type="button" className="primary" onClick={saveManualAccount}>Save account</button>
-          <button type="button" className="secondary" onClick={closeManualAccount}>Cancel</button>
+          <button type="button" className="primary" disabled={busy} onClick={() => void saveManualAccount()}>{busy && manualAccountType === 'credit-card' ? 'Calculating…' : 'Save account'}</button>
+          <button type="button" className="secondary" disabled={busy} onClick={closeManualAccount}>Cancel</button>
         </div>
       </section>
     </div>}

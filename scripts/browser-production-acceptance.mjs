@@ -758,6 +758,15 @@ async function runAcceptance() {
       return { ok: response.ok, status: response.status, serviceStatus: payload?.status }
     })()`)
     assert.deepEqual(report.checks.backendHealth, { ok: true, status: 200, serviceStatus: 'ok' })
+    // A genuinely new account (this is a fresh vault setup, not a returning
+    // user) now correctly starts with zero transactions rather than seeded
+    // demo data -- see data.ts's emptyProductionState / VaultGate's setup
+    // path. createAutomaticTransactionAnalysis still shows a real, honest
+    // welcome message for a zero-transaction account ("A financial analysis
+    // will be created here automatically once transactions exist."), which
+    // auto-dismisses after COMPLETED_STATUS_DURATION_MS the same as any
+    // other analysis result -- so the original show-then-dismiss assertion
+    // already covers this correctly and needs no fixture.
     await waitFor(client, sessionId, 'Boolean(document.querySelector(".automatic-analysis"))', 'automatic analysis completion status')
     await waitFor(client, sessionId, '!document.querySelector(".automatic-analysis")', 'automatic analysis status dismissal')
     await waitFor(client, sessionId, '!document.querySelector(".mobile-connectivity-status, .mobile-install-card, .passkey-enrolment, .platform-action-bar")', 'clean Dashboard runtime state')

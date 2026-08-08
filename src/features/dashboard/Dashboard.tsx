@@ -24,6 +24,7 @@ import {
   YAxis,
 } from 'recharts'
 import { formatMoney } from '../../finance'
+import { MerchantLogo } from '../../MerchantLogo'
 import type { AppState, Transaction } from '../../types'
 import type { DestinationId } from '../../app/navigation'
 import { buildDashboardViewModel, isDetectedTransfer } from './dashboardModel'
@@ -178,7 +179,9 @@ export function Dashboard({ state, userName, onAddTransaction, onEditTransaction
             const Icon = transfer ? ArrowLeftRight : transaction.type === 'income' ? ArrowUpRight : ArrowDownRight
             const semantic = transfer ? 'transfer' : transaction.type
             return <button type="button" className="dashboard-transaction-row" key={transaction.id} onClick={() => onEditTransaction(transaction)} aria-label={`Edit ${transaction.description}`}>
-              <span className={`dashboard-row-icon ${semantic}`} aria-hidden="true"><Icon size={18}/></span>
+              {transfer
+                ? <span className={`dashboard-row-icon ${semantic}`} aria-hidden="true"><Icon size={18}/></span>
+                : <MerchantLogo description={transaction.description} type={transaction.type}/>}
               <span><strong>{transaction.description}</strong><small>{new Date(`${transaction.date}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} · {transfer ? 'Transfer' : transaction.category}{account ? ` · ${account.name}` : ''}</small></span>
               <b className={semantic}>{signedMoney(transaction)}</b>
             </button>

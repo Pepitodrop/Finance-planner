@@ -20,7 +20,16 @@ export async function probeSameOrigin(
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
-    const url = new URL('/healthz', origin)
+    // /health/live is the real, implemented app-health endpoint -- proxied
+    // by vite.config.ts in dev/preview and served by the connector server
+    // itself (server.js). /healthz is not a route this server implements
+    // and is not in vite's proxy list either, so probing it here always
+    // fails (a 404/SPA fallback, never real JSON), making this surface
+    // permanently, incorrectly report "degraded" regardless of actual
+    // connectivity. /healthz stays in sw.js's SENSITIVE_PATHS as a harmless
+    // defensive exclusion (it doesn't need to exist to be excluded from
+    // caching) but must not be the client's own connectivity signal.
+    const url = new URL('/health/live', origin)
     url.searchParams.set('connectivity-check', String(Date.now()))
     const response = await fetcher(url, {
       method: 'GET',

@@ -27,7 +27,7 @@ describe('probeSameOrigin', () => {
     expect(fetcher).toHaveBeenCalledOnce()
 
     const [url, options] = (fetcher as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
-    expect(String(url)).toContain('https://planner.example/healthz')
+    expect(String(url)).toContain('https://planner.example/health/live')
     expect(options).toMatchObject({
       cache: 'no-store',
       credentials: 'same-origin',
