@@ -10,7 +10,7 @@ afterEach(() => {
 
 describe('manual credit-card normalization', () => {
   it('submits integer cents and accepts an authoritative COBOL result', async () => {
-    const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => new Response(JSON.stringify({
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
       providerBalanceCents: 12_550,
       creditLimitCents: 50_000,
       pendingAmountCents: 2_000,
@@ -44,7 +44,7 @@ describe('manual credit-card normalization', () => {
   it('rejects unsafe inputs before making a request', async () => {
     const fetchMock = vi.fn()
     globalThis.fetch = fetchMock as typeof fetch
-    await expect(normalizeManualCreditCard({ providerBalanceCents: Number.MAX_SAFE_INTEGER + 1 })).rejects.toThrow(/Cent-Betrag/)
+    await expect(normalizeManualCreditCard({ providerBalanceCents: Number.MAX_SAFE_INTEGER + 1 })).rejects.toThrow(/cent amount/)
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -55,7 +55,7 @@ describe('manual credit-card normalization', () => {
       pendingAmountCents: 0,
       calculationEngine: 'javascript',
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch
-    await expect(normalizeManualCreditCard({ providerBalanceCents: 100 })).rejects.toThrow(/COBOL-Kern/)
+    await expect(normalizeManualCreditCard({ providerBalanceCents: 100 })).rejects.toThrow(/authoritative COBOL core/)
   })
 
   it('surfaces server-side failures without falling back locally', async () => {

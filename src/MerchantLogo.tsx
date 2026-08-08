@@ -41,7 +41,7 @@ export function MerchantLogo({ description, type }: MerchantLogoProps) {
     <span className={`transaction-merchant-logo fallback ${type}`} aria-hidden="true">
       <span className="merchant-initials">{initials(description)}</span>
       <span className="merchant-direction">
-        {type === 'income' ? <ArrowUpRight size={11}/> : <ArrowDownRight size={11}/>} 
+        {type === 'income' ? <ArrowUpRight size={11}/> : <ArrowDownRight size={11}/>}
       </span>
     </span>
   )
