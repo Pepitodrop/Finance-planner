@@ -658,6 +658,17 @@ async function run() {
         report.interactions.resultRowFitsContainer.rowWidth <= report.interactions.resultRowFitsContainer.listWidth + 1,
         `a suggestion row (${report.interactions.resultRowFitsContainer.rowWidth}px) must not be wider than its list container (${report.interactions.resultRowFitsContainer.listWidth}px) at 1440x900 desktop`,
       )
+      // Regression guard for the follow-up defect: the nowrap .intel-badge
+      // ("On-device model · NN%") overflowing its own column and visually
+      // colliding with the adjacent scores column, found via a second
+      // real-browser measurement after the row-width fix alone wasn't
+      // sufficient.
+      if (report.interactions.resultRowFitsContainer.badgeWidth !== null) {
+        assert.ok(
+          report.interactions.resultRowFitsContainer.badgeWidth <= report.interactions.resultRowFitsContainer.predictionColumnWidth + 1,
+          `the prediction badge (${report.interactions.resultRowFitsContainer.badgeWidth}px) must not be wider than its column (${report.interactions.resultRowFitsContainer.predictionColumnWidth}px) at 1440x900 desktop`,
+        )
+      }
     }
     report.interactions.trustedVsReview = await evaluate(client, sessionId, `(() => {
       const rows = [...document.querySelectorAll('.ai-result')]
