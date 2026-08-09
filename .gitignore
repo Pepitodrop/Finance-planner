@@ -20,3 +20,6 @@ android/**/build/
 *.keystore
 *.apk
 *.aab
+
+# Obsidian vault local/plugin state (the Markdown notes in FinancePlanner/ are intentionally tracked).
+FinancePlanner/.obsidian/
