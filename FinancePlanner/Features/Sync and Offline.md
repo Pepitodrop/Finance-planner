@@ -20,4 +20,8 @@ The pre-0.2.0 unbound browser vault format is migrated once, automatically, afte
 
 Encrypted local cache persists through PostgreSQL/network outages; app shows a local/offline status and retries with bounded exponential backoff. Local changes are never discarded.
 
-Related: [[Data and Persistence]], [[Frontend]]
+## Connectivity banner root cause (PR #131 fix)
+
+`deploy/nginx.conf` proxied `/health/ready` to the connector but not `/health/live`; a request to `/health/live` fell through to the SPA catch-all and got `index.html` back. The browser then tried to parse that HTML as the health-check JSON, failed, and the frontend's connectivity state machine (`MobileConnectivityStatus.tsx`) permanently reported "Your device has a network connection, but Finance Planner can't reach the app service" even while the connector was actually healthy. Fix: added a matching `location = /health/live { proxy_pass http://connector:8787/health/live; ... }` block. `MobileConnectivityStatus.tsx` now also publishes its resolved status via a `finance-planner:connectivity` window event and a `data-finance-planner-connectivity` attribute on `<html>`, which `FinanceAssistant.tsx` consumes for AI routing — see [[AI System]].
+
+Related: [[Data and Persistence]], [[Frontend]], [[AI System]]

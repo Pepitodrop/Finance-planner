@@ -28,6 +28,14 @@
 
 When PostgreSQL/network is unavailable, the app keeps the encrypted local cache, shows a local/offline status, and retries with bounded exponential backoff — it does not discard local changes.
 
+## Fresh-account state is genuinely empty (PR #131 fix)
+
+`src/data.ts`'s `initialState` (used both as the default for a brand-new vault and as the "Clear financial data" target) is `emptyProductionState` — zero accounts/transactions/goals. It used to be a hardcoded German sample dataset (`Girokonto`/`Tagesgeld`/`Bargeld` accounts, `Notgroschen` goal, REWE/Minecraft/etc. transactions), which a production browser pass found was still reachable by real accounts. Root cause and fix:
+- `VaultGate.tsx`'s setup path always starts a genuinely new (non-migrating) vault from `structuredClone(emptyProductionState)`, never the old sample data.
+- `isLegacyDemoState()`/`removeLegacyDemoState()` (`src/data.ts`) conservatively detect *only* an exact, untouched match of the old sample dataset (exact account/goal fields, and every transaction using the old `tN` fixture-id convention) — any user edit at all makes the state ineligible for cleanup, so this can't discard real data. `VaultGate.tsx` runs this check once per unlock, right after `synchronizeUnlockedState`, and persists the cleaned state back via `saveState` so a stale cloud copy can't reintroduce the samples on the next device.
+- "Clear financial data" (`DataTools.tsx`, formerly labelled "Reset financial data") explicitly promises "No example or demo data will be inserted" and produces the same `emptyProductionState` — it never reseeds anything. `resetFinancialData`'s acceptance-script coverage was previously (bug in the *test*, not the app) asserting the opposite — see [[Debugging Learnings]].
+- Acceptance-only sample states (`accountsAcceptanceState`, `planningAcceptanceState`) remain, but are wired only through `VITE_ACCEPTANCE_FIXTURES`-gated `acceptanceMode` props, never through the production default.
+
 ## Encryption boundary
 
 Server-side stores (`user-state-store.js`, `crypto-store.js`, `auth-store.js`) all use `aes-256-gcm` via Node's `crypto` module and assert `algorithm === 'AES-256-GCM'` on read as an integrity check. The frontend vault uses Web Crypto with PBKDF2-derived keys — a structurally different, independent encryption boundary from the server envelope (double encryption in transit: local vault format is re-derived per device, then wrapped again server-side).

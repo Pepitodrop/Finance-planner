@@ -46,6 +46,18 @@ Relevant code/docs: `docs/OPEN_BANKING_ARCHITECTURE.md`
 
 ---
 
+## Email/password (sign-in, PR #131)
+
+Implementation: **implemented** (`server/src/password-auth.js` scrypt hashing/verification, `server/src/auth-router.js` `/api/auth/password/register` + `/api/auth/password/login`, `src/AuthGate.tsx` UI)
+Configuration: **always available** (no external credentials — server-side-only, no third-party dependency)
+Provider-dependent: no
+Runtime verified: **yes** — `scripts/auth-security-production-acceptance.mjs` drives real registration and login through the actual endpoints against a Postgres-backed connector (not mocked); re-run locally 2026-08-09 against a fresh `postgres:17-bookworm` container + `vite build`+`vite preview`, matching `production-acceptance.yml` exactly. Passed.
+Production verified: **no evidence found** — the acceptance run above is CI-equivalent, not a production deployment exercise
+Current limitations: a user who registered via Google first cannot later add a password to the same account (register rejects an already-known email) — no password-add-later path exists yet; this is a UX gap, not a security or duplicate-identity bug (see [[Authentication]])
+Relevant code/docs: `server/src/password-auth.js`, `server/src/auth-router.js`, `src/AuthGate.tsx`, `scripts/auth-security-production-acceptance.mjs`
+
+---
+
 ## Google OAuth (sign-in)
 
 Implementation: **implemented** (`server/src/auth-router.js`, `google-auth-library` `OAuth2Client`, state/nonce/ID-token verification)
