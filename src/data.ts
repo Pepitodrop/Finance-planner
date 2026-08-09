@@ -19,7 +19,7 @@ const LEGACY_DEMO_GOALS = [
   { id: 'g1', name: 'Notgroschen', targetCents: 600000, currentCents: 420000, targetDate: '2027-01-01' },
   { id: 'g2', name: 'Motorradführerschein A2', targetCents: 400000, currentCents: 125000, targetDate: '2027-05-01' },
 ] as const
-const LEGACY_DEMO_ACCOUNT_IDS = new Set(LEGACY_DEMO_ACCOUNTS.map(({ id }) => id))
+const LEGACY_DEMO_ACCOUNT_IDS = new Set<string>(LEGACY_DEMO_ACCOUNTS.map(({ id }) => id))
 
 /**
  * Detect only an untouched legacy starter dataset accidentally persisted by
