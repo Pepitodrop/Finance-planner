@@ -17,13 +17,16 @@ export interface TransactionFilters {
   date: TransactionDateFilter;
 }
 
+// "View all" from the dashboard and direct navigation to Transactions must
+// show the user's recorded history by default. Users can still narrow the
+// view to the current month or last 30 days explicitly.
 export const DEFAULT_TRANSACTION_FILTERS: TransactionFilters = {
   type: "all",
   query: "",
   category: "all",
   account: "all",
   amount: "all",
-  date: "month",
+  date: "all",
 };
 
 export interface TransactionCategorySummary {
