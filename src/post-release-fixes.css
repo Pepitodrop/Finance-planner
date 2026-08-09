@@ -30,10 +30,11 @@
   height: 100%;
 }
 
-/* Keep global page headers informational. Transaction creation belongs on
-   Dashboard/Transactions; unrelated pages should not display a misleading
-   "Manual entry" action in their title bar. */
-.app-context-header .app-context-transaction-action {
+/* The shared topbar appears only on secondary destinations. Creating a
+   transaction is already available from Dashboard and Transactions, so the
+   unrelated global "Manual entry" button was misleading on Account, Data,
+   Receipt Review, Assistant, Subscriptions, and Connections. */
+.topbar > .primary {
   display: none;
 }
 
