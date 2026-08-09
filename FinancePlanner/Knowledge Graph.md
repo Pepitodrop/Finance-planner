@@ -63,7 +63,7 @@ This cluster should stay connected to provider and deployment knowledge because 
 
 [[Mobile PWA Android]] → reuses → [[Frontend]], [[Authentication]], and [[Sync and Offline]]
 
-[[Mobile PWA Android]] → release/runtime dependencies tracked by → [[Deployment]] and [[Provider Status]]
+[[Mobile PWA Android]] → release/runtime dependencies tracked by → [[Deployment]] and [[Known Issues and Limitations]]
 
 [[Security]] → constrains → [[Mobile PWA Android]] where browser origin, HTTPS, signing, or platform behavior matters.
 
