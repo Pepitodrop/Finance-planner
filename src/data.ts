@@ -1,26 +1,19 @@
 import type { AppState } from './types'
 
-const normalInitialState: AppState = {
-  accounts: [
-    { id: 'account-checking', name: 'Girokonto', type: 'checking', balanceCents: 286450, currency: 'EUR' },
-    { id: 'account-savings', name: 'Tagesgeld', type: 'savings', balanceCents: 420000, currency: 'EUR' },
-    { id: 'account-cash', name: 'Bargeld', type: 'cash', balanceCents: 8500, currency: 'EUR' },
-  ],
-  transactions: [
-    { id: 't1', accountId: 'account-checking', description: 'Gehalt', category: 'Einkommen', type: 'income', amountCents: 185000, date: '2026-07-01', recurring: true },
-    { id: 't2', accountId: 'account-checking', description: 'Warmmiete', category: 'Wohnen', type: 'expense', amountCents: 72000, date: '2026-07-03', recurring: true },
-    { id: 't3', accountId: 'account-checking', description: 'Supermarkt', category: 'Lebensmittel', type: 'expense', amountCents: 6840, date: '2026-07-08' },
-    { id: 't4', accountId: 'account-checking', description: 'Fitnessstudio', category: 'Verträge', type: 'expense', amountCents: 2990, date: '2026-07-10', recurring: true },
-    { id: 't5', accountId: 'account-checking', description: 'Deutschlandticket', category: 'Mobilität', type: 'expense', amountCents: 5800, date: '2026-07-12', recurring: true },
-    { id: 't6', accountId: 'account-checking', description: 'Werkstudentenjob', category: 'Einkommen', type: 'income', amountCents: 62000, date: '2026-07-15', recurring: true },
-    { id: 't7', accountId: 'account-checking', description: 'Restaurant', category: 'Freizeit', type: 'expense', amountCents: 4200, date: '2026-07-18' },
-  ],
-  goals: [
-    { id: 'g1', name: 'Notgroschen', targetCents: 600000, currentCents: 420000, targetDate: '2027-01-01' },
-    { id: 'g2', name: 'Motorradführerschein A2', targetCents: 400000, currentCents: 125000, targetDate: '2027-05-01' },
-  ],
+/**
+ * Production state is intentionally empty. A new account must never inherit
+ * sample balances, transactions, recurring payments, or savings goals.
+ */
+export const emptyProductionState: AppState = {
+  accounts: [],
+  transactions: [],
+  goals: [],
 }
 
+/**
+ * Acceptance-only state used by deterministic screenshot/tests. These values
+ * are never used as a production default or as a reset target.
+ */
 export const accountsAcceptanceState: AppState = {
   accounts: [
     { id:'accept-checking',name:'Everyday checking account',type:'checking',balanceCents:842050,currency:'EUR' },
@@ -36,7 +29,10 @@ export const accountsAcceptanceState: AppState = {
     {id:'accept-transfer',accountId:'accept-checking',description:'Transfer to emergency savings',category:'Transfer',type:'expense',amountCents:50000,date:'2026-07-31'},
     {id:'accept-supplies',accountId:'accept-card',description:'Household supplies',category:'Shopping',type:'expense',amountCents:8420,date:'2026-08-02'},
   ],
-  goals: normalInitialState.goals,
+  goals: [
+    { id:'accept-goal-emergency',name:'Emergency reserve',targetCents:600000,currentCents:420000,targetDate:'2027-01-01' },
+    { id:'accept-goal-course',name:'Professional course',targetCents:400000,currentCents:125000,targetDate:'2027-05-01' },
+  ],
 }
 
 export const planningAcceptanceState: AppState = {
@@ -54,15 +50,8 @@ export const planningAcceptanceState: AppState = {
   ],
 }
 
-export const initialState: AppState = normalInitialState
-
 /**
- * A genuinely new Finance Planner account (no legacy local data, no existing
- * encrypted vault, no cloud state) must start empty, never seeded with
- * `normalInitialState`'s sample German finances. See VaultGate's setup path.
+ * Kept as the application default for compatibility with existing imports.
+ * It is deliberately the same empty production state.
  */
-export const emptyProductionState: AppState = {
-  accounts: [],
-  transactions: [],
-  goals: [],
-}
+export const initialState: AppState = emptyProductionState
