@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ChartNoAxesCombined, Check, ChevronDown, CircleCheck, Gauge, HardDrive, Info, LoaderCircle, MessageCircleQuestion, Route, Send, Server, ShieldCheck, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { AlertTriangle, ChartNoAxesCombined, Check, ChevronDown, CircleCheck, Gauge, HardDrive, Info, LoaderCircle, MessageCircleQuestion, Route, Send, Server, ShieldCheck, WifiOff, X } from 'lucide-react'
 import { FALLBACK_LOCAL_ASSISTANT_MODEL, HOSTED_ASSISTANT_MODEL, HostedAiFallbackError, PRIMARY_LOCAL_ASSISTANT_MODEL, runAssistant, runDeterministicAssistant, type AssistantEngine, type AssistantMode } from './assistant'
 import { behaviorSummary } from './behavior'
 import { createFinancialAgentPlan, decideAgentAction, type AgentPlan } from './financialAgent'
@@ -11,7 +11,15 @@ import { assessSmartness } from './smartness'
 import type { AppState } from './types'
 
 type AnswerSource = 'hosted' | 'local' | 'server-fallback' | 'client-fallback'
+type AssistantConnectivity = 'online' | 'slow' | 'degraded' | 'offline'
 export type AssistantAcceptanceMode = 'hosted-consent' | 'hosted-running' | 'success' | 'hosted-fallback' | 'local-selected' | 'local-running'
+
+interface NetworkInformationLike extends EventTarget {
+  effectiveType?: string
+  downlink?: number
+  rtt?: number
+  saveData?: boolean
+}
 
 const WHAT_IS_SENT = [
   'Income, expenses, free cash, recurring-expense total, account balance, transaction count, months covered',
@@ -20,9 +28,31 @@ const WHAT_IS_SENT = [
   'Your typed question (up to 500 characters)',
 ]
 
+function networkInformation(): NetworkInformationLike | null {
+  if (typeof navigator === 'undefined') return null
+  return (navigator as Navigator & { connection?: NetworkInformationLike }).connection ?? null
+}
+
+function connectionLooksSlow(): boolean {
+  const connection = networkInformation()
+  if (!connection) return false
+  if (connection.saveData) return true
+  if (connection.effectiveType === 'slow-2g' || connection.effectiveType === '2g') return true
+  if (typeof connection.downlink === 'number' && connection.downlink > 0 && connection.downlink < 1.25) return true
+  if (typeof connection.rtt === 'number' && connection.rtt >= 900) return true
+  return false
+}
+
+function initialConnectivity(): AssistantConnectivity {
+  if (typeof navigator === 'undefined') return 'online'
+  if (!navigator.onLine) return 'offline'
+  return connectionLooksSlow() ? 'slow' : 'online'
+}
+
 export function FinanceAssistant({ state, budgetAcceptanceMode, acceptanceMode }: { state: AppState; budgetAcceptanceMode?: 'consent' | 'result'; acceptanceMode?: AssistantAcceptanceMode }) {
   const [mode, setMode] = useState<AssistantMode>('analysis')
-  const [engine, setEngine] = useState<AssistantEngine>(acceptanceMode === 'local-selected' || acceptanceMode === 'local-running' ? 'local' : 'hosted')
+  const [manualEngine, setManualEngine] = useState<AssistantEngine>(acceptanceMode === 'local-selected' || acceptanceMode === 'local-running' ? 'local' : 'hosted')
+  const [connectivity, setConnectivity] = useState<AssistantConnectivity>(initialConnectivity)
   const [consentExternalAi, setConsentExternalAi] = useState(false)
   const [localAcknowledged, setLocalAcknowledged] = useState(false)
   const [showConsentDetail, setShowConsentDetail] = useState(false)
@@ -42,8 +72,41 @@ export function FinanceAssistant({ state, budgetAcceptanceMode, acceptanceMode }
   const smartness = useMemo(() => assessSmartness(state, learned.learnedDecisions), [state, learned.learnedDecisions])
   const briefing = useMemo(() => createSmartBriefing(state), [state])
 
+  useEffect(() => {
+    const refresh = () => {
+      if (!navigator.onLine) {
+        setConnectivity('offline')
+        return
+      }
+      setConnectivity(connectionLooksSlow() ? 'slow' : 'online')
+    }
+    const onRuntimeConnectivity = (event: Event) => {
+      const status = (event as CustomEvent<{ status?: string }>).detail?.status
+      if (status === 'offline' || status === 'degraded') {
+        setConnectivity(status)
+        return
+      }
+      refresh()
+    }
+    const connection = networkInformation()
+    window.addEventListener('online', refresh)
+    window.addEventListener('offline', refresh)
+    window.addEventListener('finance-planner:connectivity', onRuntimeConnectivity)
+    connection?.addEventListener('change', refresh)
+    refresh()
+    return () => {
+      window.removeEventListener('online', refresh)
+      window.removeEventListener('offline', refresh)
+      window.removeEventListener('finance-planner:connectivity', onRuntimeConnectivity)
+      connection?.removeEventListener('change', refresh)
+    }
+  }, [])
+
+  const automaticLocalFallback = connectivity !== 'online'
+  const engine: AssistantEngine = automaticLocalFallback ? 'local' : manualEngine
+
   const run = async () => {
-    const gated = engine === 'hosted' ? !consentExternalAi : !localAcknowledged
+    const gated = engine === 'hosted' ? !consentExternalAi : (!automaticLocalFallback && !localAcknowledged)
     if (!question.trim() || loading || gated) return
     setLoading(true); setError(''); setAnswer(''); setAnswerSource(null)
     requestAnimationFrame(() => answerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
@@ -60,7 +123,9 @@ export function FinanceAssistant({ state, budgetAcceptanceMode, acceptanceMode }
         : runDeterministicAssistant(mode, state, question.trim())
       const fallbackNote = reason instanceof HostedAiFallbackError
         ? 'Note: The hosted models could not produce a verifiable answer this time. This rule-based substitute analysis comes from the Finance Planner server, and you can ask again.'
-        : 'Note: The AI request failed. The substitute analysis above was built only from your locally calculated financial figures.'
+        : engine === 'local'
+          ? 'Note: The on-device model could not complete. Finance Planner used its deterministic local calculations instead; no hosted AI request was made.'
+          : 'Note: The AI request failed. The substitute analysis above was built only from your locally calculated financial figures.'
       setError(message)
       setAnswer(`${fallback}\n\n${fallbackNote}`)
       setAnswerSource(reason instanceof HostedAiFallbackError ? 'server-fallback' : 'client-fallback')
@@ -71,7 +136,7 @@ export function FinanceAssistant({ state, budgetAcceptanceMode, acceptanceMode }
   const decide = (actionId: string, decision: 'approved' | 'rejected') => setPlan((current) => decideAgentAction(current, actionId, decision))
   const activeModel = engine === 'hosted' ? HOSTED_ASSISTANT_MODEL : `${PRIMARY_LOCAL_ASSISTANT_MODEL} (fallback: ${FALLBACK_LOCAL_ASSISTANT_MODEL})`
   const hostedConsentMissing = engine === 'hosted' && !consentExternalAi
-  const localAckMissing = engine === 'local' && !localAcknowledged
+  const localAckMissing = engine === 'local' && !automaticLocalFallback && !localAcknowledged
   const runDisabled = loading || !question.trim() || hostedConsentMissing || localAckMissing
   const answerBadge: { kind: IntelligenceKind; label?: string } | null = answerSource === 'hosted'
     ? { kind: 'hosted' }
@@ -85,9 +150,11 @@ export function FinanceAssistant({ state, budgetAcceptanceMode, acceptanceMode }
 
   return <div className="assistant-page" lang="en" data-assistant-ready="true">
     <section className="panel assistant-hero">
-      <div><p className="eyebrow">Choose how this runs</p><h2>Analysis, questions, and financial planning</h2><p>Hosted models run through the Finance Planner server and require your consent each session. On-device models stay on your device and are only loaded after you explicitly select them.</p></div>
-      <div className="ai-model"><IntelligenceBadge kind={engine === 'hosted' ? 'hosted' : 'local'}/><div><strong>{activeModel}</strong><span>{engine === 'hosted' ? 'Server-side analyst + critic ensemble' : 'Runs locally in your browser · large one-time model download'}</span></div></div>
+      <div><p className="eyebrow">Choose how this runs</p><h2>Analysis, questions, and financial planning</h2><p>Hosted AI is the normal online mode. You can manually choose the on-device model while online; Finance Planner automatically switches to on-device processing when it is offline or the connection is degraded or very slow.</p></div>
+      <div className="ai-model"><IntelligenceBadge kind={engine === 'hosted' ? 'hosted' : 'local'}/><div><strong>{activeModel}</strong><span>{engine === 'hosted' ? 'Server-side analyst + critic ensemble' : automaticLocalFallback ? 'Automatic connectivity fallback · stays on this device' : 'Manually selected · runs locally in your browser'}</span></div></div>
     </section>
+
+    {automaticLocalFallback && <div className="status-message assistant-connectivity-fallback" role="status"><WifiOff size={18}/><div><strong>Using the on-device path</strong><span>{connectivity === 'offline' ? 'Finance Planner is offline.' : connectivity === 'slow' ? 'Your connection is currently slow.' : 'Finance Planner cannot reliably reach the app service.'} Hosted AI is paused until connectivity recovers. If the local model is not already cached, deterministic local calculations remain available.</span></div></div>}
 
     {briefing.length > 0 && <section className="panel smart-briefing" aria-labelledby="smart-briefing-title"><div className="panel-header"><div><p className="eyebrow">Automatically prioritized</p><h2 id="smart-briefing-title">Today's briefing</h2></div><IntelligenceBadge kind="calculated"/></div><div className="smart-briefing-list">{briefing.map((item) => <article className={`smart-briefing-item ${item.severity}`} key={item.id}>{item.severity === 'attention' ? <AlertTriangle size={19}/> : item.severity === 'positive' ? <CircleCheck size={19}/> : <Info size={19}/>}<div><strong>{item.title}</strong><p>{item.detail}</p></div></article>)}</div></section>}
 
@@ -95,11 +162,11 @@ export function FinanceAssistant({ state, budgetAcceptanceMode, acceptanceMode }
       <div className="assistant-modes" role="tablist" aria-label="Assistant mode"><button role="tab" aria-selected={mode === 'analysis'} className={mode === 'analysis' ? 'active' : ''} onClick={() => setMode('analysis')}><ChartNoAxesCombined size={17}/> Analysis</button><button role="tab" aria-selected={mode === 'question'} className={mode === 'question' ? 'active' : ''} onClick={() => setMode('question')}><MessageCircleQuestion size={17}/> Questions</button><button role="tab" aria-selected={mode === 'planning'} className={mode === 'planning' ? 'active' : ''} onClick={() => setMode('planning')}><Route size={17}/> Planning</button></div>
 
       <div className="assistant-engine" role="radiogroup" aria-label="Choose how the assistant runs">
-        <button type="button" role="radio" aria-checked={engine === 'hosted'} className={`assistant-engine-card ${engine === 'hosted' ? 'active' : ''}`} onClick={() => { setEngine('hosted'); setError('') }} disabled={loading}>
-          <Server size={18}/><div><strong>Hosted model</strong><span>Qwen3 4B analyst + critic, via the Finance Planner server — only with your consent, only for this session.</span></div>
+        <button type="button" role="radio" aria-checked={engine === 'hosted'} className={`assistant-engine-card ${engine === 'hosted' ? 'active' : ''}`} onClick={() => { setManualEngine('hosted'); setError('') }} disabled={loading || automaticLocalFallback}>
+          <Server size={18}/><div><strong>Hosted model</strong><span>{automaticLocalFallback ? 'Temporarily unavailable until the connection recovers.' : 'Default online mode via the Finance Planner server — only with your consent for this session.'}</span></div>
         </button>
-        <button type="button" role="radio" aria-checked={engine === 'local'} className={`assistant-engine-card ${engine === 'local' ? 'active' : ''}`} onClick={() => { setEngine('local'); setError('') }} disabled={loading}>
-          <HardDrive size={18}/><div><strong>On-device model</strong><span>Runs fully in your browser — larger first-time download, no server involved.</span></div>
+        <button type="button" role="radio" aria-checked={engine === 'local'} className={`assistant-engine-card ${engine === 'local' ? 'active' : ''}`} onClick={() => { setManualEngine('local'); setError('') }} disabled={loading}>
+          <HardDrive size={18}/><div><strong>On-device model</strong><span>{automaticLocalFallback ? 'Selected automatically because connectivity is limited.' : 'Optional while online. Runs in your browser and may need a larger first-time download.'}</span></div>
         </button>
       </div>
 
@@ -109,14 +176,14 @@ export function FinanceAssistant({ state, budgetAcceptanceMode, acceptanceMode }
         {showConsentDetail && <ul className="assistant-consent-detail">{WHAT_IS_SENT.map((item) => <li key={item}>{item}</li>)}</ul>}
       </div>}
 
-      {engine === 'local' && <div className="assistant-local-warning">
-        <p className="status-message" role="note"><Info size={18}/><span>The on-device model isn't downloaded yet. The first run may download several hundred megabytes and use noticeably more of your device's memory and battery than the hosted option. It stays cached in your browser after that.</span></p>
-        <label className="checkbox"><input type="checkbox" checked={localAcknowledged} onChange={(event) => setLocalAcknowledged(event.target.checked)} disabled={loading}/><span>I understand this will download data to my device.</span></label>
+      {engine === 'local' && !automaticLocalFallback && <div className="assistant-local-warning">
+        <p className="status-message" role="note"><Info size={18}/><span>The on-device model may require a several-hundred-megabyte first-time download and more memory/battery than hosted mode. Once cached, it can be used without the Finance Planner AI service.</span></p>
+        <label className="checkbox"><input type="checkbox" checked={localAcknowledged} onChange={(event) => setLocalAcknowledged(event.target.checked)} disabled={loading}/><span>I understand this may download model data to my device.</span></label>
       </div>}
 
       <label>Your question or goal<textarea value={question} onChange={(event) => setQuestion(event.target.value)} rows={5}/></label>
-      <button className="primary" onClick={() => void run()} disabled={runDisabled}>{loading ? <LoaderCircle className="spin" size={18}/> : <Send size={18}/>} {loading ? (engine === 'local' ? 'On-device model working…' : 'Analysis running…') : hostedConsentMissing ? 'Consent required' : localAckMissing ? 'Confirmation required' : 'Start assistant'}</button>
-      {loading && <div className="status-message" role="status" aria-live="polite"><LoaderCircle className="spin" size={18}/><div><strong>{engine === 'local' ? 'On-device model loading and running' : 'Building your financial analysis'}</strong><span>{engine === 'local' ? 'Model files load on the first run. Later runs can use the browser cache.' : 'Data is being aggregated, models consulted, and the answer prepared. This can take up to a minute.'}</span></div></div>}
+      <button className="primary" onClick={() => void run()} disabled={runDisabled}>{loading ? <LoaderCircle className="spin" size={18}/> : <Send size={18}/>} {loading ? (engine === 'local' ? 'On-device analysis running…' : 'Analysis running…') : hostedConsentMissing ? 'Consent required' : localAckMissing ? 'Confirmation required' : 'Start assistant'}</button>
+      {loading && <div className="status-message" role="status" aria-live="polite"><LoaderCircle className="spin" size={18}/><div><strong>{engine === 'local' ? 'Running on this device' : 'Building your financial analysis'}</strong><span>{engine === 'local' ? 'Finance Planner will stay local for this run. If the model cannot load, deterministic calculations are used instead.' : 'Data is being aggregated, models consulted, and the answer prepared. This can take up to a minute.'}</span></div></div>}
     </section>
 
     <section ref={answerRef} className="panel assistant-answer" aria-live="polite">
@@ -128,12 +195,10 @@ export function FinanceAssistant({ state, budgetAcceptanceMode, acceptanceMode }
     <section className="panel assistant-agent">
       <div className="panel-header"><div><p className="eyebrow">Suggested actions</p><h2>Proposed next steps</h2></div><span className="pill">Data quality: {DATA_QUALITY_LABELS[plan.dataQuality] ?? plan.dataQuality}</span></div>
       <p className="muted">The assistant only analyzes and prioritizes. It never makes payments or account changes without your explicit approval — and approval here only records your decision, it doesn't move money.</p>
-      <div className="transaction-list">{plan.actions.map((action) => <div className="transaction-row assistant-agent-row" key={action.id}>
-        <div><strong>{action.title}</strong><span>{action.rationale}{action.amountCents ? ` · ${(action.amountCents / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}` : ''}</span></div>
-        <IntelligenceBadge kind="calculated" label="Calculated · requires approval"/>
-        <span className="pill">{ACTION_STATUS_LABELS[action.status] ?? action.status}</span>
-        {action.status === 'proposed' && <div className="row-actions"><button aria-label={`Approve ${action.title}`} onClick={() => decide(action.id, 'approved')}><Check size={16}/></button><button aria-label={`Reject ${action.title}`} onClick={() => decide(action.id, 'rejected')}><X size={16}/></button></div>}
-      </div>)}</div>
+      <div className="assistant-agent-list">{plan.actions.map((action) => <article className="assistant-agent-row" key={action.id}>
+        <div className="assistant-agent-copy"><strong>{action.title}</strong><span>{action.rationale}{action.amountCents ? ` · ${(action.amountCents / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}` : ''}</span></div>
+        <div className="assistant-agent-meta"><IntelligenceBadge kind="calculated" label="Calculated · requires approval"/><span className="pill">{ACTION_STATUS_LABELS[action.status] ?? action.status}</span>{action.status === 'proposed' && <div className="row-actions"><button aria-label={`Approve ${action.title}`} onClick={() => decide(action.id, 'approved')}><Check size={16}/></button><button aria-label={`Reject ${action.title}`} onClick={() => decide(action.id, 'rejected')}><X size={16}/></button></div>}</div>
+      </article>)}</div>
     </section>
 
     <section className="assistant-grid">
