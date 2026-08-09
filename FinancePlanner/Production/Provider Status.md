@@ -1,0 +1,92 @@
+# Provider Status
+
+Strict, evidence-based status per external integration. "Code exists" is never treated as "verified working." See [[Memory System]] for source-of-truth precedence — re-check this note against current code/CI before relying on it for a release decision.
+
+---
+
+## GoCardless (bank data, PSD2 AISP)
+
+Implementation: **implemented** (real GoCardless Bank Account Data API client, `server/src/providers.js` `GoCardlessProvider`)
+Configuration: **optional** (requires `GOCARDLESS_SECRET_ID`/`GOCARDLESS_SECRET_KEY`)
+Provider-dependent: yes
+Runtime verified: **partial — control-plane access only**, via `runtime-canaries.yml` (weekly + manual, credential-gated, non-blocking unless `require_all`)
+Production verified: **no evidence found**
+Last evidence: none of a completed end-to-end consent→sync→disconnect cycle in-repo; `docs/issue-105-live-verification.md` requires this as a manual, human-recorded step
+Current limitations: README lists "live GoCardless... certification and reconciliation testing" as outstanding; `docs/bank-connection-production.md` states passing unit tests explicitly does not substitute for deployment/sandbox evidence
+Relevant code/docs: `server/src/providers.js`, `docs/OPEN_BANKING_ARCHITECTURE.md`, `docs/issue-105-provider-setup.md`, `docs/issue-105-live-verification.md`, `docs/bank-connection-production.md`, `docs/bank-production-runbook.md`
+
+---
+
+## PayPal
+
+Implementation: **implemented** (real PayPal REST client, owner + partner modes, `server/src/providers.js` `PayPalProvider`)
+Configuration: **optional** (requires `PAYPAL_CLIENT_ID`/`PAYPAL_CLIENT_SECRET`; owner mode also requires `PAYPAL_OWNER_USER_ID`; partner mode also requires `PAYPAL_PARTNER_MERCHANT_ID`)
+Provider-dependent: yes
+Runtime verified: **partial — control-plane access only**, via `runtime-canaries.yml` (same caveats as GoCardless)
+Production verified: **no evidence found**
+Last evidence: none of a completed sandbox redirect→sync→disconnect cycle in-repo; `docs/issue-105-live-verification.md` requires manual human verification
+Current limitations: owner mode is explicitly documented as *not* equivalent to third-party user authorization; README lists live PayPal certification as outstanding
+Relevant code/docs: `server/src/providers.js`, `docs/OPEN_BANKING_ARCHITECTURE.md` ("PayPal modes"), `docs/issue-105-live-verification.md`
+
+---
+
+## finapi
+
+Implementation: **absent** (explicit unavailable placeholder in the provider registry, `server/src/providers.js`)
+Configuration: n/a
+Provider-dependent: yes (by design, once implemented)
+Runtime verified: n/a
+Production verified: n/a
+Current limitations: intentionally not implemented yet; exists as a registry slot so a real adapter can be added without touching COBOL banking-domain rules
+Relevant code/docs: `docs/OPEN_BANKING_ARCHITECTURE.md`
+
+---
+
+## Google OAuth (sign-in)
+
+Implementation: **implemented** (`server/src/auth-router.js`, `google-auth-library` `OAuth2Client`, state/nonce/ID-token verification)
+Configuration: **optional** (requires `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`; Compose default `AUTH_MODE=google`)
+Provider-dependent: yes
+Runtime verified: **no evidence found** — no CI workflow performs a live Google OAuth handshake; CI's own production-acceptance browser suite runs under `AUTH_MODE=local`, not real Google auth
+Production verified: **no evidence found**
+Current limitations: `docs/issue-105-live-verification.md` explicitly defers live verification to a human-completed, human-recorded step
+Relevant code/docs: `server/src/auth-router.js`, `server/src/runtime-security.js`, `docs/issue-105-live-verification.md`, `.github/workflows/production-acceptance.yml`
+
+---
+
+## WebAuthn / Passkeys
+
+Implementation: **implemented** (`@simplewebauthn/server`, `server/src/auth-router.js`, resident-key + user-verification required)
+Configuration: **configured** (no external credentials needed — relies on the browser/authenticator, not a third-party API)
+Provider-dependent: no (standards-based, not a hosted provider) — but device/browser-dependent
+Runtime verified: **partial** — unit-level compatibility coverage exists (`server/test/passkey-authenticator-compatibility.test.js`), but this does not exercise real authenticator hardware
+Production verified: **no evidence found** — `docs/issue-105-live-verification.md` requires manual verification on Android, iOS and Windows over HTTPS with real hardware, explicitly not yet proven
+Current limitations: enumeration-prevention fix landed 2026-08-02; physical-device matrix outstanding
+Relevant code/docs: `server/src/auth-router.js`, `server/test/passkey-authenticator-compatibility.test.js`, `docs/issue-105-live-verification.md`
+
+---
+
+## Hosted AI (Hugging Face)
+
+Implementation: **implemented** (`server/src/huggingFaceClient.js`, `ai-router.js`, `ai-ensemble.js`, consent-gated, revision-pinned, allowlisted)
+Configuration: **optional** (requires `HF_TOKEN`; model/revision pinned via `ai/model-lock.json` + `HF_MODEL`/`HF_MODEL_REVISION`)
+Provider-dependent: yes
+Runtime verified: **partial** — `hosted-ai-acceptance.yml` runs `scripts/live-ai-acceptance.mjs` on every PR + manual dispatch, but `require_live_ai` (whether a real successful inference call is mandatory) defaults `false` and is only forced `true` on manual dispatch; `runtime-canaries.yml` skips (not fails) if `HF_TOKEN` is absent
+Production verified: **no evidence found** — `server/src/ai-capabilities.js` models "not verified" as its own default state (`liveVerification` defaults to `{ verified: false, reason: 'live_acceptance_not_recorded' }` unless `HF_LIVE_VERIFIED_AT` is explicitly set)
+Current limitations: ordinary PR CI runs do not require a real successful hosted-inference call by default; degrades to deterministic fallback on malformed/unavailable output by design
+Relevant code/docs: `server/src/ai-capabilities.js`, `server/src/ai-ensemble.js`, `docs/HUGGINGFACE_AI.md`, `docs/AI_PRODUCTION.md`, `.github/workflows/hosted-ai-acceptance.yml`, `.github/workflows/runtime-canaries.yml`
+
+---
+
+## Local AI (Transformers.js / ONNX, browser-side)
+
+Implementation: **implemented** (`src/aiModels.ts`, served from app origin, not a CDN)
+Configuration: **configured** (no external account/credentials — models vendored/fetched from app origin)
+Provider-dependent: no
+Runtime verified: **unknown** — no explicit in-repo evidence of measured runtime behavior (load success rate, inference latency) across real browsers was found in this pass; `verify-ai.mjs` and related gate scripts run in CI but this report did not independently re-verify what exactly they assert
+Production verified: **no evidence found**
+Relevant code/docs: `src/aiModels.ts`, `README.md` ("AI architecture")
+
+---
+
+Related: [[Authentication]], [[Bank Connections]], [[PayPal]], [[AI System]], [[Known Issues and Limitations]], [[Rejected Approaches]]
