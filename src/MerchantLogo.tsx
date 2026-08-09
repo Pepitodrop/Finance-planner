@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { ArrowDownRight, ArrowUpRight } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { ArrowDownRight, ArrowUpRight, BriefcaseBusiness, Dumbbell, Gamepad2, House, Landmark, ShoppingBasket, TrainFront, Utensils } from 'lucide-react'
 import { merchantLogoUrl, resolveMerchantLogo } from './merchant-logos'
 import type { TransactionType } from './types'
 
@@ -14,21 +14,28 @@ function initials(description: string): string {
   return parts.slice(0, 2).map((part) => part[0]?.toUpperCase()).join('')
 }
 
+function fallbackGraphic(description: string, type: TransactionType): ReactNode {
+  if (/minecraft|steam|xbox|playstation|nintendo|game/i.test(description)) return <Gamepad2 size={19}/>
+  if (/restaurant|cafe|café|essen|food/i.test(description)) return <Utensils size={19}/>
+  if (/rewe|edeka|lidl|aldi|supermarkt|grocery/i.test(description)) return <ShoppingBasket size={19}/>
+  if (/deutschlandticket|bahn|train|transit|bus|mobilität/i.test(description)) return <TrainFront size={19}/>
+  if (/miete|rent|wohnung|housing/i.test(description)) return <House size={19}/>
+  if (/fitness|gym/i.test(description)) return <Dumbbell size={19}/>
+  if (/gehalt|salary|werkstudent|payroll|lohn/i.test(description)) return <BriefcaseBusiness size={19}/>
+  if (/bank|konto|account|sparkasse/i.test(description)) return <Landmark size={19}/>
+  return <span className="merchant-initials">{initials(description)}</span>
+}
+
 export function MerchantLogo({ description, type }: MerchantLogoProps) {
   const [failed, setFailed] = useState(false)
   const logo = resolveMerchantLogo(description)
-  // Acceptance-fixture runs assert that the app never contacts a real
-  // external provider (see the "provider-boundary proof" in the Data &
-  // Privacy acceptance script), so the branded <img> request to
-  // cdn.simpleicons.org must never fire there -- render the same fallback
-  // used when a real logo request fails.
   const fixturesActive = import.meta.env.VITE_ACCEPTANCE_FIXTURES === 'true'
 
   useEffect(() => setFailed(false), [description])
 
   if (logo && !failed && !fixturesActive) {
     return (
-      <span className="transaction-merchant-logo branded" title={logo.label} aria-label={`${logo.label} Logo`}>
+      <span className="transaction-merchant-logo branded" title={logo.label} aria-label={`${logo.label} logo`}>
         <img
           src={merchantLogoUrl(logo)}
           alt=""
@@ -45,9 +52,9 @@ export function MerchantLogo({ description, type }: MerchantLogoProps) {
 
   return (
     <span className={`transaction-merchant-logo fallback ${type}`} aria-hidden="true">
-      <span className="merchant-initials">{initials(description)}</span>
+      <span className="merchant-fallback-graphic">{fallbackGraphic(description, type)}</span>
       <span className="merchant-direction">
-        {type === 'income' ? <ArrowUpRight size={11}/> : <ArrowDownRight size={11}/>}
+        {type === 'income' ? <ArrowUpRight size={10}/> : <ArrowDownRight size={10}/>}
       </span>
     </span>
   )
