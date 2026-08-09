@@ -4,6 +4,10 @@
 
 A privacy-focused personal finance application: accounts, balances, income/expenses, savings goals and recurring payments, with deterministic (integer-cents) financial calculations, an installable PWA, a native Android TWA package, authenticated cross-device sync, local browser AI, optional governed hosted AI, and bank/PayPal connector integrations. Status per README: "production-oriented personal MVP" — permanent Android signing, Play publication, independent security certification and live-bank-provider certification are explicitly still outstanding.
 
+## Graph navigation
+
+Start with [[Knowledge Graph]] when you want to understand how architecture, features, decisions, provider evidence, risks, testing, and production concerns connect to each other. Use this index as the directory-style overview; use the graph map and peer links for relationship-centric navigation.
+
 ## Current architecture
 
 React/TypeScript + Vite frontend, Node.js connector backend, PostgreSQL as the canonical cross-device store, GnuCOBOL for deterministic finance/banking-domain logic. See [[System Architecture]] for the full picture, [[Frontend]] and [[Backend]] for each side, [[Data and Persistence]] for the sync/storage model, and [[COBOL Domain Core]] for the deterministic-finance boundary.
@@ -43,4 +47,4 @@ See [[Architecture Decisions]] and [[Security Decisions]] for the reasoning behi
 
 ## Memory usage
 
-See [[Memory System]] for what belongs in this vault, what doesn't, and the source-of-truth precedence future sessions must follow.
+See [[Memory System]] for what belongs in this vault, the graph-first maintenance rules, and the source-of-truth precedence future sessions must follow. See [[Knowledge Graph]] for the cross-domain relationship map.
