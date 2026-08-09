@@ -5,15 +5,16 @@ import { publicModelCatalog } from '../src/ai-model-catalog.js'
 
 test('catalog distinguishes integrated and worker-ready capabilities', () => {
   const models = publicModelCatalog()
-  assert.equal(models.length, 7)
+  assert.equal(models.length, 6)
   assert.equal(models.filter((model) => model.integrationStatus === 'integrated').length, 2)
   assert.equal(models.filter((model) => model.integrationStatus === 'integrated-optional').length, 1)
-  assert.equal(models.filter((model) => model.integrationStatus === 'worker-ready').length, 4)
+  assert.equal(models.filter((model) => model.integrationStatus === 'worker-ready').length, 3)
   assert.equal(models.filter((model) => model.enabledByDefault).length, 2)
   assert.ok(models.some((model) => model.capability === 'sustainable-receipt-review'
     && model.integrationStatus === 'integrated'
     && model.license === 'Apache-2.0'))
   assert.ok(models.every((model) => typeof model.license === 'string' && model.license.length > 0))
+  assert.ok(models.every((model) => model.capability !== 'voice-entry'))
 })
 
 test('abstains when history is too sparse for a reliable prediction', () => {
