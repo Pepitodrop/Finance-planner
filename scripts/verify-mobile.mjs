@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 
-const [manifestRaw, serviceWorker, index, main, bootstrap, mobileCss, vaultGate, mobileSecurity, mobileRuntime, mobileHealth, nginx] = await Promise.all([
+const [manifestRaw, serviceWorker, index, main, bootstrap, mobileCss, vaultGate, mobileSecurity, mobileRuntime, mobileHealth, nginx, nginxSecurityHeaders] = await Promise.all([
   readFile(new URL('../public/manifest.webmanifest', import.meta.url), 'utf8'),
   readFile(new URL('../public/sw.js', import.meta.url), 'utf8'),
   readFile(new URL('../index.html', import.meta.url), 'utf8'),
@@ -13,6 +13,7 @@ const [manifestRaw, serviceWorker, index, main, bootstrap, mobileCss, vaultGate,
   readFile(new URL('../src/MobileRuntime.tsx', import.meta.url), 'utf8'),
   readFile(new URL('../src/mobile-health.ts', import.meta.url), 'utf8'),
   readFile(new URL('../deploy/nginx.conf', import.meta.url), 'utf8'),
+  readFile(new URL('../deploy/security-headers.conf', import.meta.url), 'utf8'),
 ])
 const entry = `${main}\n${bootstrap}`
 
@@ -62,9 +63,13 @@ assert.match(nginx, /proxy_pass http:\/\/connector:8787;/)
 
 // Regression: the production nginx config previously had no HSTS header even though
 // server.js sends one, and its CSP connect-src hardcoded http://localhost:*/ws://localhost:*
-// (a dev-only convenience) into every production response.
-assert.match(nginx, /Strict-Transport-Security "max-age=\d+; includeSubDomains"/)
+// (a dev-only convenience) into every production response. The shared security
+// headers now live in deploy/security-headers.conf, included by both the server
+// block and any location that declares its own add_header (nginx does not merge
+// add_header across such locations).
+assert.match(nginxSecurityHeaders, /Strict-Transport-Security "max-age=\d+; includeSubDomains"/)
 assert.doesNotMatch(nginx, /localhost/, 'production nginx.conf must not reference localhost')
+assert.doesNotMatch(nginxSecurityHeaders, /localhost/, 'production security headers must not reference localhost')
 
 for (const path of ['/api/', '/connectors/', '/oauth/']) {
   assert.ok(serviceWorker.includes(path), `service worker must exclude sensitive path ${path}`)
