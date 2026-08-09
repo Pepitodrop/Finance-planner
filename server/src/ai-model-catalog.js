@@ -45,15 +45,6 @@ export const AI_MODEL_CATALOG = Object.freeze([
     purpose: 'Small multilingual embedding model for low-resource semantic matching.',
   },
   {
-    id: 'openai/whisper-tiny',
-    capability: 'voice-entry',
-    execution: 'local-optional',
-    integrationStatus: 'worker-ready',
-    enabledByDefault: false,
-    license: 'MIT',
-    purpose: 'Open speech recognition model for short German or English finance-entry transcription.',
-  },
-  {
     id: 'microsoft/Florence-2-base',
     capability: 'receipt-extraction',
     execution: 'local-optional',
