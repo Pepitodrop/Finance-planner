@@ -78,11 +78,6 @@ export const planningAcceptanceState: AppState = {
     { id:'planning-course',name:'Professional course and certification with an intentionally long title',targetCents:350000,currentCents:65000,targetDate:'2027-04-30' },
     { id:'planning-home',name:'Future home deposit',targetCents:2500000,currentCents:410000,targetDate:'2029-09-30' },
   ],
-  goals: [
-    { id:'planning-emergency',name:'Emergency fund',targetCents:600000,currentCents:360000,targetDate:'2026-12-15' },
-    { id:'planning-course',name:'Professional course and certification with an intentionally long title',targetCents:350000,currentCents:65000,targetDate:'2027-04-30' },
-    { id:'planning-home',name:'Future home deposit',targetCents:2500000,currentCents:410000,targetDate:'2029-09-30' },
-  ],
 }
 
 /**
