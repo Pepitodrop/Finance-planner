@@ -30,6 +30,12 @@
   height: 100%;
 }
 
+/* The Transactions header already owns the page's add action. Keep an empty
+   table informative without rendering a second competing CTA below it. */
+.transactions-empty > button {
+  display: none;
+}
+
 /* The shared topbar appears only on secondary destinations. Creating a
    transaction is already available from Dashboard and Transactions, so the
    unrelated global "Manual entry" button was misleading on Account, Data,
