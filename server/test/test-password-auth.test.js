@@ -17,21 +17,21 @@ test('test passwords enforce a minimum length', () => {
   assert.throws(() => validateTestPassword('too-short'), /between 12 and 200/)
 })
 
-test('test-password login remains server provisioned and has no signup route', async () => {
+test('configured test users remain server provisioned', async () => {
   const router = await readFile(new URL('../src/auth-router.js', import.meta.url), 'utf8')
   assert.match(router, /TEST_ACCOUNT_EMAIL/)
   assert.match(router, /TEST_ACCOUNT_PASSWORD_HASH/)
-  assert.match(router, /\/api\/auth\/test-password\/login/)
-  assert.doesNotMatch(router, /test-password\/signup/)
   assert.match(router, /startsWith\('test:'\)/)
+  assert.doesNotMatch(router, /test-password\/signup/)
 })
 
-test('test-password sign-in stays out of normal production UX and only appears in acceptance-fixture builds', async () => {
+test('normal production UX sends all email/password logins through the general login endpoint', async () => {
+  const router = await readFile(new URL('../src/auth-router.js', import.meta.url), 'utf8')
   const ui = await readFile(new URL('../../src/AuthGate.tsx', import.meta.url), 'utf8')
-  assert.match(ui, /Sign in with test password/)
-  // The test-account form must be nested inside the VITE_ACCEPTANCE_FIXTURES
-  // gate, not rendered unconditionally on the normal login screen.
-  const gateIndex = ui.indexOf("VITE_ACCEPTANCE_FIXTURES === 'true'")
-  const formIndex = ui.indexOf('Sign in with test password')
-  assert.ok(gateIndex !== -1 && formIndex !== -1 && gateIndex < formIndex, 'test-password form must be gated behind VITE_ACCEPTANCE_FIXTURES')
+  assert.match(router, /\/api\/auth\/password\/login/)
+  assert.match(router, /\/api\/auth\/password\/register/)
+  assert.match(ui, /\/api\/auth\/password\/login/)
+  assert.match(ui, /\/api\/auth\/password\/register/)
+  assert.match(ui, /The same email\/password form also works for the configured test account/)
+  assert.doesNotMatch(ui, /Sign in with test password/)
 })
