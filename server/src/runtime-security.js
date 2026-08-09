@@ -55,6 +55,9 @@ export class SlidingWindowRateLimiter {
 export function classifyError(error) {
   if (error instanceof HttpError) return { status: error.status, code: error.code, message: error.message }
   const message = error instanceof Error ? error.message : 'Unexpected server error.'
+  if (/Invalid email or password/i.test(message)) return { status: 401, code: 'invalid_credentials', message: 'Invalid email or password.' }
+  if (/account with this email address already exists/i.test(message)) return { status: 409, code: 'account_exists', message }
+  if (/Enter a valid email address|Password must contain between 12 and 200 characters|Name must contain at most 100 characters/i.test(message)) return { status: 400, code: 'invalid_credentials_input', message }
   if (/Authentication required|Invalid session|Session expired|Session revoked/i.test(message)) return { status: 401, code: 'unauthorized', message: 'Authentication required.' }
   if (/Request body too large/i.test(message)) return { status: 413, code: 'payload_too_large', message }
   if (/Content-Type must be application\/json/i.test(message)) return { status: 415, code: 'unsupported_media_type', message }
