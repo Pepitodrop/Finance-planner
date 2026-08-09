@@ -155,7 +155,7 @@ export function VaultGate({ children, userId }: VaultGateProps) {
     const showConflict = forcedConflict || (cloudPhase === 'conflict' && !conflictDismissed)
     return <>
       {typeof children === 'function' ? children(lockNow) : children}
-      {showConflict && <VaultConflict onClose={() => { setConflictDismissed(true); setForcedConflict(false) }}/>}    
+      {showConflict && <VaultConflict onClose={() => { setConflictDismissed(true); setForcedConflict(false) }}/>}
     </>
   }
 

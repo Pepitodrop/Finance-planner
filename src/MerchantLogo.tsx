@@ -14,7 +14,7 @@ function initials(description: string): string {
   return parts.slice(0, 2).map((part) => part[0]?.toUpperCase()).join('')
 }
 
-function fallbackGraphic(description: string, type: TransactionType): ReactNode {
+function fallbackGraphic(description: string): ReactNode {
   if (/minecraft|steam|xbox|playstation|nintendo|game/i.test(description)) return <Gamepad2 size={19}/>
   if (/restaurant|cafe|café|essen|food/i.test(description)) return <Utensils size={19}/>
   if (/rewe|edeka|lidl|aldi|supermarkt|grocery/i.test(description)) return <ShoppingBasket size={19}/>
@@ -52,7 +52,7 @@ export function MerchantLogo({ description, type }: MerchantLogoProps) {
 
   return (
     <span className={`transaction-merchant-logo fallback ${type}`} aria-hidden="true">
-      <span className="merchant-fallback-graphic">{fallbackGraphic(description, type)}</span>
+      <span className="merchant-fallback-graphic">{fallbackGraphic(description)}</span>
       <span className="merchant-direction">
         {type === 'income' ? <ArrowUpRight size={10}/> : <ArrowDownRight size={10}/>}
       </span>

@@ -635,7 +635,7 @@ async function run() {
     // -------------------------------------------------------------
     report.states['data-overview'] = await captureState(client, sessionId, 'data-overview', 'data-data-ready', {
       beforeEach: async () => { await ensureDataOverview(client, sessionId) },
-      waitExpr: `document.body?.innerText.includes('Reset financial data') && document.body?.innerText.includes('Delete account')`,
+      waitExpr: `document.body?.innerText.includes('Clear financial data') && document.body?.innerText.includes('Delete account')`,
       waitDescription: 'data-overview',
     })
     report.interactions.dataOverviewHierarchy = await evaluate(client, sessionId, `(() => {
@@ -750,29 +750,27 @@ async function run() {
     // -- acceptance fixtures must never mutate real persistent user data.
     // -------------------------------------------------------------
     report.states['data-reset-confirmation'] = await captureState(client, sessionId, 'data-reset-confirmation', 'data-data-ready', {
-      beforeEach: async () => { await ensureDataFixture(client, sessionId, 'reset', `Boolean(document.querySelector('[role=dialog]')) && document.body?.innerText.includes('Reset financial data?')`) },
-      waitExpr: `Boolean(document.querySelector('[role=dialog]')) && document.body?.innerText.includes('Reset financial data?')`,
+      beforeEach: async () => { await ensureDataFixture(client, sessionId, 'reset', `Boolean(document.querySelector('[role=dialog]')) && document.body?.innerText.includes('Clear financial data?')`) },
+      waitExpr: `Boolean(document.querySelector('[role=dialog]')) && document.body?.innerText.includes('Clear financial data?')`,
       waitDescription: 'data-reset-confirmation',
       isModalDialog: true,
     })
     report.interactions.resetCopy = await evaluate(client, sessionId, `(() => ({
-      // The dialog's own correct copy explicitly denies being an empty
-      // state ("...with example data, not an empty state") -- allow that
-      // exact legitimate denial while still catching any other, wrongly
-      // empty-claiming use, matching the same not-a-fraud-check pattern
-      // used by finance-intelligence-production-acceptance.mjs.
-      neverClaimsEmpty: !/\\bempty\\b/i.test(document.body.innerText.replace(/not an empty state/i, '')),
-      saysExampleData: document.body.innerText.includes('example data, not an empty state'),
+      // Production behavior is a genuinely empty state, never a reseeded
+      // demo/example dataset -- the dialog must say so honestly, not hide
+      // behind vague copy or (worse) promise example data will appear.
+      saysEmptyState: document.body.innerText.includes('empty state'),
+      saysNoExampleData: /no example or demo data/i.test(document.body.innerText),
       distinctFromDelete: !document.body.innerText.includes('cannot be undone'),
     }))()`)
-    assert.equal(report.interactions.resetCopy.neverClaimsEmpty, true, 'Reset must never claim the resulting state is empty')
-    assert.equal(report.interactions.resetCopy.saysExampleData, true)
+    assert.equal(report.interactions.resetCopy.saysEmptyState, true, 'Clear financial data must honestly state the result is an empty state')
+    assert.equal(report.interactions.resetCopy.saysNoExampleData, true, 'Clear financial data must explicitly promise no example/demo data is inserted')
     await evaluate(client, sessionId, `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
     await waitFor(client, sessionId, `!document.querySelector('[role=dialog]')`, 'reset dialog closed without confirming')
 
     report.states['data-reset-complete'] = await captureState(client, sessionId, 'data-reset-complete', 'data-data-ready', {
-      beforeEach: async () => { await ensureDataFixture(client, sessionId, 'reset-complete', `document.body?.innerText.includes('now show Finance Planner')`) },
-      waitExpr: `document.body?.innerText.includes('now show Finance Planner')`,
+      beforeEach: async () => { await ensureDataFixture(client, sessionId, 'reset-complete', `document.body?.innerText.includes('now empty')`) },
+      waitExpr: `document.body?.innerText.includes('now empty')`,
       waitDescription: 'data-reset-complete',
       viewports: [[390, 844]],
       // The confirmation renders after the Reset section, near the bottom
@@ -782,8 +780,8 @@ async function run() {
       // (the completion text itself) below the fold.
       scrollToSelector: '.success-message',
     })
-    report.interactions.resetCompleteAccurate = await evaluate(client, sessionId, `document.body.innerText.includes('example dataset') && !/\\bempty\\b/i.test(document.body.innerText)`)
-    assert.equal(report.interactions.resetCompleteAccurate, true, 'Reset completion copy must accurately describe the resulting demo/baseline data, never "empty"')
+    report.interactions.resetCompleteAccurate = await evaluate(client, sessionId, `document.body.innerText.includes('now empty')`)
+    assert.equal(report.interactions.resetCompleteAccurate, true, 'Reset completion copy must honestly confirm the resulting state is empty, never claim reseeded example/demo data')
 
     // -------------------------------------------------------------
     // DATA-09 / DATA-10 / DATA-11: Delete account typed gate, final
@@ -966,7 +964,7 @@ async function run() {
     const forcedColorsTargets = [
       ['more-grouped', 'data-more-ready', async () => { await ensureDestination(client, sessionId, 'Dashboard', 'data-dashboard-ready'); await clickButton(client, sessionId, 'More'); await waitFor(client, sessionId, `Boolean(document.querySelector('[data-more-ready=true]'))`, 'more sheet for forced-colors') }],
       ['data-csv-warning', 'data-data-ready', async () => { await ensureDataFixture(client, sessionId, 'csv-warning', `Boolean(document.querySelector('[role=dialog]')) && document.body?.innerText.includes("won't be encrypted")`) }],
-      ['data-reset-confirmation', 'data-data-ready', async () => { await ensureDataFixture(client, sessionId, 'reset', `Boolean(document.querySelector('[role=dialog]')) && document.body?.innerText.includes('Reset financial data?')`) }],
+      ['data-reset-confirmation', 'data-data-ready', async () => { await ensureDataFixture(client, sessionId, 'reset', `Boolean(document.querySelector('[role=dialog]')) && document.body?.innerText.includes('Clear financial data?')`) }],
       ['data-delete-gate', 'data-data-ready', async () => { await ensureDataFixture(client, sessionId, 'delete-account', `document.body?.innerText.includes('to confirm') && Boolean(document.querySelector('.data-tools-subpage--danger'))`) }],
       ['data-delete-final', 'data-data-ready', async () => { await ensureDataFixture(client, sessionId, 'delete-account-final', `Boolean(document.querySelector('[role=alertdialog]')) && document.body?.innerText.includes('Permanently delete your account?')`) }],
       ['subscriptions-connected', 'data-subscriptions-ready', async () => { await ensureDestination(client, sessionId, 'Subscriptions', 'data-subscriptions-ready'); await setFixture(client, sessionId, 'connected'); await waitFor(client, sessionId, `document.body?.innerText.includes('Synced from Google')`, 'connected for forced-colors') }],
