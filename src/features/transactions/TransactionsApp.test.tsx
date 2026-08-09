@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../../App'
 import type { AuthUser } from '../../AuthGate'
 import { FrontendExperience } from '../../FrontendExperience'
-import { initialState } from '../../data'
+import { accountsAcceptanceState } from '../../data'
 import { configureAuthenticatedStorage, setUnlockedState } from '../../storage'
 
 const USER_ID = 'transactions-integration-user'
@@ -18,7 +18,7 @@ describe('Transactions App integration', () => {
   beforeEach(() => {
     localStorage.clear()
     configureAuthenticatedStorage(USER_ID)
-    setUnlockedState(structuredClone(initialState))
+    setUnlockedState(structuredClone(accountsAcceptanceState))
   })
   afterEach(() => cleanup())
 
@@ -30,11 +30,10 @@ describe('Transactions App integration', () => {
     expect(screen.getByRole('dialog', { name: 'Add transaction' })).toBeInTheDocument()
     expect(screen.getByLabelText('Description')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
-    await user.selectOptions(screen.getByLabelText('Date scope'), 'all')
-    await user.click(screen.getAllByRole('button', { name: 'Actions for Warmmiete' })[0])
+    await user.click(screen.getAllByRole('button', { name: 'Actions for Rent payment' })[0])
     await user.click(screen.getByRole('menuitem', { name: 'Edit' }))
     expect(screen.getByRole('dialog', { name: 'Edit transaction' })).toBeInTheDocument()
-    expect(screen.getByLabelText('Description')).toHaveValue('Warmmiete')
+    expect(screen.getByLabelText('Description')).toHaveValue('Rent payment')
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeInTheDocument()
   })
 
@@ -42,12 +41,11 @@ describe('Transactions App integration', () => {
     const user = userEvent.setup()
     renderApp()
     await user.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Transactions' }))
-    await user.selectOptions(screen.getByLabelText('Date scope'), 'all')
-    await user.click(screen.getAllByRole('button', { name: 'Actions for Warmmiete' })[0])
+    await user.click(screen.getAllByRole('button', { name: 'Actions for Rent payment' })[0])
     await user.click(screen.getByRole('menuitem', { name: 'Delete' }))
-    expect(screen.getByRole('status')).toHaveTextContent('“Warmmiete” was deleted.')
-    expect(screen.queryByRole('button', { name: 'Actions for Warmmiete' })).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('“Rent payment” was deleted.')
+    expect(screen.queryByRole('button', { name: 'Actions for Rent payment' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Undo' }))
-    expect(screen.getAllByRole('button', { name: 'Actions for Warmmiete' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'Actions for Rent payment' })).toHaveLength(2)
   })
 })
