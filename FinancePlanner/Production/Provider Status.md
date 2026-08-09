@@ -4,7 +4,9 @@ Strict, evidence-based status per external integration. "Code exists" is never t
 
 ## Runtime-evidence rule
 
-A workflow definition proves that a runtime check **can** be executed; it does not prove that the provider was successfully exercised. Any `Runtime verified` value other than `no`, `unknown`, or `n/a` must cite a concrete dated GitHub Actions run and its retained artifact/result. If no such execution evidence is pinned, keep the integration unverified rather than inferring success from workflow existence or unit tests.
+A workflow definition proves that a runtime check **can** be executed; it does not prove that a provider was successfully exercised. For external/provider/device-dependent integrations, any `Runtime verified` value other than `no`, `unknown`, or `n/a` must cite concrete dated execution evidence such as a successful GitHub Actions run and retained artifact/result. If no such execution evidence is pinned, keep the integration unverified rather than inferring success from workflow existence or unit tests.
+
+For first-party internal flows with no external provider (for example Finance Planner email/password authentication), a local production-style runtime exercise may be recorded when the environment and real endpoints/storage used are stated explicitly. It must be labeled **local production-style runtime verified**, never simply "runtime verified," and it remains separate from **production-deployment verified** until the deployed production host is exercised.
 
 ---
 
@@ -51,8 +53,8 @@ Relevant code/docs: `docs/OPEN_BANKING_ARCHITECTURE.md`
 Implementation: **implemented** (`server/src/password-auth.js` scrypt hashing/verification, `server/src/auth-router.js` `/api/auth/password/register` + `/api/auth/password/login`, `src/AuthGate.tsx` UI)
 Configuration: **always available** (no external credentials — server-side-only, no third-party dependency)
 Provider-dependent: no
-Runtime verified: **yes** — `scripts/auth-security-production-acceptance.mjs` drives real registration and login through the actual endpoints against a Postgres-backed connector (not mocked); re-run locally 2026-08-09 against a fresh `postgres:17-bookworm` container + `vite build`+`vite preview`, matching `production-acceptance.yml` exactly. Passed.
-Production verified: **no evidence found** — the acceptance run above is CI-equivalent, not a production deployment exercise
+Runtime verified: **local production-style: yes; deployed production host: no** — `scripts/auth-security-production-acceptance.mjs` drives real registration and login through the actual endpoints against a Postgres-backed connector (not mocked); re-run locally 2026-08-09 against a fresh `postgres:17-bookworm` container + `vite build` + `vite preview`, matching `production-acceptance.yml`. Passed. This verifies the real application path in a production-like local environment, not `finance.luisbenedikt.de` or any other deployed production host.
+Production verified: **no evidence found** — the acceptance run above is local/CI-equivalent, not a production deployment exercise
 Current limitations: a user who registered via Google first cannot later add a password to the same account (register rejects an already-known email) — no password-add-later path exists yet; this is a UX gap, not a security or duplicate-identity bug (see [[Authentication]])
 Relevant code/docs: `server/src/password-auth.js`, `server/src/auth-router.js`, `src/AuthGate.tsx`, `scripts/auth-security-production-acceptance.mjs`
 
@@ -72,13 +74,13 @@ Relevant code/docs: `server/src/auth-router.js`, `server/src/runtime-security.js
 
 ## WebAuthn / Passkeys
 
-Implementation: **implemented** (`@simplewebauthn/server`, `server/src/auth-router.js`, resident-key + user-verification required)
+Implementation: **implemented** (`@simplewebauthn/server`, `server/src/auth-router.js`, resident-key + user-verification required; post-login enrollment in `src/AuthGate.tsx` via `@simplewebauthn/browser`)
 Configuration: **configured** (no external credentials needed — relies on the browser/authenticator, not a third-party API)
 Provider-dependent: no (standards-based, not a hosted provider) — but device/browser-dependent
 Runtime verified: **no real-authenticator runtime evidence found** — unit-level compatibility coverage exists (`server/test/passkey-authenticator-compatibility.test.js`), but unit tests are not runtime evidence and do not exercise real authenticator hardware
 Production verified: **no evidence found** — `docs/issue-105-live-verification.md` requires manual verification on Android, iOS and Windows over HTTPS with real hardware, explicitly not yet proven
-Current limitations: enumeration-prevention fix landed 2026-08-02; physical-device matrix outstanding
-Relevant code/docs: `server/src/auth-router.js`, `server/test/passkey-authenticator-compatibility.test.js`, `docs/issue-105-live-verification.md`
+Current limitations: enumeration-prevention fix landed 2026-08-02; physical-device matrix outstanding. The obsolete pre-redesign pre-auth passkey client (`src/passkeys.ts`) and its account-memory test were removed in PR #131; this does not remove the active post-login enrollment path.
+Relevant code/docs: `server/src/auth-router.js`, `src/AuthGate.tsx`, `server/test/passkey-authenticator-compatibility.test.js`, `docs/issue-105-live-verification.md`
 
 ---
 
