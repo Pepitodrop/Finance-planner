@@ -9,11 +9,12 @@ import {
   hasLegacyPlaintextState,
   loadLegacyState,
   prepareNewDeviceCloudBootstrap,
+  saveState,
   setUnlockedState,
   subscribeCloudSyncStatus,
   synchronizeUnlockedState,
 } from './storage'
-import { emptyProductionState } from './data'
+import { emptyProductionState, isLegacyDemoState } from './data'
 import type { AppState } from './types'
 import { createVault, hasEncryptedVault, lockVault, unlockVault } from './vault'
 import { VaultConflict } from './VaultConflict'
@@ -54,10 +55,6 @@ export function VaultGate({ children, userId }: VaultGateProps) {
 
   useEffect(() => {
     if (mode !== 'open' || import.meta.env.VITE_ACCEPTANCE_FIXTURES !== 'true') return
-    // Deterministic, build-time-gated presentation states for Step 11
-    // reference screenshots (VAULT-04, SECURITY-01). Never calls the real
-    // conflict-resolution API on its own -- 'conflict' only forces the
-    // dialog open; 'shielded' reuses the real setPrivacyShield mechanism.
     const target = window as Window & { __financePlannerVaultAcceptanceState?: (mode: string) => void }
     target.__financePlannerVaultAcceptanceState = (fixtureMode) => {
       if (fixtureMode === 'conflict') setForcedConflict(true)
@@ -120,9 +117,6 @@ export function VaultGate({ children, userId }: VaultGateProps) {
       if (mode === 'setup') {
         if (password.length < 12) throw new Error('The password must be at least 12 characters long.')
         if (password !== confirmation) throw new Error('The passwords do not match.')
-        // A genuinely new account (no legacy local data) starts from an empty
-        // state, never from normalInitialState's seeded sample finances.
-        // Migration keeps using the device's real legacy data unchanged.
         state = migrating ? loadLegacyState() : structuredClone(emptyProductionState)
         await createVault(password, state, userId)
         if (!migrating) prepareNewDeviceCloudBootstrap()
@@ -132,7 +126,17 @@ export function VaultGate({ children, userId }: VaultGateProps) {
       }
       setUnlockedState(state)
       setSyncing(true)
-      const synchronizedState = await synchronizeUnlockedState(state)
+      let synchronizedState = await synchronizeUnlockedState(state)
+
+      // Older production releases accidentally persisted the bundled German
+      // sample dataset into real/test-account vaults. Remove only that exact
+      // signature after decryption, then persist the empty state so the cloud
+      // copy cannot restore the samples on the next device/reload.
+      if (isLegacyDemoState(synchronizedState)) {
+        synchronizedState = structuredClone(emptyProductionState)
+        saveState(synchronizedState)
+      }
+
       setUnlockedState(synchronizedState)
       setSyncing(false)
       setPassword('')
@@ -151,7 +155,7 @@ export function VaultGate({ children, userId }: VaultGateProps) {
     const showConflict = forcedConflict || (cloudPhase === 'conflict' && !conflictDismissed)
     return <>
       {typeof children === 'function' ? children(lockNow) : children}
-      {showConflict && <VaultConflict onClose={() => { setConflictDismissed(true); setForcedConflict(false) }}/>}
+      {showConflict && <VaultConflict onClose={() => { setConflictDismissed(true); setForcedConflict(false) }}/>}    
     </>
   }
 
