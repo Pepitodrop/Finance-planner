@@ -10,30 +10,47 @@ export const emptyProductionState: AppState = {
   goals: [],
 }
 
-const LEGACY_DEMO_ACCOUNT_SIGNATURES = new Map([
-  ['account-checking', 'Girokonto'],
-  ['account-savings', 'Tagesgeld'],
-  ['account-cash', 'Bargeld'],
-])
-const LEGACY_DEMO_GOAL_SIGNATURES = new Map([
-  ['g1', 'Notgroschen'],
-  ['g2', 'Motorradführerschein A2'],
-])
+const LEGACY_DEMO_ACCOUNTS = [
+  { id: 'account-checking', name: 'Girokonto', type: 'checking', balanceCents: 286450, currency: 'EUR' },
+  { id: 'account-savings', name: 'Tagesgeld', type: 'savings', balanceCents: 420000, currency: 'EUR' },
+  { id: 'account-cash', name: 'Bargeld', type: 'cash', balanceCents: 8500, currency: 'EUR' },
+] as const
+const LEGACY_DEMO_GOALS = [
+  { id: 'g1', name: 'Notgroschen', targetCents: 600000, currentCents: 420000, targetDate: '2027-01-01' },
+  { id: 'g2', name: 'Motorradführerschein A2', targetCents: 400000, currentCents: 125000, targetDate: '2027-05-01' },
+] as const
+const LEGACY_DEMO_ACCOUNT_IDS = new Set(LEGACY_DEMO_ACCOUNTS.map(({ id }) => id))
 
 /**
- * Detect the exact legacy starter dataset that used to be shipped as the
- * application's production default. This is intentionally conservative: all
- * three sample account ids/names and both sample goal ids/names must still be
- * present before Finance Planner treats the state as demo data.
+ * Detect only an untouched legacy starter dataset accidentally persisted by
+ * older releases. This intentionally errs on the side of preserving data:
+ * any extra/changed account or goal, or any transaction that does not use the
+ * old `tN` fixture-id convention, makes the state ineligible for automatic
+ * cleanup. That prevents a person who subsequently entered real data from
+ * losing it merely because some original sample records are still present.
  */
 export function isLegacyDemoState(state: AppState): boolean {
-  const hasAccounts = [...LEGACY_DEMO_ACCOUNT_SIGNATURES].every(([id, name]) =>
-    state.accounts.some((account) => account.id === id && account.name === name),
-  )
-  const hasGoals = [...LEGACY_DEMO_GOAL_SIGNATURES].every(([id, name]) =>
-    state.goals.some((goal) => goal.id === id && goal.name === name),
-  )
-  return hasAccounts && hasGoals
+  if (state.accounts.length !== LEGACY_DEMO_ACCOUNTS.length || state.goals.length !== LEGACY_DEMO_GOALS.length) return false
+
+  const accountsExact = LEGACY_DEMO_ACCOUNTS.every((expected) => state.accounts.some((account) =>
+    account.id === expected.id
+    && account.name === expected.name
+    && account.type === expected.type
+    && account.balanceCents === expected.balanceCents
+    && account.currency === expected.currency,
+  ))
+  if (!accountsExact) return false
+
+  const goalsExact = LEGACY_DEMO_GOALS.every((expected) => state.goals.some((goal) =>
+    goal.id === expected.id
+    && goal.name === expected.name
+    && goal.targetCents === expected.targetCents
+    && goal.currentCents === expected.currentCents
+    && goal.targetDate === expected.targetDate,
+  ))
+  if (!goalsExact) return false
+
+  return state.transactions.every((transaction) => /^t\d+$/.test(transaction.id) && LEGACY_DEMO_ACCOUNT_IDS.has(transaction.accountId))
 }
 
 export function removeLegacyDemoState(state: AppState): AppState {
