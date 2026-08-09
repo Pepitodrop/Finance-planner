@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { emptyProductionState, initialState } from './data'
+import { accountsAcceptanceState, emptyProductionState, initialState } from './data'
 
-describe('emptyProductionState', () => {
-  it('is genuinely empty (no accounts, transactions, or goals)', () => {
+describe('production financial defaults', () => {
+  it('starts a genuine account with no accounts, transactions, or goals', () => {
     expect(emptyProductionState.accounts).toEqual([])
     expect(emptyProductionState.transactions).toEqual([])
     expect(emptyProductionState.goals).toEqual([])
   })
 
-  it('is a distinct dataset from the seeded demo state used by the reset-to-demo feature', () => {
-    expect(emptyProductionState).not.toEqual(initialState)
-    expect(initialState.accounts.length).toBeGreaterThan(0)
+  it('never aliases production defaults to seeded acceptance data', () => {
+    expect(initialState).toEqual(emptyProductionState)
+    expect(initialState.accounts).toHaveLength(0)
+    expect(accountsAcceptanceState.accounts.length).toBeGreaterThan(0)
+    expect(accountsAcceptanceState).not.toEqual(initialState)
   })
 })
