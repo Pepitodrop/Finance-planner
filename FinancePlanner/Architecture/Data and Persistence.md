@@ -17,7 +17,7 @@
 
 ## Sync lifecycle (`docs/CLOUD_DATA.md`)
 
-1. Authenticate (Google or passkey) → unlock/create local vault (per-device password).
+1. Authenticate (Google or email/password) → unlock/create local vault (per-device password). Passkeys are optional post-sign-in account security, not a primary pre-auth route in the current UI.
 2. `GET /api/finance/state` with session cookie. If a server doc exists it replaces the local cache (then re-encrypted with the device's local password); otherwise the local vault uploads as version 1.
 3. Local edits debounce into `POST /api/finance/state`.
 4. Every write carries `expectedVersion`. Server compares under a row lock (`SELECT ... FOR UPDATE` in `user-state-store.js`) and rejects with a version-conflict error (surfaced as HTTP 409 by `finance-router.js`) on mismatch — classic compare-and-swap, not last-write-wins.
@@ -32,7 +32,7 @@ When PostgreSQL/network is unavailable, the app keeps the encrypted local cache,
 
 `src/data.ts`'s `initialState` (used both as the default for a brand-new vault and as the "Clear financial data" target) is `emptyProductionState` — zero accounts/transactions/goals. It used to be a hardcoded German sample dataset (`Girokonto`/`Tagesgeld`/`Bargeld` accounts, `Notgroschen` goal, REWE/Minecraft/etc. transactions), which a production browser pass found was still reachable by real accounts. Root cause and fix:
 - `VaultGate.tsx`'s setup path always starts a genuinely new (non-migrating) vault from `structuredClone(emptyProductionState)`, never the old sample data.
-- `isLegacyDemoState()`/`removeLegacyDemoState()` (`src/data.ts`) conservatively detect *only* an exact, untouched match of the old sample dataset (exact account/goal fields, and every transaction using the old `tN` fixture-id convention) — any user edit at all makes the state ineligible for cleanup, so this can't discard real data. `VaultGate.tsx` runs this check once per unlock, right after `synchronizeUnlockedState`, and persists the cleaned state back via `saveState` so a stale cloud copy can't reintroduce the samples on the next device.
+- `isLegacyDemoState()`/`removeLegacyDemoState()` (`src/data.ts`) now detect *only* the complete canonical untouched starter dataset: exact account count and every account field (including absence of provider metadata), exact transaction count and every transaction field (`id`, account, description, category, type, amount, date, recurring flag), exact goal count and fields, and no subscriptions. Any edit, removal, replacement, extra `tN` transaction, provider metadata, or subscription makes the state ineligible for automatic cleanup. `VaultGate.tsx` runs this check once per unlock, right after `synchronizeUnlockedState`, and persists the cleaned state back via `saveState` so a stale cloud copy cannot reintroduce the untouched starter data on the next device.
 - "Clear financial data" (`DataTools.tsx`, formerly labelled "Reset financial data") explicitly promises "No example or demo data will be inserted" and produces the same `emptyProductionState` — it never reseeds anything. `resetFinancialData`'s acceptance-script coverage was previously (bug in the *test*, not the app) asserting the opposite — see [[Debugging Learnings]].
 - Acceptance-only sample states (`accountsAcceptanceState`, `planningAcceptanceState`) remain, but are wired only through `VITE_ACCEPTANCE_FIXTURES`-gated `acceptanceMode` props, never through the production default.
 
