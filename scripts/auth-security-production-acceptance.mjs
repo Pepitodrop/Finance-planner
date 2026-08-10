@@ -451,13 +451,25 @@ async function runAcceptance() {
       const nav = document.querySelector('.app-mobile-navigation')
       const bannerRect = banner?.getBoundingClientRect()
       const navRect = nav?.getBoundingClientRect()
+      // The banner is deliberately shown alongside VaultGate's own setup/
+      // unlock screen (see the comment above), but it must never be the
+      // only thing standing between a user and that screen's own primary
+      // submit button -- scrolling the button fully into view must always
+      // reach a point on it that the banner does not cover.
+      const submitButton = [...document.querySelectorAll('.vault-card button[type=submit]')][0]
+      submitButton?.scrollIntoView({ block: 'nearest' })
+      const submitRect = submitButton?.getBoundingClientRect()
+      const submitCenter = submitRect && { x: submitRect.left + submitRect.width / 2, y: submitRect.top + submitRect.height / 2 }
+      const topElementAtSubmitCenter = submitCenter && document.elementFromPoint(submitCenter.x, submitCenter.y)
       return {
         dismissible: Boolean(banner?.querySelector('button[aria-label="Dismiss passkey recommendation"]')),
         obstructsNav: Boolean(bannerRect && navRect && bannerRect.bottom > navRect.top && innerWidth <= 768),
+        obstructsVaultSubmit: Boolean(submitButton && !(topElementAtSubmitCenter === submitButton || submitButton.contains(topElementAtSubmitCenter))),
         otherOptionalSurfaces: document.querySelectorAll('.mobile-install-card, .platform-action-bar').length,
       }
     })()`)
     assert.equal(report.interactions.passkeyRecommendation.dismissible, true)
+    assert.equal(report.interactions.passkeyRecommendation.obstructsVaultSubmit, false, 'the passkey banner must never be the only way to reach the vault-card submit button')
     assert.equal(report.interactions.passkeyRecommendation.otherOptionalSurfaces, 0, 'runtime-surface exclusivity must prevent overlapping optional prompts')
     await evaluate(client, sessionId, `document.querySelector('button[aria-label="Dismiss passkey recommendation"]')?.click()`)
     await waitFor(client, sessionId, `!document.body?.innerText.includes('Add a passkey for faster sign-in')`, 'passkey recommendation dismissed')
