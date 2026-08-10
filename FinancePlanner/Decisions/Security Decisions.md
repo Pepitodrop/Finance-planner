@@ -34,6 +34,15 @@
 
 ---
 
+**Decision:** GitHub CodeQL alert #1 (`js/insufficient-password-hash` on `server/src/auth-store.js:10`) is a confirmed false positive and has been dismissed.
+**Status:** dismissed 2026-08-10 via the GitHub code-scanning API, after live dataflow inspection during the `/cso` follow-up phase of PR #131 (the prior `/cso` phase had assessed this as *likely* a false positive from architecture alone but left it undismissed and unresolved).
+**Rationale (stated):** `keyFromSecret()` derives a fixed 32-byte AES-256-GCM key from `AUTH_MASTER_KEY`, an operator-configured high-entropy secret (`.env.example` requires `openssl rand -hex 32`-generated values), not a human password. This follow-up inspected the actual CodeQL dataflow rather than assuming: all 5 reported source-to-sink paths trace to hardcoded literal test-fixture strings named `authKey` in `server/test/auth-router.test.js` (lines 17, 100, 131) and `server/test/reset-and-seed-demo.test.js` (lines 51, 89) — none trace through the real production `env.AUTH_MASTER_KEY` path (`auth-router.js:78`). The identical `keyFromSecret()` construction in `user-state-store.js` (deriving from `CONNECTOR_MASTER_KEY`) is not separately flagged, consistent with a naming-heuristic false match on test constants rather than a systemic issue. User password hashing remains scrypt-based (`password-auth.js`) and is entirely unaffected.
+**Consequences:** No code change was made. Replacing the SHA-256 key derivation with a password KDF would address a different threat model and would break compatibility with existing encrypted `auth-store` data without a migration — explicitly out of scope for a static-analysis false positive. Dismissed with `dismissed_reason: false positive`; the PR's native `CodeQL` check went from failing to passing immediately (no re-run needed) and `mergeStateStatus` moved from `UNSTABLE` to `CLEAN`. Alert: https://github.com/Pepitodrop/Finance-planner/security/code-scanning/1.
+**Relevant files:** `server/src/auth-store.js` (`keyFromSecret`), `server/src/user-state-store.js` (`keyFromSecret`, same pattern, unflagged), `.env.example`, `server/test/auth-router.test.js`, `server/test/reset-and-seed-demo.test.js`.
+**Related:** [[Authentication]], [[Provider Status]]
+
+---
+
 **Decision:** Passkeys require `residentKey: 'required'` and `userVerification: 'required'`.
 **Status:** implemented.
 **Rationale (inferred):** discoverable, user-verified credentials only — stronger phishing resistance than accepting non-resident or non-verified authenticators.
