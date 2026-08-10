@@ -22,7 +22,11 @@ function legacyDemoState(): AppState {
     transactions: [
       { id: 't1', accountId: 'account-checking', description: 'Gehalt', category: 'Einkommen', type: 'income', amountCents: 185000, date: '2026-07-01', recurring: true },
       { id: 't2', accountId: 'account-checking', description: 'Warmmiete', category: 'Wohnen', type: 'expense', amountCents: 72000, date: '2026-07-03', recurring: true },
-      { id: 't8', accountId: 'account-checking', description: 'REWE', category: 'Lebensmittel', type: 'expense', amountCents: 9000, date: '2026-07-30' },
+      { id: 't3', accountId: 'account-checking', description: 'Supermarkt', category: 'Lebensmittel', type: 'expense', amountCents: 6840, date: '2026-07-08' },
+      { id: 't4', accountId: 'account-checking', description: 'Fitnessstudio', category: 'Verträge', type: 'expense', amountCents: 2990, date: '2026-07-10', recurring: true },
+      { id: 't5', accountId: 'account-checking', description: 'Deutschlandticket', category: 'Mobilität', type: 'expense', amountCents: 5800, date: '2026-07-12', recurring: true },
+      { id: 't6', accountId: 'account-checking', description: 'Werkstudentenjob', category: 'Einkommen', type: 'income', amountCents: 62000, date: '2026-07-15', recurring: true },
+      { id: 't7', accountId: 'account-checking', description: 'Restaurant', category: 'Freizeit', type: 'expense', amountCents: 4200, date: '2026-07-18' },
     ],
     goals: [
       { id: 'g1', name: 'Notgroschen', targetCents: 600000, currentCents: 420000, targetDate: '2027-01-01' },
@@ -133,6 +137,19 @@ describe('VaultGate: unlock (VAULT-02)', () => {
 
     render(<VaultGate userId={userId}>{() => <div>App content</div>}</VaultGate>)
     fillAndSubmit('modified-demo-password')
+    await waitFor(() => expect(screen.getByText('App content')).toBeInTheDocument())
+
+    expect(loadState()).toEqual(modified)
+  })
+
+  it('never clears a legacy-looking vault when an existing tN transaction was edited', async () => {
+    const userId = freshUserId()
+    const modified = legacyDemoState()
+    modified.transactions[0].amountCents += 1
+    await createVault('edited-demo-password', modified, userId)
+
+    render(<VaultGate userId={userId}>{() => <div>App content</div>}</VaultGate>)
+    fillAndSubmit('edited-demo-password')
     await waitFor(() => expect(screen.getByText('App content')).toBeInTheDocument())
 
     expect(loadState()).toEqual(modified)
