@@ -10,47 +10,84 @@ export const emptyProductionState: AppState = {
   goals: [],
 }
 
-const LEGACY_DEMO_ACCOUNTS = [
+const LEGACY_DEMO_ACCOUNTS: AppState['accounts'] = [
   { id: 'account-checking', name: 'Girokonto', type: 'checking', balanceCents: 286450, currency: 'EUR' },
   { id: 'account-savings', name: 'Tagesgeld', type: 'savings', balanceCents: 420000, currency: 'EUR' },
   { id: 'account-cash', name: 'Bargeld', type: 'cash', balanceCents: 8500, currency: 'EUR' },
-] as const
-const LEGACY_DEMO_GOALS = [
+]
+
+const LEGACY_DEMO_TRANSACTIONS: AppState['transactions'] = [
+  { id: 't1', accountId: 'account-checking', description: 'Gehalt', category: 'Einkommen', type: 'income', amountCents: 185000, date: '2026-07-01', recurring: true },
+  { id: 't2', accountId: 'account-checking', description: 'Warmmiete', category: 'Wohnen', type: 'expense', amountCents: 72000, date: '2026-07-03', recurring: true },
+  { id: 't3', accountId: 'account-checking', description: 'Supermarkt', category: 'Lebensmittel', type: 'expense', amountCents: 6840, date: '2026-07-08' },
+  { id: 't4', accountId: 'account-checking', description: 'Fitnessstudio', category: 'Verträge', type: 'expense', amountCents: 2990, date: '2026-07-10', recurring: true },
+  { id: 't5', accountId: 'account-checking', description: 'Deutschlandticket', category: 'Mobilität', type: 'expense', amountCents: 5800, date: '2026-07-12', recurring: true },
+  { id: 't6', accountId: 'account-checking', description: 'Werkstudentenjob', category: 'Einkommen', type: 'income', amountCents: 62000, date: '2026-07-15', recurring: true },
+  { id: 't7', accountId: 'account-checking', description: 'Restaurant', category: 'Freizeit', type: 'expense', amountCents: 4200, date: '2026-07-18' },
+]
+
+const LEGACY_DEMO_GOALS: AppState['goals'] = [
   { id: 'g1', name: 'Notgroschen', targetCents: 600000, currentCents: 420000, targetDate: '2027-01-01' },
   { id: 'g2', name: 'Motorradführerschein A2', targetCents: 400000, currentCents: 125000, targetDate: '2027-05-01' },
-] as const
-const LEGACY_DEMO_ACCOUNT_IDS = new Set<string>(LEGACY_DEMO_ACCOUNTS.map(({ id }) => id))
+]
 
-/**
- * Detect only an untouched legacy starter dataset accidentally persisted by
- * older releases. This intentionally errs on the side of preserving data:
- * any extra/changed account or goal, or any transaction that does not use the
- * old `tN` fixture-id convention, makes the state ineligible for automatic
- * cleanup. That prevents a person who subsequently entered real data from
- * losing it merely because some original sample records are still present.
- */
-export function isLegacyDemoState(state: AppState): boolean {
-  if (state.accounts.length !== LEGACY_DEMO_ACCOUNTS.length || state.goals.length !== LEGACY_DEMO_GOALS.length) return false
-
-  const accountsExact = LEGACY_DEMO_ACCOUNTS.every((expected) => state.accounts.some((account) =>
-    account.id === expected.id
+function legacyAccountMatches(account: AppState['accounts'][number], expected: AppState['accounts'][number]): boolean {
+  return account.id === expected.id
     && account.name === expected.name
     && account.type === expected.type
     && account.balanceCents === expected.balanceCents
-    && account.currency === expected.currency,
-  ))
-  if (!accountsExact) return false
+    && account.currency === expected.currency
+    && account.institutionId === expected.institutionId
+    && account.externalId === expected.externalId
+    && account.lastSyncedAt === expected.lastSyncedAt
+    && account.creditCard === expected.creditCard
+}
 
-  const goalsExact = LEGACY_DEMO_GOALS.every((expected) => state.goals.some((goal) =>
-    goal.id === expected.id
+function legacyTransactionMatches(transaction: AppState['transactions'][number], expected: AppState['transactions'][number]): boolean {
+  return transaction.id === expected.id
+    && transaction.accountId === expected.accountId
+    && transaction.description === expected.description
+    && transaction.category === expected.category
+    && transaction.type === expected.type
+    && transaction.amountCents === expected.amountCents
+    && transaction.date === expected.date
+    && transaction.recurring === expected.recurring
+}
+
+function legacyGoalMatches(goal: AppState['goals'][number], expected: AppState['goals'][number]): boolean {
+  return goal.id === expected.id
     && goal.name === expected.name
     && goal.targetCents === expected.targetCents
     && goal.currentCents === expected.currentCents
-    && goal.targetDate === expected.targetDate,
-  ))
-  if (!goalsExact) return false
+    && goal.targetDate === expected.targetDate
+}
 
-  return state.transactions.every((transaction) => /^t\d+$/.test(transaction.id) && LEGACY_DEMO_ACCOUNT_IDS.has(transaction.accountId))
+/**
+ * Detect only the exact, untouched legacy starter dataset accidentally
+ * persisted by older releases. Every canonical account, transaction, and goal
+ * must be present with every material field unchanged, no extra records may
+ * exist, and no subscription may have been added. Any user modification makes
+ * the state ineligible for automatic cleanup.
+ */
+export function isLegacyDemoState(state: AppState): boolean {
+  if (state.accounts.length !== LEGACY_DEMO_ACCOUNTS.length
+    || state.transactions.length !== LEGACY_DEMO_TRANSACTIONS.length
+    || state.goals.length !== LEGACY_DEMO_GOALS.length
+    || (state.subscriptions?.length ?? 0) !== 0) return false
+
+  const accountsExact = LEGACY_DEMO_ACCOUNTS.every((expected) =>
+    state.accounts.some((account) => legacyAccountMatches(account, expected)),
+  )
+  if (!accountsExact) return false
+
+  const transactionsExact = LEGACY_DEMO_TRANSACTIONS.every((expected) =>
+    state.transactions.some((transaction) => legacyTransactionMatches(transaction, expected)),
+  )
+  if (!transactionsExact) return false
+
+  return LEGACY_DEMO_GOALS.every((expected) =>
+    state.goals.some((goal) => legacyGoalMatches(goal, expected)),
+  )
 }
 
 export function removeLegacyDemoState(state: AppState): AppState {
