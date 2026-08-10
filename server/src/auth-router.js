@@ -16,6 +16,10 @@ const b64 = (value) => Buffer.from(value).toString('base64url')
 const unb64 = (value) => new Uint8Array(Buffer.from(value, 'base64url'))
 const DEFAULT_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 const enrollmentKey = (token) => `test-enrollment:${createHash('sha256').update(String(token), 'utf8').digest('hex')}`
+// A fixed, valid-format scrypt hash checked (and always discarded) whenever
+// there is no real password hash to verify against, so /api/auth/password/login
+// always pays the same scrypt cost regardless of whether the email exists.
+const DUMMY_PASSWORD_HASH = hashPassword('login-timing-equalization-placeholder-password')
 
 function parseCookies(request) {
   return Object.fromEntries(String(request.headers.cookie || '').split(';').map((part) => part.trim().split('=').map(decodeURIComponent)).filter((entry) => entry.length === 2))
@@ -66,7 +70,7 @@ function safeUser(user) {
   }
 }
 
-export async function createAuthRouter({ env, origin, sessionSecret, send, verifyActiveSession, deleteUserData }) {
+export async function createAuthRouter({ env, origin, sessionSecret, send, verifyActiveSession, deleteUserData, revokeSession }) {
   const rpId = env.WEBAUTHN_RP_ID || new URL(origin).hostname
   const rpName = env.WEBAUTHN_RP_NAME || 'Finance Planner'
   const sessionTtlSeconds = configuredSessionTtl(env)
@@ -108,6 +112,11 @@ export async function createAuthRouter({ env, origin, sessionSecret, send, verif
     }
 
     if (request.method === 'POST' && url.pathname === '/api/auth/logout') {
+      if (typeof revokeSession === 'function') {
+        let userId = null
+        try { userId = sessionUser(request, verifyToken) } catch { userId = null }
+        if (userId) await revokeSession(userId)
+      }
       send(response, 200, { authenticated: false }, { 'Set-Cookie': cookie('fp_session', '', origin, 0) })
       return true
     }
@@ -134,10 +143,13 @@ export async function createAuthRouter({ env, origin, sessionSecret, send, verif
       const user = store.findByEmail(email)
       const configuredTestEmail = String(env.TEST_ACCOUNT_EMAIL || '').trim().toLowerCase()
       const configuredTestHash = String(env.TEST_ACCOUNT_PASSWORD_HASH || '')
-      const passwordValid = Boolean(user) && (
-        (user.passwordHash && verifyPassword(input.password, user.passwordHash))
-        || (String(user.id).startsWith('test:') && email === configuredTestEmail && verifyPassword(input.password, configuredTestHash))
-      )
+      // Always run one scrypt verification, even for an unknown email or a
+      // password-less (Google-only) account, so response timing cannot be
+      // used to enumerate which emails have a password-based account here.
+      const testAccountMatch = Boolean(user) && String(user.id).startsWith('test:') && email === configuredTestEmail
+      const hashToVerify = user?.passwordHash || (testAccountMatch ? configuredTestHash : '') || DUMMY_PASSWORD_HASH
+      const verifiedAgainstHash = verifyPassword(input.password, hashToVerify)
+      const passwordValid = Boolean(user) && hashToVerify !== DUMMY_PASSWORD_HASH && verifiedAgainstHash
       if (!passwordValid) throw new Error('Invalid email or password.')
       const session = createSession(user.id, sessionSecret, sessionTtlSeconds)
       send(response, 200, { authenticated: true, user: safeUser(user) }, { 'Set-Cookie': cookie('fp_session', session, origin, sessionTtlSeconds) })

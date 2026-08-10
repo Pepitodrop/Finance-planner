@@ -291,6 +291,7 @@ const handleAuth = await createAuthRouter({
   send,
   verifyActiveSession,
   deleteUserData: (user) => deleteAccountData({ userId: user, persistence, store, sessionRevocations }),
+  revokeSession: (user) => sessionRevocations.revoke(user),
 })
 const handleFinance = createFinanceRouter({ env, send, body, userId })
 const handleBudget = createBudgetRouter({ env, send, body, userId, stateStore: userStateStore, profileStore: budgetProfileStore })
