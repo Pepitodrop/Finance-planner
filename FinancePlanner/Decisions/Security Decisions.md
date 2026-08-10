@@ -10,10 +10,11 @@
 
 ---
 
-**Decision:** Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` whenever the origin is HTTPS; sessions can be centrally revoked.
-**Status:** implemented.
+**Decision:** Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` whenever the origin is HTTPS; sessions can be centrally revoked, and logout revokes the acting session server-side (not just the browser cookie).
+**Status:** implemented; the logout-revokes-server-side-token behavior was a confirmed gap, fixed and live-verified during the `/cso` security-review phase of PR #131 (2026-08-10).
 **Rationale (inferred):** standard session-fixation/XSS-exfiltration mitigation, paired with a Postgres-backed revocation registry so a compromised session can be invalidated without waiting for cookie expiry.
-**Relevant files:** `server/src/auth-router.js` (`cookie()` helper), `server/src/session-revocation.js`.
+**Rationale (fix, stated):** before the fix, `POST /api/auth/logout` only cleared the calling browser's cookie -- the signed session token itself remained valid until its natural TTL. `SessionRevocationRegistry` already existed and was wired into account deletion but not logout. Live-verified before/after: a token held in a separate cookie jar (simulating a captured/stolen token) stayed fully usable after "logout" pre-fix, and is rejected with 401 immediately after logout post-fix.
+**Relevant files:** `server/src/auth-router.js` (`cookie()` helper, `POST /api/auth/logout` handler, `createAuthRouter`'s `revokeSession` param), `server/src/session-revocation.js`, `server/src/server.js` (wires `revokeSession: (user) => sessionRevocations.revoke(user)`), `server/test/auth-router.test.js` (regression coverage).
 
 ---
 
@@ -21,6 +22,14 @@
 **Status:** implemented, fixed 2026-08-02.
 **Rationale (stated):** prevents user enumeration — previously the endpoint threw (and leaked account existence) for unregistered emails. Covered by `server/test/auth-router.test.js`.
 **Relevant files:** `server/src/auth-router.js`, `TODOS.md` ("Completed" section).
+**Related:** [[Authentication]]
+
+---
+
+**Decision:** `POST /api/auth/password/login` always performs exactly one scrypt password verification per request, regardless of whether the submitted email matches an existing account.
+**Status:** implemented, fixed and live-verified 2026-08-10 (`/cso` security-review phase of PR #131).
+**Rationale (stated):** closes a confirmed, measured timing side-channel that let an attacker enumerate registered emails. Before the fix, `verifyPassword()` (which runs `scryptSync`, N=16384) was only called when a matching user existed, short-circuited via `Boolean(user) && (...)`. Local measurement: known-user-wrong-password requests ~230ms median (20 samples) vs unknown-email requests ~14ms median (20 samples) — a ~16x gap distinguishable with a single request pair, no statistical sophistication required. The same gap applied to password-less (Google-only) accounts attempting password login. Fix: always verify against a real hash when one exists, otherwise against a fixed dummy hash (`DUMMY_PASSWORD_HASH`, computed once at module load), so the scrypt cost is paid unconditionally. Re-measured after the fix: both distributions overlap in the same range.
+**Relevant files:** `server/src/auth-router.js` (`DUMMY_PASSWORD_HASH`, the login handler's `hashToVerify`/`passwordValid` computation), `server/src/password-auth.js` (`verifyPassword`), `server/test/auth-router.test.js` (timing regression test, generous 0.25 ratio floor to avoid CI flakiness while still catching a full regression).
 **Related:** [[Authentication]]
 
 ---
