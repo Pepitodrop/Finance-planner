@@ -160,10 +160,10 @@ export function VaultGate({ children, userId }: VaultGateProps) {
   }
 
   return <main className="vault-screen" lang="en">
-    <section className="panel vault-card">
+    <section className="panel vault-card" role="dialog" aria-modal="true" aria-labelledby="vault-gate-title">
       <div className="goal-hero-icon"><ShieldCheck size={26}/></div>
       <p className="eyebrow">Account-bound encryption + cloud sync</p>
-      <h1>{mode === 'setup' ? 'Set up your encrypted vault' : 'Unlock Finance Planner'}</h1>
+      <h1 id="vault-gate-title">{mode === 'setup' ? 'Set up your encrypted vault' : 'Unlock Finance Planner'}</h1>
       {mode === 'setup'
         ? <p className="muted">This is separate from signing in. Your accounts, transactions, and goals are encrypted on this device, then synced encrypted to Finance Planner's servers so they are available on your other devices.</p>
         : <p className="muted">Enter your vault password to decrypt your data on this device. It stays on this device and is never sent to our servers.</p>}

@@ -73,6 +73,11 @@ describe('VaultGate: first-device setup (VAULT-01)', () => {
     expect(screen.getByText(/separate from signing in/i)).toBeInTheDocument()
   })
 
+  it('exposes setup as a modal dialog so optional prompts (e.g. the passkey-enrolment banner) stay suppressed behind it instead of overlapping the submit button', () => {
+    render(<VaultGate userId={freshUserId()}>{() => <div>App content</div>}</VaultGate>)
+    expect(screen.getByRole('dialog', { name: 'Set up your encrypted vault' })).toHaveAttribute('aria-modal', 'true')
+  })
+
   it('CRITICAL: a genuinely new account (no legacy data) starts from an honest empty state, not seeded demo finances', async () => {
     const userId = freshUserId()
     render(<VaultGate userId={userId}>{() => <div>App content</div>}</VaultGate>)
@@ -112,6 +117,7 @@ describe('VaultGate: unlock (VAULT-02)', () => {
     expect(screen.getByRole('heading', { name: 'Unlock Finance Planner' })).toBeInTheDocument()
     expect(screen.getByText(/stays on this device/i)).toBeInTheDocument()
     expect(screen.queryByLabelText('Confirm password')).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Unlock Finance Planner' })).toHaveAttribute('aria-modal', 'true')
 
     fireEvent.change(screen.getByLabelText('Vault password'), { target: { value: 'an-existing-vault-password' } })
     fireEvent.click(screen.getByRole('button', { name: /unlock/i }))
