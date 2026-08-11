@@ -32,4 +32,8 @@ README lists "live GoCardless/PayPal certification and reconciliation testing" a
 
 Verification state: **implemented / not runtime or production verified — no evidence of a completed end-to-end consent+sync cycle found in-repo.**
 
-Related: [[PayPal]], [[COBOL Domain Core]], [[Provider Status]], [[Architecture Decisions]]
+## Detailed subgraph
+
+[[GoCardless]] (in [[Providers Index]]) holds the atomic verification-status breakdown; [[Bank Connection Flow]], [[Bank Consent Flow]], [[Bank Sync Flow]], [[Bank Disconnect Flow]] (in [[Flows Index]]) hold the step-by-step sequences; [[Banking Core Module]] and its responsibility nodes (in [[COBOL Index]]) hold the deterministic validation detail.
+
+Related: [[PayPal]], [[COBOL Domain Core]], [[Provider Status]], [[Architecture Decisions]], [[Providers Index]], [[Flows Index]]

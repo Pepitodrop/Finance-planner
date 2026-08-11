@@ -62,4 +62,4 @@ curl --fail http://127.0.0.1:${WEB_PORT:-8080}/healthz
 - `npm run test:providers:runtime` — `provider-runtime-canary.mjs` (GoCardless/PayPal control-plane check)
 - `npm run test:browser:production` — `run-browser-production-acceptance.mjs`
 
-Related: [[Known Issues and Limitations]], [[Deployment]]
+Related: [[Known Issues and Limitations]], [[Deployment]], [[Testing and CI Index]]

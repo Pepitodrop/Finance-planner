@@ -28,4 +28,4 @@ Distinguishing real product gaps from unverified provider integrations (the latt
 
 Several CI workflows are **credential-gated and non-blocking by default** (`hosted-ai-acceptance.yml`'s `require_live_ai`, `runtime-canaries.yml`'s `require_all`, `production-operations.yml`'s `require_live_bank`). A fully green CI run does **not** by itself prove GoCardless, PayPal, hosted HF inference, or Google OAuth work end-to-end in production — that evidence is deliberately deferred to a manual, human-recorded process (`docs/issue-105-live-verification.md`). Don't conflate "CI is green" with "the integration is live-verified." See [[Provider Status]].
 
-Related: [[Provider Status]], [[COBOL Domain Core]], [[Rejected Approaches]]
+Related: [[Provider Status]], [[COBOL Domain Core]], [[Rejected Approaches]], [[COBOL Sandbox Limitation]], [[Rate Limiting]]

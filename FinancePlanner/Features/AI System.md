@@ -35,4 +35,8 @@ Verification state: local vs hosted split, consent gating, model-lock allowlist,
 
 **Diagram:** `diagrams/ai-assistant-routing.mmd`, embedded in `docs/HUGGINGFACE_AI.md`'s "Connectivity-aware routing" section — the full decision tree from `navigator.onLine`/health-probe/slow-connection checks through the consent gate to the hosted call, with the hosted-inference node explicitly marked NOT provider/production verified. Added during `/diagram` (PR #131, 2026-08-11).
 
-Related: [[COBOL Domain Core]], [[Security Decisions]], [[Provider Status]], [[Sync and Offline]]
+## Detailed subgraph
+
+[[AI Index]] decomposes this note into all 8 individual model nodes ([[Model semantic-multilingual]] through [[Model Qwen3-4B-Thinking (hosted)]]), the consent/privacy boundary ([[AI Consent Gate]], [[AI Data Minimization]], [[AI Financial Snapshot]]), and routing/fallback mechanics ([[Hosted-On-Device Routing Decision]], [[Fallback Behavior]]). [[Finance Assistant Page]] and [[Finance Intelligence Page]] are the two distinct consuming pages.
+
+Related: [[COBOL Domain Core]], [[Security Decisions]], [[Provider Status]], [[Sync and Offline]], [[AI Index]]

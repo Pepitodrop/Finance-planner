@@ -11,7 +11,7 @@
 | Bank/PayPal provider credentials | `connector_connections` | AES-256-GCM provider payload |
 | OAuth state | `oauth_nonces` | single-use |
 | Webhook leases/idempotency | `webhook_events` | — |
-| Distributed rate limiting | `rate_limit_windows` | — |
+| Distributed rate limiting | `request_rate_limits` | — |
 | Applied migrations | `schema_migrations` | — |
 | Browser copy | local vault (`src/vault.ts`) | PBKDF2-SHA-256 (310k iterations) + AES-256-GCM, device vault password, account-bound |
 
@@ -48,4 +48,8 @@ Server-side stores (`user-state-store.js`, `crypto-store.js`, `auth-store.js`) a
 
 `diagrams/finance-sync-conflict.mmd`, embedded in `docs/ARCHITECTURE.md` right after the existing ASCII "Persistence flow" diagram (which only shows the happy path) — the full round trip including the compare-and-swap 409 branch and `VaultConflict.tsx`. Added during `/diagram` (PR #131, 2026-08-11) because this exact mechanism caused real confusion during `/qa`'s own local testing (see [[Debugging Learnings]]).
 
-Related: [[System Architecture]] · [[Sync and Offline]] · [[Authentication]] · [[COBOL Domain Core]]
+## Detailed subgraph
+
+Every table above has its own atomic note (with repository/API/feature/cleanup/test links) under [[Data Index]]. [[Optimistic Concurrency Version Check]] and [[Encryption Boundary (server)]] are broken out separately there too. Table name corrected 2026-08-11 (`/graph`): the rate-limiting table is `request_rate_limits`, confirmed via `grep -rh "CREATE TABLE" server/migrations/*.sql` — a prior version of this note said `rate_limit_windows`.
+
+Related: [[System Architecture]] · [[Sync and Offline]] · [[Authentication]] · [[COBOL Domain Core]] · [[Data Index]]

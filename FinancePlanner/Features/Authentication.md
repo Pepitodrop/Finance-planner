@@ -42,4 +42,8 @@ Email/password: implemented, unit-tested (`server/test/password-auth.test.js`, `
 
 `diagrams/auth-state-flow.mmd` (AuthGate → Google/email-password → post-auth passkey-banner/VaultGate coexistence → dashboard) and `diagrams/session-lifecycle.mmd` (login → session verification → logout revocation → per-user revocation propagating to other sessions) — both embedded and GitHub-rendering in README.md's "Authentication flow" section. Added during `/diagram` (PR #131, 2026-08-11) specifically because this coexistence relationship and the per-user revocation behavior are both non-obvious enough that a prior session mis-fixed the former on the first attempt (see [[Debugging Learnings]]).
 
-Related: [[Security Decisions]] · [[Data and Persistence]] · [[Provider Status]] · [[Debugging Learnings]]
+## Detailed subgraph
+
+[[Pages Index]] has dedicated nodes for every auth-related screen ([[Login and Registration]], [[Passkey Enrolment Banner]], [[Account Page]]...); [[Flows Index]] has the step-by-step sequences ([[Login Flow]], [[Registration Flow]], [[Google OAuth Flow]], [[Passkey Enrolment Flow]], [[Logout Flow]]); [[Security Index]] has the atomic controls ([[Password Hashing]], [[Timing-Safe Password Verification]], [[Session Revocation]]...); [[Providers Index]] has [[Google OAuth]] and [[WebAuthn Passkeys]] as standalone verification-status nodes.
+
+Related: [[Security Decisions]] · [[Data and Persistence]] · [[Provider Status]] · [[Debugging Learnings]] · [[Pages Index]] · [[Security Index]]

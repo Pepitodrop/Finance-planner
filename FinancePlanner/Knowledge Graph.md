@@ -67,6 +67,21 @@ This cluster should stay connected to provider and deployment knowledge because 
 
 [[Security]] → constrains → [[Mobile PWA Android]] where browser origin, HTTPS, signing, or platform behavior matters.
 
+## Micro-level subgraphs (added 2026-08-11)
+
+Ten index/hub notes decompose the architecture-level spine above into atomic, individually-linkable concepts — each still ties back to its parent subsystem note, so this is depth added under the existing spine, not a competing structure:
+
+- [[Pages Index]] → every navigable screen, each linked to its owning component, feature, and flow.
+- [[Flows Index]] → multi-step sequences (login, vault setup, bank connection...), each linking every participating page/API/storage/provider/security node.
+- [[AI Index]] → decomposes [[AI System]] into 8 individual model nodes plus consent/privacy/routing/verification concepts.
+- [[Technology Index]] → languages, frameworks, and infrastructure as first-class nodes, each answering where/why it's used.
+- [[COBOL Index]] → decomposes [[COBOL Domain Core]] into per-responsibility nodes (normalization, reconciliation, boundary, failure behavior, sandbox limitation).
+- [[Data Index]] → all 9 confirmed database tables plus concurrency/encryption/migration mechanisms.
+- [[Providers Index]] → per-provider verification-status nodes, conservative wording matching [[Provider Status]] exactly.
+- [[Security Index]] → atomic security controls, distinct from [[Security Decisions]] (which stays the decision-record-with-rationale hub).
+- [[Testing and CI Index]] → test domains and CI jobs, connecting feature ↔ implementation ↔ test ↔ CI ↔ production-verification state.
+- [[Implementation Index]] → file- and micro-logic-level nodes with real architectural significance.
+
 ## Engineering feedback loop
 
 [[Commands and Tests]] → produces evidence for → [[Known Issues and Limitations]] and implementation claims throughout the graph

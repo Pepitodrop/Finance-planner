@@ -97,4 +97,8 @@
 **Rationale (stated):** `TODOS.md` (fixed 2026-08-03) — pinned specifically because `aquasecurity/trivy-action` itself was compromised in a March 2026 supply-chain attack affecting every tag from `0.0.1` through `0.34.2`; a floating tag would have reintroduced exactly the vulnerability class the step exists to catch.
 **Relevant files:** `.github/workflows/ci.yml`.
 
-Related: [[Architecture Decisions]] · [[Rejected Approaches]] · [[Provider Status]]
+## Detailed subgraph
+
+[[Security Index]] breaks each decision above into its own atomic control node (e.g. [[Timing-Safe Password Verification]], [[Session Revocation]], [[Cross-User Isolation]], [[AI Consent Gate]]), so a control can be linked directly from the page/flow/file that implements it without routing through this decision-record note first. This note stays the "why" hub; [[Security Index]] is the "what/where."
+
+Related: [[Architecture Decisions]] · [[Rejected Approaches]] · [[Provider Status]] · [[Security Index]]

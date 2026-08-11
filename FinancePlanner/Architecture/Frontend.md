@@ -26,4 +26,4 @@ src/
 - `src/bankProduction.ts` — the domain controls that `docs/bank-connection-production.md` requires be verified in the deployed environment before enabling a bank provider for real users.
 - `src/backup.ts` — client-side data export (finance data only; see [[Known Issues and Limitations]] for the server-side export gap).
 
-See [[System Architecture]] for how this fits into the whole product, and [[Data and Persistence]] for the vault/sync details.
+See [[System Architecture]] for how this fits into the whole product, and [[Data and Persistence]] for the vault/sync details. See [[Pages Index]] for every navigable screen, [[Implementation Index]] for individual file-level nodes ([[FinanceAssistant.tsx]], [[VaultGate.tsx]], [[AuthGate.tsx]]...), and [[Technology Index]] for [[React]]/[[Vite]]/[[TypeScript]] as first-class nodes.

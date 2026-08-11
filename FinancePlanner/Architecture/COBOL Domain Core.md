@@ -30,4 +30,8 @@ CLI contract example (`core/cobol/README.md`): `build/transaction-rules NORMALIZ
 
 Sandboxes without GnuCOBOL installed (no `apt-get`/root) get `ENOENT` on `server/test/cobol-engine.test.js` because `build/transaction-rules` was never compiled. `.github/workflows/ci.yml` installs GnuCOBOL and compiles the binary, so this is believed CI-clean; it's specifically a local/dev-sandbox gap (`TODOS.md`, confirmed pre-existing on `main` via `git stash` bisection on 2026-07-29). See [[Known Issues and Limitations]].
 
-Related: [[System Architecture]] · [[Bank Connections]] · [[Architecture Decisions]]
+## Detailed subgraph
+
+Every module, responsibility, and boundary above has its own atomic note under [[COBOL Index]] — including [[GnuCOBOL Runtime]], which precisely distinguishes the `cobc` compiler (build-time) from the `libcob` runtime library (a separate runtime dependency), correcting this note's prior `ENOENT` characterization of the local-sandbox gap.
+
+Related: [[System Architecture]] · [[Bank Connections]] · [[Architecture Decisions]] · [[COBOL Index]]
