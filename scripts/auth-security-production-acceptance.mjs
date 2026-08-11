@@ -210,7 +210,7 @@ async function captureScreenshot(name, width, height, sessionId, client, suffix 
   return { path, filename }
 }
 
-async function captureStateMatrix(client, sessionId, name, { beforeEach, waitExpr, waitDescription, skipLangAssertion = false, skipMainAssertion = false, skipScrollEnd = false }) {
+async function captureStateMatrix(client, sessionId, name, { beforeEach, afterEach = async () => {}, waitExpr, waitDescription, skipLangAssertion = false, skipMainAssertion = false, skipScrollEnd = false }) {
   const results = []
   for (const [width, height] of VIEWPORTS) {
     await beforeEach(width, height)
@@ -245,6 +245,7 @@ async function captureStateMatrix(client, sessionId, name, { beforeEach, waitExp
       await evaluate(client, sessionId, `window.scrollTo({ top: 0, behavior: 'instant' })`)
     }
     results.push({ width, height, ...shot, ...assertions, scrollEnd })
+    await afterEach(width, height)
   }
   return results
 }
@@ -438,39 +439,51 @@ async function runAcceptance() {
     await authenticateFresh(client, sessionId)
     await resetBrowserState(client, sessionId, { keepPasskeyDismissed: false })
     await client.send('Page.reload', { ignoreCache: true }, sessionId)
+    // QA phase 5 fix: the banner/vault-submit collision check below used to
+    // run once, after the whole VIEWPORTS loop finished, against whatever
+    // viewport the loop happened to leave the page at (the last entry,
+    // 360x844 -- not 390x844, the viewport that originally reproduced this
+    // exact bug). Checking it inside afterEach means it now runs
+    // independently at every viewport in VIEWPORTS, including 390x844.
+    const passkeyRecommendationPerViewport = []
     report.states['auth-passkey-recommendation'] = await captureStateMatrix(client, sessionId, 'auth-passkey-recommendation', {
       beforeEach: async (width, height) => {
         if (width === VIEWPORTS[0][0]) return // already on the page from the reload above for the first viewport
         await client.send('Page.reload', { ignoreCache: false }, sessionId)
       },
+      afterEach: async (width, height) => {
+        const check = await evaluate(client, sessionId, `(() => {
+          const banner = document.querySelector('.passkey-enrolment')
+          const nav = document.querySelector('.app-mobile-navigation')
+          const bannerRect = banner?.getBoundingClientRect()
+          const navRect = nav?.getBoundingClientRect()
+          // The banner is deliberately shown alongside VaultGate's own setup/
+          // unlock screen (see the comment above), but it must never be the
+          // only thing standing between a user and that screen's own primary
+          // submit button -- scrolling the button fully into view must always
+          // reach a point on it that the banner does not cover.
+          const submitButton = [...document.querySelectorAll('.vault-card button[type=submit]')][0]
+          submitButton?.scrollIntoView({ block: 'nearest' })
+          const submitRect = submitButton?.getBoundingClientRect()
+          const submitCenter = submitRect && { x: submitRect.left + submitRect.width / 2, y: submitRect.top + submitRect.height / 2 }
+          const topElementAtSubmitCenter = submitCenter && document.elementFromPoint(submitCenter.x, submitCenter.y)
+          return {
+            dismissible: Boolean(banner?.querySelector('button[aria-label="Dismiss passkey recommendation"]')),
+            obstructsNav: Boolean(bannerRect && navRect && bannerRect.bottom > navRect.top && innerWidth <= 768),
+            obstructsVaultSubmit: Boolean(submitButton && !(topElementAtSubmitCenter === submitButton || submitButton.contains(topElementAtSubmitCenter))),
+            otherOptionalSurfaces: document.querySelectorAll('.mobile-install-card, .platform-action-bar').length,
+          }
+        })()`)
+        assert.equal(check.dismissible, true, `passkey recommendation @ ${width}x${height} must be dismissible`)
+        assert.equal(check.obstructsVaultSubmit, false, `the passkey banner must never be the only way to reach the vault-card submit button @ ${width}x${height}`)
+        assert.equal(check.otherOptionalSurfaces, 0, `runtime-surface exclusivity must prevent overlapping optional prompts @ ${width}x${height}`)
+        passkeyRecommendationPerViewport.push({ width, height, ...check })
+      },
       waitExpr: `document.body?.innerText.includes('Add a passkey for faster sign-in')`,
       waitDescription: 'auth-passkey-recommendation',
     })
-    report.interactions.passkeyRecommendation = await evaluate(client, sessionId, `(() => {
-      const banner = document.querySelector('.passkey-enrolment')
-      const nav = document.querySelector('.app-mobile-navigation')
-      const bannerRect = banner?.getBoundingClientRect()
-      const navRect = nav?.getBoundingClientRect()
-      // The banner is deliberately shown alongside VaultGate's own setup/
-      // unlock screen (see the comment above), but it must never be the
-      // only thing standing between a user and that screen's own primary
-      // submit button -- scrolling the button fully into view must always
-      // reach a point on it that the banner does not cover.
-      const submitButton = [...document.querySelectorAll('.vault-card button[type=submit]')][0]
-      submitButton?.scrollIntoView({ block: 'nearest' })
-      const submitRect = submitButton?.getBoundingClientRect()
-      const submitCenter = submitRect && { x: submitRect.left + submitRect.width / 2, y: submitRect.top + submitRect.height / 2 }
-      const topElementAtSubmitCenter = submitCenter && document.elementFromPoint(submitCenter.x, submitCenter.y)
-      return {
-        dismissible: Boolean(banner?.querySelector('button[aria-label="Dismiss passkey recommendation"]')),
-        obstructsNav: Boolean(bannerRect && navRect && bannerRect.bottom > navRect.top && innerWidth <= 768),
-        obstructsVaultSubmit: Boolean(submitButton && !(topElementAtSubmitCenter === submitButton || submitButton.contains(topElementAtSubmitCenter))),
-        otherOptionalSurfaces: document.querySelectorAll('.mobile-install-card, .platform-action-bar').length,
-      }
-    })()`)
-    assert.equal(report.interactions.passkeyRecommendation.dismissible, true)
-    assert.equal(report.interactions.passkeyRecommendation.obstructsVaultSubmit, false, 'the passkey banner must never be the only way to reach the vault-card submit button')
-    assert.equal(report.interactions.passkeyRecommendation.otherOptionalSurfaces, 0, 'runtime-surface exclusivity must prevent overlapping optional prompts')
+    report.interactions.passkeyRecommendation = passkeyRecommendationPerViewport.at(-1)
+    report.interactions.passkeyRecommendationPerViewport = passkeyRecommendationPerViewport
     await evaluate(client, sessionId, `document.querySelector('button[aria-label="Dismiss passkey recommendation"]')?.click()`)
     await waitFor(client, sessionId, `!document.body?.innerText.includes('Add a passkey for faster sign-in')`, 'passkey recommendation dismissed')
     report.interactions.passkeyRecommendation.dismissedSuccessfully = true
