@@ -11,7 +11,7 @@ Finance Planner is a privacy-focused personal finance application built with Rea
 - provides local ONNX-based transaction categorization and an optional local assistant;
 - provides optional server-side Hugging Face analysis with explicit consent and deterministic fallback;
 - learns user-confirmed merchant/category and recurring-payment patterns;
-- supports Google authentication and WebAuthn passkeys;
+- supports Google authentication and email/password sign-in, with WebAuthn passkeys as an optional post-login sign-in method;
 - supports GoCardless and PayPal connector flows plus CSV/CAMT imports;
 - runs as a responsive website, installable iOS/Android PWA and browser-backed Android app;
 - stores the authenticated user's full finance vault in PostgreSQL for cross-device access.
@@ -41,7 +41,7 @@ Other account-related data is persisted separately:
 | Data | Persistence | Protection |
 |---|---|---|
 | Finance vault | PostgreSQL `user_finance_state` | authenticated per-user access plus AES-256-GCM application encryption |
-| Google profile and passkeys | PostgreSQL `auth_store` | AES-256-GCM application encryption |
+| Google profile, password credentials and passkeys | PostgreSQL `auth_store` | AES-256-GCM application encryption |
 | Bank/PayPal credentials | PostgreSQL `connector_connections` | encrypted provider payloads |
 | OAuth nonces, webhook idempotency and rate limits | PostgreSQL operational tables | server-only access and strict validation |
 | Offline device cache | browser vault | PBKDF2-SHA-256-derived key and AES-256-GCM |
@@ -196,6 +196,10 @@ HF_CRITIC_MODEL_REVISION=1b4199c4f36b0cef378bfb12390c18780c18af4c
 
 The server rejects malformed, unsafe, unknown or unverified model output and returns deterministic finance signals instead. `HF_TIMEOUT_MS` defaults to 30 seconds in Compose, below the browser's 55-second request guard.
 
+### Connectivity-aware routing
+
+The Finance Assistant picks its engine from real connectivity, not only the user's manual choice: hosted reasoning is the default while online, the user may still explicitly choose the local model while online, and Finance Planner automatically switches to the on-device model when the browser is offline or the connection is degraded or very slow — the hosted engine option is disabled during automatic fallback and the UI states why. If the local model itself cannot run, the assistant falls back further to deterministic local calculations; it never silently sends data to the hosted service to compensate.
+
 ## Local development
 
 Requirements:
@@ -234,7 +238,7 @@ Without PostgreSQL, local development uses encrypted server files and the browse
 
 `vite.config.ts` proxies `/api` and health requests to `http://127.0.0.1:8788`.
 
-For normal authenticated development, configure Google OAuth and register this callback:
+Email/password sign-in works immediately with the `.env` above — no additional provider configuration needed. To test the Google OAuth path specifically, configure Google OAuth and register this callback:
 
 ```text
 http://127.0.0.1:5173/api/auth/google/callback

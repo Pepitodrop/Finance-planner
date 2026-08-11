@@ -195,3 +195,61 @@ existing backup-restore path (rollback is a faster, targeted undo for a bad migr
 doesn't replace backups as the primary disaster-recovery mechanism, since a down-migration
 reverses schema, not data already written under the removed columns/tables).
 
+### Close a login-timing side channel that let an attacker enumerate registered emails
+
+Fixed 2026-08-10 (PR #131, `/cso` phase). `POST /api/auth/password/login` only ran the
+expensive `verifyPassword()` scrypt check when the submitted email matched a real account;
+an unknown email or a password-less (Google-only) account short-circuited to an almost
+instant response. Measured: known-user-wrong-password ~230ms median vs unknown-email
+~14ms median (n=20 each) — a ~16x gap distinguishable with a single request pair. Fixed by
+always running exactly one `verifyPassword()` call per request, against the real hash when
+one exists or a fixed dummy hash (`DUMMY_PASSWORD_HASH`) otherwise, so scrypt cost is paid
+unconditionally regardless of which branch is "really" being validated. Regression test in
+`server/test/auth-router.test.js` asserts the two distributions stay comparable (generous
+0.25 ratio floor to avoid CI flakiness while still catching a full regression).
+
+### Make logout revoke the session server-side, not just clear the browser cookie
+
+Fixed 2026-08-10 (PR #131, `/cso` phase). `POST /api/auth/logout` only cleared the calling
+browser's cookie; the signed session token itself stayed valid until its natural TTL, so a
+previously-captured/stolen token remained fully usable after the legitimate user "logged
+out." `SessionRevocationRegistry` already existed and was wired into account deletion but
+not logout. Fixed by resolving the acting user from the session cookie and calling
+`revokeSession(userId)` before clearing the cookie, mirroring the existing account-deletion
+pattern. Live-verified before/after: a token held in a separate cookie jar stayed usable
+after logout pre-fix, rejected with 401 immediately post-fix. Because revocation is
+per-user rather than per-token, logging out on one device also invalidates other active
+sessions for that same account — a deliberate, disclosed tradeoff (see
+`FinancePlanner/Decisions/Security Decisions.md` in the Obsidian vault), not a bug.
+Regression coverage in `server/test/auth-router.test.js`.
+
+### Fail-closed the legacy-demo-data cleanup detector
+
+Fixed 2026-08-10 (PR #131, final review pass). `isLegacyDemoState()`/`removeLegacyDemoState()`
+(`src/data.ts`) previously matched legacy demo data by transaction-ID prefix and partial
+field equality, so a user who edited, for example, the amount of an existing `t1`
+transaction could still be classified as "untouched demo data" and have their edited state
+silently replaced with `emptyProductionState` on the next vault unlock — a real data-loss
+path. Fixed to require the exact canonical record count and every material field (id,
+account, description, category, type, amount, date, recurring flag) for every account,
+transaction and goal, and to reject cleanup outright if any subscription exists. Regression
+coverage in `src/data.test.ts` for edited/removed/replaced/extra-transaction and
+edited/extra-account cases — any deviation from the exact starter dataset now leaves the
+user's real data untouched.
+
+### Dismiss a false-positive CodeQL alert without weakening the underlying key derivation
+
+Fixed 2026-08-10 (PR #131, `/cso` follow-up). GitHub code-scanning alert #1
+(`js/insufficient-password-hash` on `server/src/auth-store.js:10`) flagged
+`keyFromSecret()`'s `createHash('sha256')` call. Inspected the actual CodeQL dataflow rather
+than assuming: all 5 reported source-to-sink paths traced to hardcoded literal test-fixture
+strings in `server/test/auth-router.test.js` and `server/test/reset-and-seed-demo.test.js`,
+not the real production `AUTH_MASTER_KEY` path — a naming-heuristic false match, not a real
+weak-password-hashing pattern. `AUTH_MASTER_KEY` is an operator-generated high-entropy
+secret (`.env.example` requires `openssl rand -hex 32`), used only to derive a fixed
+AES-256-GCM key; user passwords are separately protected with scrypt and were unaffected.
+Dismissed via the GitHub API (`dismissed_reason: false positive`) with the dataflow
+evidence recorded in the dismissal comment; no code change was made, since replacing the
+derivation would break compatibility with existing encrypted `auth-store` data without a
+migration and address a different threat model than the one actually flagged.
+
