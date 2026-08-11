@@ -4,6 +4,8 @@ Distinguishing real product gaps from unverified provider integrations (the latt
 
 ## Real, currently-open gaps (from `TODOS.md` "Infrastructure" / open items, still true as of bootstrap)
 
+- **`VERSION` file is disconnected from actual versioning and doesn't match anything.** Found during `/document-release` (PR #131, 2026-08-11): the root `VERSION` file reads `0.1.1.0`, `package.json` reads `0.2.0`, `server/package.json` reads `0.1.0`, and `CHANGELOG.md`'s latest tagged entry is `[0.3.0]` — four different numbers, none matching. No script or GitHub Actions workflow reads `VERSION` at all (`grep`-confirmed empty across `scripts/*.mjs` and `.github/workflows/*.yml`), so it isn't wired into any real release process; it's likely a vestigial file from an earlier/different tooling setup. Pre-existing on `main`, unrelated to PR #131's own changes (confirmed via `git diff origin/main...HEAD -- VERSION`, empty) — left untouched rather than guessing at a "correct" number without a clear source of truth; whoever owns actual releases should reconcile or remove it.
+
 - **COBOL tests need GnuCOBOL locally.** 4 tests in `server/test/cobol-engine.test.js` fail with `ENOENT` in sandboxes without GnuCOBOL installed/compiled — CI compiles it, so this is believed CI-clean, but it's a real gap for any dev sandbox lacking `apt-get`/root. See [[COBOL Domain Core]].
 - **Single JS bundle, no code-splitting.** ~992 kB (271 kB gzip) single chunk; all routes ship before first paint. Deferred as a risky wide refactor, not attempted opportunistically.
 - **`vitest@2.1.9`'s bundled dev toolchain has known CVEs** (dev-server only; `npm audit --omit=dev` is clean). Needs a `vitest@4.x` major bump, not yet done.
