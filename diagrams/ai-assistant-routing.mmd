@@ -1,0 +1,20 @@
+graph TD
+  Start["User opens Finance Assistant"] --> Online{"navigator.onLine?"}
+  Online -- "false" --> AutoLocal
+  Online -- "true" --> HealthProbe{"Connectivity probe reports<br/>degraded or offline?"}
+  HealthProbe -- "yes" --> AutoLocal
+  HealthProbe -- "no" --> SlowCheck{"Slow connection?<br/>2g/slow-2g, downlink under 1.25,<br/>rtt 900 or more, or saveData"}
+  SlowCheck -- "yes" --> AutoLocal["Automatic on-device routing<br/>hosted option disabled in UI,<br/>reason shown to user"]
+  SlowCheck -- "no" --> UserChoice{"User's engine choice"}
+
+  UserChoice -- "hosted (default while online)" --> ConsentGate
+  UserChoice -- "on-device (manual, still allowed while online)" --> LocalRun
+
+  ConsentGate{"consentExternalAi === true<br/>for this session?"} -- "no" --> ConsentBlocked["ai_consent_required<br/>request rejected"]
+  ConsentGate -- "yes" --> HostedCall["Hosted inference call<br/>aggregate FinancialSnapshot only —<br/>no raw descriptions/account names/IDs<br/>⚠️ NOT provider/production verified,<br/>see Provider Status"]
+
+  AutoLocal --> LocalRun["On-device inference<br/>Transformers.js / ONNX Runtime"]
+  LocalRun -- "model can't load" --> Deterministic["Deterministic local calculations<br/>never silently calls hosted AI"]
+
+  style HostedCall fill:#fde2e2,stroke:#b00020,color:#333
+  style ConsentBlocked fill:#f5f5f5,stroke:#888,color:#333

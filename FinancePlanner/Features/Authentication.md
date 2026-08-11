@@ -38,4 +38,8 @@ Google OAuth, WebAuthn/passkeys: implemented and unit/router-tested (`auth-route
 
 Email/password: implemented, unit-tested (`server/test/password-auth.test.js`, `server/test/test-password-auth.test.js`), and **local production-style runtime verified, but not production-deployment verified**. `scripts/auth-security-production-acceptance.mjs` exercises real registration (name/password-confirmation fields, submit label) and login through the actual `/api/auth/password/register` and `/api/auth/password/login` endpoints against a real Postgres-backed connector (`AUTH_MODE=local` bootstraps the *session*, not the password path itself). Re-run locally 2026-08-09 against a fresh Postgres container + built preview, matching `production-acceptance.yml`: passed. No claim is made that the same flow has yet been exercised against the deployed production host.
 
+## Diagrams
+
+`diagrams/auth-state-flow.mmd` (AuthGate → Google/email-password → post-auth passkey-banner/VaultGate coexistence → dashboard) and `diagrams/session-lifecycle.mmd` (login → session verification → logout revocation → per-user revocation propagating to other sessions) — both embedded and GitHub-rendering in README.md's "Authentication flow" section. Added during `/diagram` (PR #131, 2026-08-11) specifically because this coexistence relationship and the per-user revocation behavior are both non-obvious enough that a prior session mis-fixed the former on the first attempt (see [[Debugging Learnings]]).
+
 Related: [[Security Decisions]] · [[Data and Persistence]] · [[Provider Status]] · [[Debugging Learnings]]

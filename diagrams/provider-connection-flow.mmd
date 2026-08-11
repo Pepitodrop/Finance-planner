@@ -1,0 +1,24 @@
+sequenceDiagram
+  participant B as Browser
+  participant C as Connector - Node
+  participant P as Provider - GoCardless / PayPal / Google
+
+  Note over B,P: Implemented for all three. NOT provider or<br/>production verified — credential-dependent,<br/>requires a manual human-recorded exercise.<br/>See Provider Status.
+
+  B->>C: POST /api/connectors/connect (choose institution)
+  C->>P: create requisition / authorization<br/>(server-side credentials only)
+  P-->>C: redirectUrl
+  C-->>B: redirectUrl
+
+  B->>P: navigate to redirectUrl
+  Note right of P: Real bank/PayPal credentials are<br/>entered on the PROVIDER's own site —<br/>Finance Planner never collects them.
+  P->>B: redirect to /api/connectors/callback?provider=...&state=...
+
+  B->>C: GET /api/connectors/callback
+  C->>P: exchange code/state for access token<br/>(server-side only, never sent to browser)
+  P-->>C: access token / credential
+  C->>C: encrypt token (AES-256-GCM)<br/>store in connector_connections
+
+  C-->>B: connection established<br/>read-only account list
+
+  Note over C,P: Account-information only — no payment<br/>initiation, transfer, payout, order, or<br/>mandate capability is ever requested.

@@ -44,4 +44,8 @@ Server-side stores (`user-state-store.js`, `crypto-store.js`, `auth-store.js`) a
 
 `GET/POST /api/finance/state` — see `docs/CLOUD_DATA.md` for the exact JSON shape. The endpoint independently validates on client and server: rejects unknown fields, malformed IDs, invalid dates, non-integer money, duplicate IDs, transactions referencing missing accounts, oversized payloads. Nginx and the connector both cap this route at 10 MB; other API routes use a smaller general limit.
 
+## Diagram
+
+`diagrams/finance-sync-conflict.mmd`, embedded in `docs/ARCHITECTURE.md` right after the existing ASCII "Persistence flow" diagram (which only shows the happy path) — the full round trip including the compare-and-swap 409 branch and `VaultConflict.tsx`. Added during `/diagram` (PR #131, 2026-08-11) because this exact mechanism caused real confusion during `/qa`'s own local testing (see [[Debugging Learnings]]).
+
 Related: [[System Architecture]] · [[Sync and Offline]] · [[Authentication]] · [[COBOL Domain Core]]

@@ -23,6 +23,37 @@ The registry currently includes:
 
 A replacement licensed PSD2 AISP can be added as another adapter without changing the deterministic banking-domain rules. File-backed account deletion and operational metrics also accept registered provider identifiers without maintaining a separate provider whitelist.
 
+**Implemented, not provider or production verified.** The flow below is correct for GoCardless, PayPal, and Google subscriptions alike — the choreography and the security invariant (credentials/tokens only ever touch the server) are real and code-reviewed, but no completed live consent→sync→disconnect cycle against a real provider is evidenced in-repo; see `docs/issue-105-live-verification.md` and the project's Provider Status notes.
+
+```mermaid
+sequenceDiagram
+  participant B as Browser
+  participant C as Connector - Node
+  participant P as Provider - GoCardless / PayPal / Google
+
+  Note over B,P: Implemented for all three. NOT provider or<br/>production verified — credential-dependent,<br/>requires a manual human-recorded exercise.<br/>See Provider Status.
+
+  B->>C: POST /api/connectors/connect (choose institution)
+  C->>P: create requisition / authorization<br/>(server-side credentials only)
+  P-->>C: redirectUrl
+  C-->>B: redirectUrl
+
+  B->>P: navigate to redirectUrl
+  Note right of P: Real bank/PayPal credentials are<br/>entered on the PROVIDER's own site —<br/>Finance Planner never collects them.
+  P->>B: redirect to /api/connectors/callback?provider=...&state=...
+
+  B->>C: GET /api/connectors/callback
+  C->>P: exchange code/state for access token<br/>(server-side only, never sent to browser)
+  P-->>C: access token / credential
+  C->>C: encrypt token (AES-256-GCM)<br/>store in connector_connections
+
+  C-->>B: connection established<br/>read-only account list
+
+  Note over C,P: Account-information only — no payment<br/>initiation, transfer, payout, order, or<br/>mandate capability is ever requested.
+```
+
+Source: [`diagrams/provider-connection-flow.mmd`](../diagrams/provider-connection-flow.mmd).
+
 ## COBOL boundary
 
 GnuCOBOL is authoritative for banking-domain decisions:

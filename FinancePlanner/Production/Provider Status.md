@@ -108,4 +108,8 @@ Relevant code/docs: `src/aiModels.ts`, `README.md` ("AI architecture")
 
 ---
 
+## Diagram
+
+`diagrams/provider-connection-flow.mmd`, embedded in `docs/OPEN_BANKING_ARCHITECTURE.md`'s "Provider contract" section — the generic redirect/consent/callback sequence shared by GoCardless, PayPal, and Google subscriptions, with an explicit "NOT provider or production verified" note at the top of the diagram itself so the choreography being correct on paper is never mistaken for a completed live cycle. Added during `/diagram` (PR #131, 2026-08-11).
+
 Related: [[Authentication]], [[Bank Connections]], [[PayPal]], [[AI System]], [[Known Issues and Limitations]], [[Rejected Approaches]]

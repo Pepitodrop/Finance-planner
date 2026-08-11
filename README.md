@@ -16,6 +16,78 @@ Finance Planner is a privacy-focused personal finance application built with Rea
 - runs as a responsive website, installable iOS/Android PWA and browser-backed Android app;
 - stores the authenticated user's full finance vault in PostgreSQL for cross-device access.
 
+## Authentication flow
+
+Passkeys are never a primary pre-authentication choice — only Google and email/password are. Post-login, an optional "Add a passkey" recommendation coexists with the vault setup/unlock screen rather than replacing or covering it (a real mobile regression here was found and fixed during redesign, and independently re-verified across five viewports afterward — see the note in the diagram).
+
+```mermaid
+graph TD
+  Start["App loads"] --> AuthGate
+
+  subgraph PreAuth["AuthGate"]
+    AuthGate["Unauthenticated — two primary<br/>choices only:<br/>Continue with Google<br/>Email / password"]
+  end
+
+  AuthGate -- "Continue with Google" --> Google["Google OAuth<br/>state + nonce cookies,<br/>ID token audience/email_verified check"]
+  AuthGate -- "register or sign in" --> EmailPw["Email / password<br/>scrypt hash, timing-safe verify"]
+
+  Google --> Session["Signed session issued<br/>fp_session cookie<br/>(HttpOnly, SameSite=Lax, Secure)"]
+  EmailPw --> Session
+
+  Session --> PostAuth
+
+  subgraph PostAuth["Post-authentication"]
+    direction TB
+    PasskeyBanner["Optional 'Add a passkey' banner<br/>dismissible, in normal document flow<br/>(NOT position:fixed here — see note)"]
+    VaultGate["VaultGate<br/>set up new vault OR unlock existing<br/>device-local vault password"]
+    PasskeyBanner --- VaultGate
+  end
+
+  VaultGate --> Dashboard["Dashboard"]
+
+  Note["Fixed regression, redesign phase:<br/>banner used to float (position:fixed)<br/>over VaultGate's submit button on narrow<br/>mobile viewports, blocking it. Correct fix<br/>was NOT suppressing the banner — AUTH-05's<br/>own contract requires both to coexist and<br/>stay dismissible. Fix: banner flows in normal<br/>document flow above the vault card instead,<br/>so overlap is structurally impossible.<br/>Re-verified at 390x844, 430x932, 768x1024,<br/>1024x768, 1440x900 with real elementFromPoint<br/>hit-testing during /qa."]
+  PostAuth -.-> Note
+
+  style Note fill:#fff3cd,stroke:#b8860b,color:#333
+```
+
+Sessions are signed, HttpOnly cookies; logout revokes the session server-side (not just the browser cookie), and revocation is per-user, so it also signs out any other active session for the same account:
+
+```mermaid
+sequenceDiagram
+  participant B as Browser
+  participant C as Connector
+  participant R as SessionRevocationRegistry - Postgres
+
+  B->>C: POST /api/auth/google/callback OR /api/auth/password/login
+  C->>C: create signed session (HMAC, SESSION_SECRET)
+  C-->>B: Set-Cookie fp_session (HttpOnly, SameSite=Lax, Secure)
+
+  loop Every authenticated request
+    B->>C: request + fp_session cookie
+    C->>R: verify(userId) — refreshed ~30s cache
+    R-->>C: not revoked
+    C-->>B: 200 + data
+  end
+
+  B->>C: POST /api/auth/logout
+  C->>R: revoke(userId)
+  C-->>B: clear cookie, 200
+
+  Note over R: Revocation is per-USER, not per-token.<br/>Fixed 2026-08-10 (/cso): logout used to only<br/>clear the calling browser's cookie — the signed<br/>token itself stayed valid until its TTL.
+
+  par Any other active session, same user
+    B->>C: request + stale fp_session cookie
+    C->>R: verify(userId)
+    R-->>C: revoked
+    C-->>B: 401 Authentication required
+  end
+
+  Note over C,R: Account deletion calls the same<br/>revoke(userId) path — that path was already<br/>wired. Logout was the gap that got fixed.
+```
+
+Sources: [`diagrams/auth-state-flow.mmd`](diagrams/auth-state-flow.mmd), [`diagrams/session-lifecycle.mmd`](diagrams/session-lifecycle.mmd).
+
 ## Cross-device data model
 
 **PostgreSQL is the canonical authenticated user-data store.** Browser storage is an encrypted offline cache, not the only copy.
@@ -364,11 +436,14 @@ This repository has not completed an independent penetration test or formal priv
 
 ## Documentation
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — source layout and dependency rules
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — source layout, dependency rules, and the finance-sync/conflict sequence
 - [`docs/CLOUD_DATA.md`](docs/CLOUD_DATA.md) — cross-device persistence and acceptance tests
 - [`docs/DATABASE.md`](docs/DATABASE.md) — database operations and restore drill
+- [`docs/OPEN_BANKING_ARCHITECTURE.md`](docs/OPEN_BANKING_ARCHITECTURE.md) — provider contract, COBOL boundary, and the provider consent/connection sequence
+- [`docs/HUGGINGFACE_AI.md`](docs/HUGGINGFACE_AI.md) — hosted reasoning architecture and connectivity-aware routing
 - [`docs/ANDROID.md`](docs/ANDROID.md) — Android build, signing, asset links and Play release
 - [`docs/PRODUCTION.md`](docs/PRODUCTION.md) — deployment and incident response
+- [`diagrams/`](diagrams/) — Mermaid source, SVG and PNG for every architecture diagram in this repo
 - [`SECURITY.md`](SECURITY.md) — vulnerability reporting
 - [`CHANGELOG.md`](CHANGELOG.md) — release history
 
