@@ -117,4 +117,62 @@ A healthy durable note normally has several meaningful connections to peer conce
 
 The goal is **semantic connectivity**: dense enough that a future Claude session can traverse from a feature to its architecture, decisions, risks, evidence, provider state, and production implications without returning to the root index each time.
 
+## Graph architecture & maintenance contract (added 2026-08-12)
+
+This section is the durable topology contract — read it before adding notes at scale so the graph stays legible, not just correct. It reflects a full graph-metrics analysis performed 2026-08-12 (243 notes, 1,553 unique edges, 1 connected component, 0 orphans, 0 broken links — see the `/graph-topology` phase report for the complete before/after numbers).
+
+### Hierarchy
+
+- **Level 0 — root:** [[00 Project Index]] (directory-style entry point) and this note (relationship-centric map). Exactly two root nodes; do not add a third.
+- **Level 1 — domain hubs:** the pre-existing feature/architecture notes ([[Authentication]], [[AI System]], [[Bank Connections]], [[PayPal]], [[Frontend]], [[Backend]], [[Data and Persistence]], [[COBOL Domain Core]], [[Security Decisions]], [[Provider Status]], [[Mobile PWA Android]], [[Sync and Offline]], [[Deployment]], [[Security]]) plus the three new top-level system notes ([[Persistence System]], [[Security System]], [[Session System]], [[COBOL Banking Domain]]).
+- **Level 2 — subsystem index/hub notes:** the 10 "00 … Index" notes ([[Pages Index]], [[Flows Index]], [[AI Index]], [[Technology Index]], [[COBOL Index]], [[Data Index]], [[Providers Index]], [[Security Index]], [[Testing and CI Index]], [[Implementation Index]]). Each organizes one folder and links every note in it — this makes each Index note a legitimate high-degree hub (verified: 27–93 total degree). That is by design, not an anti-pattern, **as long as atomic notes underneath don't also link straight to Level 0.**
+- **Level 3 — atomic notes:** one page/flow/model/table/control/file/test per real concept. An atomic note should link to its nearest Level 1/2 hub, not to [[00 Project Index]] or this note directly. **Verified 2026-08-12:** zero atomic (Level 3) notes link to either root — only the 10 Index notes and the pre-existing domain hubs do. Keep it that way when adding new atomic notes.
+
+### Domain groups (also the Graph View color groups — see Visualization below)
+
+AUTH ([[Authentication]] + auth pages/flows/security controls), AI ([[AI Index]]), FINANCE (finance pages: Dashboard/Transactions/Accounts/Goals/Recurring), DATA ([[Data Index]]), COBOL ([[COBOL Index]]), SECURITY ([[Security Index]]), PROVIDERS ([[Providers Index]] + [[Bank Connections]]/[[PayPal]]), FRONTEND ([[Frontend]] + [[Pages Index]]), BACKEND ([[Backend]] + [[Implementation Index]]), TESTING/CI ([[Testing and CI Index]]), PRODUCTION/INFRASTRUCTURE ([[Production/Deployment|Deployment]] + [[Technology Index]] infra nodes).
+
+### Metadata convention
+
+Every atomic note carries `type`, `domain`, `status` frontmatter (established in the prior graph-expansion pass; do not add a separate `layer` field — it would duplicate what `domain` + folder path already express, and section 9 of the topology-pass instructions explicitly warns against meaningless metadata). Folder path *is* the layer: `Pages/` = UX, `Flows/` = cross-cutting sequence, `Implementation/` = backend/frontend code, `Data/` = persistence, `Security/` = cross-cutting control, `Technology/` = infrastructure/language, `COBOL/` = deterministic domain, `AI/` = probabilistic domain, `Providers/` = external dependency, `Testing/` = verification.
+
+### Relationship convention (the chain, not the star)
+
+Prefer a layered chain over a direct link to a hub:
+
+`Page → Flow → Feature/domain hub → Implementation file → Data/Provider/AI/COBOL node → Security control → Test → CI job → Verification status`
+
+Concrete, verified examples already in the graph: [[Passkey Enrolment Banner]] → [[Passkey Enrolment Flow]] → [[WebAuthn Passkeys]] → [[AuthGate.tsx]] → `server/test/passkey-authenticator-compatibility.test.js` → [[Production Browser Acceptance]] → provider/device-verified: **no**. [[Finance Assistant Page]] → [[Hosted-On-Device Routing Decision]] → [[AI Consent Gate]] → [[AI Financial Snapshot]] → [[AI Data Minimization]] → [[Hosted Hugging Face Inference]] → [[Inference Verification Status]]. [[Transactions Page]] → [[Transaction Normalization]] → [[Banking Core Module]] → [[COBOL Tests]] → [[COBOL CI Compilation]].
+
+### Atomic-node rule
+
+One node per concept that could reasonably appear independently in a graph search, bug report, or code review. Do not split prose into single-sentence notes; do not merge genuinely distinct concepts to save a note.
+
+### Hub rule
+
+A hub (Index or domain note) may have high degree — that is its job. An atomic note should not. If an atomic note starts accumulating 8+ outgoing links, check whether some of them restate a relationship already reachable through a hub it already links to, before adding more.
+
+### Implementation-edge rule
+
+A feature/page/flow concept claiming to be "implemented" should be reachable, within 1–2 hops, from an actual file/module note in [[Implementation Index]] — never assert implementation from a name alone; read the source first.
+
+### Verification-edge rule
+
+A provider/AI/security node's verification status ("implemented" / "local runtime verified" / "provider or device verified" / "production verified") must cite the actual test/CI evidence it's linked to, matching [[Provider Status]]'s conservative wording exactly. Never collapse these four states into one "working" claim.
+
+### Visualization (Graph View)
+
+`FinancePlanner/.obsidian/` is gitignored and machine-local (see `CLAUDE.md`) — its `graph.json` cannot be version-controlled, so the recommended settings are documented here instead, reproducible by any future session:
+
+- **Color groups**, one `path:<Folder>/` query per domain folder (AI, COBOL, Data, Security, Providers, Testing, Technology, Pages, Flows, Implementation, Architecture, Features, Production, Decisions, Engineering) — 15 groups, one color each. Root-level notes (the two Level-0 roots plus the four new system notes) are intentionally left uncolored/default so they read as the neutral core the colored clusters orbit.
+- **Forces:** lower `centerStrength` (~0.35, down from the ~0.52 default) and raise `repelStrength` (~18, up from 10) so same-color clusters have room to separate spatially instead of collapsing toward the center; `linkDistance` raised to ~300 for the same reason.
+- **Filters:** tags and attachments hidden (`showTags`/`showAttachments`: false) — this vault uses folder + frontmatter for structure, not Obsidian tags, so tag nodes would add visual noise without carrying real graph information.
+
+### Extending the graph without creating a hairball
+
+1. New atomic note → link it to its nearest Level 2 index/hub and to 2–5 genuinely related peers (chain-topology above), not to every hub that happens to be adjacent.
+2. New domain-spanning concept → consider whether it deserves its own Level 1 hub (rare) or belongs as an atomic note under an existing Index (usual case).
+3. Before creating a note, search for an existing one with overlapping meaning — extend it instead of duplicating.
+4. After a significant addition, spot-check: does this note's own domain folder + the `path:` color-group system already make it visually identifiable? If a note's content clearly belongs to two domains, that's fine — cross-domain edges are expected and valuable; just don't make it a third color by giving it dual folder placement.
+
 Related: [[Memory System]] · [[00 Project Index]] · [[System Architecture]] · [[Architecture Decisions]] · [[Security Decisions]] · [[Provider Status]] · [[Known Issues and Limitations]]
