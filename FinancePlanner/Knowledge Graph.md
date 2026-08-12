@@ -162,10 +162,29 @@ A provider/AI/security node's verification status ("implemented" / "local runtim
 
 ### Visualization (Graph View)
 
-`FinancePlanner/.obsidian/` is gitignored and machine-local (see `CLAUDE.md`) — its `graph.json` cannot be version-controlled, so the recommended settings are documented here instead, reproducible by any future session:
+`FinancePlanner/.obsidian/` is gitignored and machine-local (see `CLAUDE.md`) — its `graph.json` cannot be version-controlled, so the recommended settings are documented here instead, reproducible by any future session. **This section is the durable, repository-tracked record of the settled configuration** — `graph.json` itself will never carry this information across machines or survive a fresh clone.
 
-- **Color groups**, one `path:<Folder>/` query per domain folder (AI, COBOL, Data, Security, Providers, Testing, Technology, Pages, Flows, Implementation, Architecture, Features, Production, Decisions, Engineering) — 15 groups, one color each. Root-level notes (the two Level-0 roots plus the four new system notes) are intentionally left uncolored/default so they read as the neutral core the colored clusters orbit.
-- **Forces:** lower `centerStrength` (~0.35, down from the ~0.52 default) and raise `repelStrength` (~18, up from 10) so same-color clusters have room to separate spatially instead of collapsing toward the center; `linkDistance` raised to ~300 for the same reason.
+- **Color groups**, one `path:<Folder>/` query per domain folder (AI, COBOL, Data, Security, Providers, Testing, Technology, Pages, Flows, Implementation, Architecture, Features, Production, Decisions, Engineering) — 15 groups, one color each, unchanged since first configured. Root-level notes (the two Level-0 roots plus the four new system notes) are intentionally left uncolored/default so they read as the neutral core the colored clusters orbit.
+
+#### Final native-Graph baseline (settled 2026-08-12, after 4 rounds of screenshot-verified tuning)
+
+```
+centerStrength:      0.25
+repelStrength:       20
+linkStrength:        1
+linkDistance:        380
+nodeSizeMultiplier:  0.7
+lineSizeMultiplier:  0.4
+textFadeMultiplier:  0
+showArrow:           false
+```
+
+These values were reached iteratively, with each change verified against a live screenshot before the next was made — including one confirmed regression (raising `repelStrength` while lowering `linkStrength` actively undid a cluster's spatial separation, because Obsidian's repulsion force applies uniformly to every node pair regardless of domain, while lowering link strength weakens exactly the intra-domain links that were holding that cluster together) that was caught and reverted rather than compounded. Full round-by-round log: `2026-08-12_20-38_Finance-Planner_PR131_Obsidian-Graph-Visual-Verification-Report.pdf`.
+
+**What these values do and don't achieve:** they optimize *readability* — edge lines recede to background context (`lineSizeMultiplier`), node sizes stay proportionate without any one hub visually dominating (`nodeSizeMultiplier`), and same-color domains get enough repulsion/distance to occupy distinguishable regions where the underlying link structure allows it (`centerStrength`/`repelStrength`/`linkDistance`). They do **not**, and cannot, achieve *architectural hierarchy* — a visual Level-0-root → Level-1-domain → Level-2-hub → Level-3-leaf structure, or golden-angle/radial placement of domain hubs around a center. That was experimentally verified, not assumed: across the tuning rounds, only 2 of the ~14 domains ever achieved genuine spatial separation, and no combination of native force/size/line settings moved that further, because Obsidian's core Graph View has no concept of hierarchy, domain, or edge type anywhere in its physics — `colorGroups` is a cosmetic overlay applied after layout, invisible to the forces that actually position nodes, and there is no supported mechanism for deterministic or pinned node coordinates.
+
+**Conclusion: further native physics tuning is not recommended.** The values above are the settled baseline for as long as this vault uses native Graph View. The planned next architectural step — deterministic radial/hierarchical layout, golden-angle domain placement, typed edge styling, importance-based node sizing — requires a dedicated **Finance Planner Architecture Graph** custom view/plugin (design proposed in the visual-verification report above; **not implemented as of this note**).
+
 - **Filters:** tags and attachments hidden (`showTags`/`showAttachments`: false) — this vault uses folder + frontmatter for structure, not Obsidian tags, so tag nodes would add visual noise without carrying real graph information.
 
 ### Extending the graph without creating a hairball
