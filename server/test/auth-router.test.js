@@ -33,6 +33,38 @@ function jsonRequest(method, payload) {
   return request
 }
 
+function googleCallbackRequest(state = 'oauth-state', nonce = 'oauth-nonce') {
+  return {
+    method: 'GET',
+    headers: { cookie: `fp_google_state=${encodeURIComponent(state)}; fp_google_nonce=${encodeURIComponent(nonce)}` },
+  }
+}
+
+function googleClientForClaims(claims) {
+  return {
+    getToken: async (code) => {
+      assert.equal(code, 'test-code')
+      return { tokens: { id_token: 'test-id-token' } }
+    },
+    verifyIdToken: async ({ idToken, audience }) => {
+      assert.equal(idToken, 'test-id-token')
+      assert.equal(audience, 'test-google-client-id.apps.googleusercontent.com')
+      return { getPayload: () => claims }
+    },
+  }
+}
+
+function redirectResponse() {
+  const result = { head: null, ended: false }
+  return {
+    result,
+    response: {
+      writeHead: (status, headers) => { result.head = { status, headers } },
+      end: () => { result.ended = true },
+    },
+  }
+}
+
 test('local auth session resolves to a provisioned auth user and refreshes the persistent cookie', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'finance-planner-auth-'))
   try {
@@ -162,6 +194,120 @@ test('google login start redirects to a valid Google authorization URL with stat
     const setCookies = head.headers['Set-Cookie']
     assert.ok(setCookies.some((c) => c.startsWith('fp_google_state=')))
     assert.ok(setCookies.some((c) => c.startsWith('fp_google_nonce=')))
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('SECURITY: Google callback refuses to attach a verified Google identity to a password-created account with the same email', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'finance-planner-auth-'))
+  try {
+    let sent
+    const send = (_response, status, payload, headers = {}) => { sent = { status, payload, headers } }
+    const handleAuth = await createAuthRouter({
+      env: {
+        AUTH_MASTER_KEY: authKey,
+        AUTH_STORE_PATH: join(directory, 'auth.enc.json'),
+        GOOGLE_CLIENT_ID: 'test-google-client-id.apps.googleusercontent.com',
+        GOOGLE_CLIENT_SECRET: 'test-google-client-secret',
+      },
+      origin: 'http://localhost:5173',
+      sessionSecret,
+      send,
+      googleClient: googleClientForClaims({
+        sub: 'victim-google-subject',
+        email: 'victim@example.test',
+        email_verified: true,
+        nonce: 'oauth-nonce',
+        name: 'Victim',
+      }),
+    })
+
+    const registered = await handleAuth(
+      jsonRequest('POST', { name: 'Pre-registered account', email: 'victim@example.test', password: 'AttackerChosenPassword123!' }),
+      {},
+      new URL('http://localhost:5173/api/auth/password/register'),
+    )
+    assert.equal(registered, true)
+    assert.match(sent.payload.user.id, /^email:/)
+
+    const { response, result } = redirectResponse()
+    await assert.rejects(
+      handleAuth(
+        googleCallbackRequest(),
+        response,
+        new URL('http://localhost:5173/api/auth/google/callback?code=test-code&state=oauth-state'),
+      ),
+      (error) => error?.status === 409
+        && error?.code === 'account_linking_required'
+        && /cannot be linked automatically/i.test(error.message),
+    )
+    assert.equal(result.head, null, 'a rejected identity collision must not issue a Finance Planner session redirect')
+
+    const passwordLogin = await handleAuth(
+      jsonRequest('POST', { email: 'victim@example.test', password: 'AttackerChosenPassword123!' }),
+      {},
+      new URL('http://localhost:5173/api/auth/password/login'),
+    )
+    assert.equal(passwordLogin, true)
+    assert.match(sent.payload.user.id, /^email:/, 'the password-created account must remain separate and unchanged')
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('Google callback reuses only the already-established matching Google subject identity', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'finance-planner-auth-'))
+  try {
+    const send = () => {
+      throw new Error('send() should not be called for a Google redirect response')
+    }
+    let claims = {
+      sub: 'stable-google-subject',
+      email: 'owner@example.test',
+      email_verified: true,
+      nonce: 'oauth-nonce',
+      name: 'Owner One',
+    }
+    const googleClient = {
+      getToken: async () => ({ tokens: { id_token: 'test-id-token' } }),
+      verifyIdToken: async () => ({ getPayload: () => claims }),
+    }
+    const handleAuth = await createAuthRouter({
+      env: {
+        AUTH_MASTER_KEY: authKey,
+        AUTH_STORE_PATH: join(directory, 'auth.enc.json'),
+        GOOGLE_CLIENT_ID: 'test-google-client-id.apps.googleusercontent.com',
+        GOOGLE_CLIENT_SECRET: 'test-google-client-secret',
+      },
+      origin: 'http://localhost:5173',
+      sessionSecret,
+      send,
+      googleClient,
+    })
+
+    const first = redirectResponse()
+    assert.equal(await handleAuth(
+      googleCallbackRequest(),
+      first.response,
+      new URL('http://localhost:5173/api/auth/google/callback?code=test-code&state=oauth-state'),
+    ), true)
+    assert.equal(first.result.head.status, 302)
+    const firstSessionCookie = first.result.head.headers['Set-Cookie'].find((value) => value.startsWith('fp_session='))
+    const firstToken = decodeURIComponent(firstSessionCookie.match(/fp_session=([^;]+)/)[1])
+    assert.equal(verifySession(firstToken, sessionSecret), 'google:stable-google-subject')
+
+    claims = { ...claims, name: 'Owner Updated' }
+    const second = redirectResponse()
+    assert.equal(await handleAuth(
+      googleCallbackRequest(),
+      second.response,
+      new URL('http://localhost:5173/api/auth/google/callback?code=test-code&state=oauth-state'),
+    ), true)
+    assert.equal(second.result.head.status, 302)
+    const secondSessionCookie = second.result.head.headers['Set-Cookie'].find((value) => value.startsWith('fp_session='))
+    const secondToken = decodeURIComponent(secondSessionCookie.match(/fp_session=([^;]+)/)[1])
+    assert.equal(verifySession(secondToken, sessionSecret), 'google:stable-google-subject', 'repeat Google sign-in must retain the stable provider subject identity')
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
