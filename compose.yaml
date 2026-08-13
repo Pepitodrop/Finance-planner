@@ -4,8 +4,10 @@ services:
       context: .
       dockerfile: Dockerfile.web
     restart: unless-stopped
+    # Caddy is the public edge. Keep nginx loopback-only so port 8080 cannot
+    # bypass TLS termination and edge policy by being reached directly.
     ports:
-      - "${WEB_PORT:-8080}:8080"
+      - "127.0.0.1:${WEB_PORT:-8080}:8080"
     depends_on:
       connector:
         condition: service_healthy
