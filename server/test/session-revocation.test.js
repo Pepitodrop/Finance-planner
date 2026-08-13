@@ -43,6 +43,19 @@ test('revokes existing sessions but permits sessions issued afterwards', async (
   assert.equal(registry.verify({ sub: 'user-2', iat: 0 }), 'user-2')
 })
 
+test('uses millisecond issuance precision to allow immediate same-second relogin', async () => {
+  const pool = fakePool()
+  const revokedAt = Date.parse('2026-08-01T12:00:00.500Z')
+  const registry = new SessionRevocationRegistry({ pool, secret, now: () => revokedAt })
+  await registry.load()
+  await registry.revoke('user-1')
+
+  const issuedSecond = Math.floor(revokedAt / 1000)
+  assert.throws(() => registry.verify({ sub: 'user-1', iat: issuedSecond, iatMs: revokedAt - 100 }), /revoked/i)
+  assert.equal(registry.verify({ sub: 'user-1', iat: issuedSecond, iatMs: revokedAt + 100 }), 'user-1')
+  assert.throws(() => registry.verify({ sub: 'user-1', iat: issuedSecond }), /revoked/i)
+})
+
 test('loads revocations after a process restart and prunes old entries', async () => {
   const pool = fakePool()
   const first = new SessionRevocationRegistry({ pool, secret, now: () => Date.parse('2024-01-01T00:00:00Z') })
