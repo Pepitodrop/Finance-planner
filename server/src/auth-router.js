@@ -9,6 +9,7 @@ import {
 import { validateAccountDeletionInput } from './account-deletion.js'
 import { AuthStore } from './auth-store.js'
 import { hashPassword, normalizeDisplayName, normalizeEmail, verifyPassword } from './password-auth.js'
+import { HttpError } from './runtime-security.js'
 import { createSession, verifySession } from './security.js'
 import { verifyTestPassword } from './test-password-auth.js'
 
@@ -70,7 +71,7 @@ function safeUser(user) {
   }
 }
 
-export async function createAuthRouter({ env, origin, sessionSecret, send, verifyActiveSession, deleteUserData, revokeSession }) {
+export async function createAuthRouter({ env, origin, sessionSecret, send, verifyActiveSession, deleteUserData, revokeSession, googleClient }) {
   const rpId = env.WEBAUTHN_RP_ID || new URL(origin).hostname
   const rpName = env.WEBAUTHN_RP_NAME || 'Finance Planner'
   const sessionTtlSeconds = configuredSessionTtl(env)
@@ -97,7 +98,7 @@ export async function createAuthRouter({ env, origin, sessionSecret, send, verif
     })
   }
 
-  const google = new OAuth2Client(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET, `${origin}/api/auth/google/callback`)
+  const google = googleClient || new OAuth2Client(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET, `${origin}/api/auth/google/callback`)
 
   return async function handleAuth(request, response, url) {
     if (!url.pathname.startsWith('/api/auth/')) return false
@@ -252,10 +253,22 @@ export async function createAuthRouter({ env, origin, sessionSecret, send, verif
       const ticket = await google.verifyIdToken({ idToken: tokens.id_token, audience: env.GOOGLE_CLIENT_ID })
       const claims = ticket.getPayload()
       if (!claims?.sub || !claims.email || !claims.email_verified || claims.nonce !== cookies.fp_google_nonce) throw new Error('Google identity could not be verified.')
+      await store.load()
       const normalizedEmail = claims.email.toLowerCase()
-      const existing = store.findByEmail(normalizedEmail)
-      const user = existing || { id: `google:${claims.sub}`, email: normalizedEmail, passkeys: [], createdAt: new Date().toISOString() }
-      Object.assign(user, { name: claims.name || normalizedEmail, picture: claims.picture, updatedAt: new Date().toISOString() })
+      const googleUserId = `google:${claims.sub}`
+      const emailOwner = store.findByEmail(normalizedEmail)
+      const existingGoogleUser = store.data.users[googleUserId]
+      // Email equality alone is not proof that two authentication methods
+      // belong to the same Finance Planner account. In particular, password
+      // registration currently does not verify mailbox ownership. Reusing a
+      // password-created account here would let an attacker pre-register a
+      // victim's Google email, wait for the victim to use Google, and retain
+      // password access to the victim's resulting Finance Planner account.
+      if (emailOwner && emailOwner.id !== googleUserId) {
+        throw new HttpError(409, 'account_linking_required', 'Google sign-in cannot be linked automatically to an existing Finance Planner account with this email address. Sign in with the account\'s existing method instead.')
+      }
+      const user = existingGoogleUser || { id: googleUserId, email: normalizedEmail, passkeys: [], createdAt: new Date().toISOString() }
+      Object.assign(user, { email: normalizedEmail, name: claims.name || normalizedEmail, picture: claims.picture, updatedAt: new Date().toISOString() })
       await store.mutate((data) => { data.users[user.id] = user })
       const token = createSession(user.id, sessionSecret, sessionTtlSeconds)
       response.writeHead(302, { Location: origin, 'Cache-Control': 'no-store', 'Set-Cookie': [cookie('fp_session', token, origin, sessionTtlSeconds), cookie('fp_google_state', '', origin, 0), cookie('fp_google_nonce', '', origin, 0)] })
