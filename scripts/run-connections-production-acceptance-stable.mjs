@@ -14,6 +14,7 @@ const CASES = [
   ['institution-selector', 'Choose your institution'],
   ['institution-search', 'Choose your institution'],
   ['provider-unavailable', 'Choose your institution'],
+  ['paypal-unconfigured', "PayPal isn't available right now"],
   ['account-type', 'What would you like to connect?'],
   ['bank-confirmation', 'Continue to your provider'],
   ['paypal-confirmation', 'Continue with the owner PayPal connection'],
@@ -83,7 +84,7 @@ try {
       )
       .replace(
         '  assert.equal(assertions.mobileNavigationUnobscured, true)',
-        "  const modalMode = ['institution-selector', 'institution-search', 'provider-unavailable', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'manual'].includes(mode)\n  if (width <= 768 && modalMode) {\n    assert.equal(assertions.mobileNavigationUnobscured, false)\n    assert.equal(assertions.mobileNavigationInert, true)\n  } else {\n    assert.equal(assertions.mobileNavigationUnobscured, true)\n  }",
+        "  const modalMode = ['institution-selector', 'institution-search', 'provider-unavailable', 'paypal-unconfigured', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'manual'].includes(mode)\n  if (width <= 768 && modalMode) {\n    assert.equal(assertions.mobileNavigationUnobscured, false)\n    assert.equal(assertions.mobileNavigationInert, true)\n  } else {\n    assert.equal(assertions.mobileNavigationUnobscured, true)\n  }",
       )
       .replace(
         '  assert.deepEqual(assertions.viewport, { width, height })',

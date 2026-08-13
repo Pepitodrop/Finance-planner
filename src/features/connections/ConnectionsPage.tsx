@@ -62,20 +62,22 @@ import {
   institutionIcon,
   nextSetupStepAfterInstitution,
   previousSetupStepFromConfirmation,
+  providerDescriptorFor,
   summarizeAccountSelection,
   validateManualAccount,
   type InstitutionCategory,
+  type ProviderStatus,
   type SetupStep,
 } from './connectionsModel'
 import type { Institution } from '../../institutions'
-import { ACCEPTANCE_CONNECTIONS, ACCEPTANCE_PROVIDER_STATUS_UNAVAILABLE, ACCEPTANCE_STATEMENT_PREVIEW, ACCEPTANCE_SYNC_PREVIEWS, type ConnectionsAcceptanceMode } from './connectionsAcceptanceFixtures'
+import { ACCEPTANCE_CONNECTIONS, ACCEPTANCE_PROVIDER_STATUS_PAYPAL_UNCONFIGURED, ACCEPTANCE_PROVIDER_STATUS_UNAVAILABLE, ACCEPTANCE_STATEMENT_PREVIEW, ACCEPTANCE_SYNC_PREVIEWS, type ConnectionsAcceptanceMode } from './connectionsAcceptanceFixtures'
 
 interface ConnectionsPageProps { state: AppState; onApply: (state: AppState) => void; acceptanceMode?: ConnectionsAcceptanceMode }
 type Screen = 'overview' | 'checking' | 'sync-selection' | 'attention' | 'statement-preview'
 
 // Acceptance modes that inject their own deterministic providerStatus (see
 // the acceptanceMode effect below) instead of relying on the real fetch.
-const PROVIDER_STATUS_FIXTURE_MODES = new Set<ConnectionsAcceptanceMode | undefined>(['paypal-confirmation', 'provider-unavailable'])
+const PROVIDER_STATUS_FIXTURE_MODES = new Set<ConnectionsAcceptanceMode | undefined>(['paypal-confirmation', 'provider-unavailable', 'paypal-unconfigured'])
 
 function formatEuro(cents: number): string {
   return new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' }).format(cents / 100)
@@ -122,7 +124,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   const [category, setCategory] = useState<InstitutionCategory>('popular')
   const [selectedInstitutionId, setSelectedInstitutionId] = useState<string | null>(null)
   const [accountType, setAccountType] = useState<ConnectorAccountType>('checking')
-  const [providerStatus, setProviderStatus] = useState<ProviderDescriptor[]>([])
+  const [providerStatus, setProviderStatus] = useState<ProviderStatus>({ status: 'loading' })
 
   const [resolvingInstitution, setResolvingInstitution] = useState<Institution | null>(null)
   const [resolvedProviderInstitution, setResolvedProviderInstitution] = useState<ProviderInstitution | null>(null)
@@ -152,7 +154,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     if (acceptanceMode === 'institution-search') { setConnections(ACCEPTANCE_CONNECTIONS); setSetupStep(1); setCategory('popular'); setSearchTerm('bank'); setSetupOpen(true); return }
     if (acceptanceMode === 'account-type') { setSelectedInstitutionId('ing'); setAccountType('checking'); setSetupStep(2); setSetupOpen(true); return }
     if (acceptanceMode === 'bank-confirmation') { setSelectedInstitutionId('ing'); setResolvedProviderInstitution({ id: 'INGDDEFF_INGDDEFFXXX', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }); setSetupStep(3); setSetupOpen(true); return }
-    if (acceptanceMode === 'paypal-confirmation') { setSelectedInstitutionId('paypal'); setProviderStatus([{ id: 'paypal', displayName: 'PayPal', kind: 'wallet-account-information', available: true, configured: true, mode: 'owner' }]); setSetupStep(3); setSetupOpen(true); return }
+    if (acceptanceMode === 'paypal-confirmation') { setSelectedInstitutionId('paypal'); setProviderStatus({ status: 'ready', providers: [{ id: 'paypal', displayName: 'PayPal', kind: 'wallet-account-information', available: true, configured: true, mode: 'owner' }] }); setSetupStep(3); setSetupOpen(true); return }
     if (acceptanceMode === 'checking') { setScreen('checking'); return }
     if (acceptanceMode === 'sync-selection') {
       setPreviews(ACCEPTANCE_SYNC_PREVIEWS)
@@ -163,26 +165,35 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     if (acceptanceMode === 'attention') { setConnections(ACCEPTANCE_CONNECTIONS); setAttentionProvider('finapi'); setScreen('attention'); return }
     if (acceptanceMode === 'manual') { setManualOpen(true); return }
     if (acceptanceMode === 'statement-preview') { setStatementFileName('finance_statement_march.csv'); setStatementPreview(ACCEPTANCE_STATEMENT_PREVIEW); setScreen('statement-preview'); return }
-    if (acceptanceMode === 'provider-unavailable') { setConnections(ACCEPTANCE_CONNECTIONS); setProviderStatus(ACCEPTANCE_PROVIDER_STATUS_UNAVAILABLE); setSetupStep(1); setCategory('popular'); setSearchTerm(''); setSetupOpen(true) }
+    if (acceptanceMode === 'provider-unavailable') { setConnections(ACCEPTANCE_CONNECTIONS); setProviderStatus({ status: 'ready', providers: ACCEPTANCE_PROVIDER_STATUS_UNAVAILABLE }); setSetupStep(1); setCategory('popular'); setSearchTerm(''); setSetupOpen(true); return }
+    if (acceptanceMode === 'paypal-unconfigured') { setSelectedInstitutionId('paypal'); setProviderStatus({ status: 'ready', providers: ACCEPTANCE_PROVIDER_STATUS_PAYPAL_UNCONFIGURED }); setSetupStep(3); setSetupOpen(true) }
   }, [acceptanceMode])
+
+  // Provider status gates whether an external (gocardless/paypal/finapi)
+  // institution can be selected at all -- it is load-bearing, not advisory,
+  // so it fails closed: 'loading' and 'error' both make every external
+  // provider non-selectable (see institutionAvailability()). Exposed so the
+  // "Retry" action in the setup dialog can call it again after a failure.
+  const loadProviderStatus = useCallback(() => {
+    setProviderStatus({ status: 'loading' })
+    let cancelled = false
+    void (async () => {
+      try {
+        const providers = await fetchProviderStatus()
+        if (!cancelled) setProviderStatus({ status: 'ready', providers })
+      } catch {
+        if (!cancelled) setProviderStatus({ status: 'error' })
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     // A couple of acceptance fixtures (paypal-confirmation, provider-unavailable)
     // set their own deterministic providerStatus above; the real fetch below
     // would otherwise race it and overwrite it once the network call resolves.
     if (import.meta.env.VITE_ACCEPTANCE_FIXTURES === 'true' && PROVIDER_STATUS_FIXTURE_MODES.has(acceptanceMode)) return
-    let cancelled = false
-    void (async () => {
-      try {
-        const providers = await fetchProviderStatus()
-        if (!cancelled) setProviderStatus(providers)
-      } catch {
-        // Provider status only drives advisory badges/gating in the picker;
-        // the provider-start call itself is still the source of truth and
-        // will surface a clear in-modal error if something is unavailable.
-      }
-    })()
-    return () => { cancelled = true }
+    return loadProviderStatus()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per mount; a fresh acceptanceMode always gets a fresh mount (see the `key` prop where ConnectionsPage is used)
   }, [])
 
@@ -547,6 +558,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
                 onCategory={setCategory}
                 institutions={filteredInstitutions}
                 providerStatus={providerStatus}
+                onRetryProviderStatus={loadProviderStatus}
                 onChoose={chooseInstitution}
               />)}
 
@@ -562,7 +574,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
             resolvedInstitutionName={resolvedProviderInstitution?.name}
             busy={busy}
             error={setupError}
-            providerDescriptor={providerStatus.find((provider) => provider.id === selectedInstitution.provider)}
+            providerDescriptor={providerDescriptorFor(selectedInstitution.provider as ConnectorProvider, providerStatus)}
             onCancel={closeSetup}
             onConfirm={() => void startProvider(selectedInstitution.provider as ConnectorProvider, connectorContext(), setSetupError)}
           />}
@@ -690,13 +702,18 @@ interface InstitutionStepProps {
   category: InstitutionCategory
   onCategory: (category: InstitutionCategory) => void
   institutions: ReturnType<typeof filterInstitutions>
-  providerStatus: ProviderDescriptor[]
+  providerStatus: ProviderStatus
+  onRetryProviderStatus: () => void
   onChoose: (id: string) => void
 }
 
-function InstitutionStep({ searchTerm, onSearch, category, onCategory, institutions, providerStatus, onChoose }: InstitutionStepProps) {
+function InstitutionStep({ searchTerm, onSearch, category, onCategory, institutions, providerStatus, onRetryProviderStatus, onChoose }: InstitutionStepProps) {
   return <>
     <h2 id="connections-setup-title" className="connections-setup-title">Choose your institution</h2>
+    {providerStatus.status === 'error' && <p className="status-message error-message" role="alert">
+      We couldn&apos;t check which providers are available right now. Manual accounts are unaffected.
+      <button type="button" className="connections-text-button connections-retry-button" onClick={onRetryProviderStatus}>Retry</button>
+    </p>}
     <label className="connections-search"><Search size={18}/><input value={searchTerm} onChange={(event) => onSearch(event.target.value)} placeholder="Search institutions"/>{searchTerm && <button type="button" aria-label="Clear search" onClick={() => onSearch('')}><X size={16}/></button>}</label>
     <div className="connections-categories" role="tablist" aria-label="Institution category">
       {CATEGORY_OPTIONS.map((option) => <button type="button" role="tab" aria-selected={category === option.id} key={option.id} className={category === option.id ? 'active' : ''} onClick={() => onCategory(option.id)}>{option.label}</button>)}
@@ -708,7 +725,7 @@ function InstitutionStep({ searchTerm, onSearch, category, onCategory, instituti
           <span className="connections-row-icon"><InstitutionIcon institution={institution}/></span>
           <span className="connections-institution-name">
             {institution.name}
-            {availability.unavailable && <small className="connections-unavailable-badge">Unavailable{availability.reason ? ` — ${availability.reason}` : ''}</small>}
+            {availability.unavailable && <small className="connections-unavailable-badge">{availability.reason}</small>}
           </span>
           {!availability.unavailable && <ChevronRight size={18}/>}
         </button>

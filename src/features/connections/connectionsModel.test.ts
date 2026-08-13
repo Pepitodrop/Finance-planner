@@ -9,35 +9,67 @@ import {
   institutionById,
   nextSetupStepAfterInstitution,
   previousSetupStepFromConfirmation,
+  providerDescriptorFor,
   summarizeAccountSelection,
   validateManualAccount,
+  type ProviderStatus,
 } from './connectionsModel'
 
 describe('institutionAvailability', () => {
+  const loading: ProviderStatus = { status: 'loading' }
+  const errored: ProviderStatus = { status: 'error' }
   const providers: ProviderDescriptor[] = [
     { id: 'gocardless', displayName: 'Bank (GoCardless)', kind: 'psd2-account-information', available: true, configured: true },
     { id: 'finapi', displayName: 'Bank (finAPI)', kind: 'unavailable', available: false, configured: false, reason: 'finAPI adapter is not configured.' },
     { id: 'paypal', displayName: 'PayPal', kind: 'wallet-account-information', available: true, configured: false },
   ]
+  const ready: ProviderStatus = { status: 'ready', providers }
 
   it('is always available for manual institutions regardless of provider status', () => {
-    expect(institutionAvailability({ provider: 'manual' }, [])).toEqual({ unavailable: false })
+    expect(institutionAvailability({ provider: 'manual' }, loading).unavailable).toBe(false)
+    expect(institutionAvailability({ provider: 'manual' }, errored).unavailable).toBe(false)
+    expect(institutionAvailability({ provider: 'manual' }, ready).unavailable).toBe(false)
   })
 
-  it('does not block optimistically before provider status has loaded', () => {
-    expect(institutionAvailability({ provider: 'gocardless' }, [])).toEqual({ unavailable: false })
+  it('fails closed for an external provider while status is loading, never optimistically available', () => {
+    expect(institutionAvailability({ provider: 'gocardless' }, loading)).toEqual({ unavailable: true, reason: 'Checking availability…' })
+  })
+
+  it('fails closed for an external provider when status failed to load', () => {
+    expect(institutionAvailability({ provider: 'gocardless' }, errored)).toEqual({ unavailable: true, reason: 'Availability could not be checked.' })
+  })
+
+  it('fails closed when a successful response is missing a descriptor for the provider (never defaults to available)', () => {
+    expect(institutionAvailability({ provider: 'gocardless' }, { status: 'ready', providers: [] })).toEqual({ unavailable: true, reason: 'This provider is not available.' })
   })
 
   it('marks an explicitly unavailable provider (finAPI) as unavailable with its reason, never as a normal selectable institution', () => {
-    expect(institutionAvailability({ provider: 'finapi' }, providers)).toEqual({ unavailable: true, reason: 'finAPI adapter is not configured.' })
+    expect(institutionAvailability({ provider: 'finapi' }, ready)).toEqual({ unavailable: true, reason: 'finAPI adapter is not configured.' })
   })
 
   it('marks an available-but-unconfigured provider as unavailable', () => {
-    expect(institutionAvailability({ provider: 'paypal' }, providers)).toEqual({ unavailable: true, reason: 'PayPal is not configured yet.' })
+    expect(institutionAvailability({ provider: 'paypal' }, ready)).toEqual({ unavailable: true, reason: 'PayPal is not configured yet.' })
   })
 
-  it('is available once its provider reports both available and configured', () => {
-    expect(institutionAvailability({ provider: 'gocardless' }, providers)).toEqual({ unavailable: false })
+  it('is available only once status is ready and its provider reports both available and configured', () => {
+    expect(institutionAvailability({ provider: 'gocardless' }, ready)).toEqual({ unavailable: false })
+  })
+})
+
+describe('providerDescriptorFor', () => {
+  const providers: ProviderDescriptor[] = [{ id: 'paypal', displayName: 'PayPal', kind: 'wallet-account-information', available: true, configured: true, mode: 'owner' }]
+
+  it('returns undefined while loading or on error, never a stale/guessed descriptor', () => {
+    expect(providerDescriptorFor('paypal', { status: 'loading' })).toBeUndefined()
+    expect(providerDescriptorFor('paypal', { status: 'error' })).toBeUndefined()
+  })
+
+  it('returns the matching descriptor once ready', () => {
+    expect(providerDescriptorFor('paypal', { status: 'ready', providers })?.mode).toBe('owner')
+  })
+
+  it('returns undefined for a provider missing from a successful response', () => {
+    expect(providerDescriptorFor('gocardless', { status: 'ready', providers })).toBeUndefined()
   })
 })
 

@@ -230,16 +230,25 @@ describe('redirect confirmation', () => {
   })
 
   it('shows an unavailable state instead of a live PayPal redirect when PayPal is not configured', async () => {
-    const user = userEvent.setup()
-    let resolveStatus!: (value: ProviderDescriptor[]) => void
-    vi.mocked(fetchProviderStatus).mockImplementationOnce(() => new Promise((resolve) => { resolveStatus = resolve }))
-    renderConnections()
-    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
-    await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
-    resolveStatus(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'paypal' ? { ...provider, available: false, configured: false, reason: 'PayPal credentials are not configured.' } : provider)))
-    expect(await screen.findByRole('heading', { name: "PayPal isn't available right now" })).toBeInTheDocument()
+    renderConnections({ acceptanceMode: 'paypal-unconfigured' })
+    expect(screen.getByRole('heading', { name: "PayPal isn't available right now" })).toBeInTheDocument()
     expect(screen.getByText('PayPal credentials are not configured.')).toBeInTheDocument()
     expect(startConnector).not.toHaveBeenCalled()
+  })
+
+  it('never lets PayPal be selected from the picker while its unavailability is genuinely a live race (provider status flips after the row was already known-available)', async () => {
+    // This exercises the narrow legitimate race the unavailable-copy branch
+    // still defends against: status was 'ready'/available when the row was
+    // rendered, and only turns unavailable while the user is already on the
+    // confirmation step (the picker itself now fails closed for every other
+    // timing, per institutionAvailability()).
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    const paypalRow = await screen.findByRole('button', { name: /^PayPal$/ })
+    await waitFor(() => expect(paypalRow).not.toBeDisabled())
+    await user.click(paypalRow)
+    expect(screen.getByRole('heading', { name: 'Continue with the owner PayPal connection' })).toBeInTheDocument()
   })
 
   it('Cancel does not start a provider', async () => {
@@ -328,10 +337,98 @@ describe('provider availability (defect: unavailable providers masquerading as w
     await user.click(screen.getByRole('tab', { name: 'Investments' }))
     const tradeRepublicRow = screen.getByRole('button', { name: /Trade Republic/ })
     await waitFor(() => expect(tradeRepublicRow).toBeDisabled())
-    expect(within(tradeRepublicRow).getByText(/Unavailable/)).toBeInTheDocument()
+    expect(within(tradeRepublicRow).getByText('finAPI adapter is not configured.')).toBeInTheDocument()
     await user.click(tradeRepublicRow)
     expect(screen.queryByRole('heading', { name: 'What would you like to connect?' })).not.toBeInTheDocument()
     expect(startConnector).not.toHaveBeenCalled()
+  })
+})
+
+describe('provider status lifecycle (fails closed, never optimistic)', () => {
+  it('shows a calm checking state and blocks every external provider while status is loading -- manual accounts stay usable', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockImplementationOnce(() => new Promise(() => {})) // never resolves: pins the loading state
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+
+    const sparkasseRow = screen.getByRole('button', { name: /^Sparkasse/ })
+    expect(sparkasseRow).toBeDisabled()
+    expect(within(sparkasseRow).getByText('Checking availability…')).toBeInTheDocument()
+    await user.click(sparkasseRow)
+    expect(screen.queryByRole('heading', { name: /Find your Sparkasse branch/ })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: 'Cards' }))
+    await user.click(screen.getByRole('button', { name: /Kreditkarte manuell/ }))
+    expect(screen.getByRole('heading', { name: 'Add manual account' })).toBeInTheDocument()
+    expect(startConnector).not.toHaveBeenCalled()
+  })
+
+  it('shows a retryable error banner and blocks every external provider when status fails to load, never falling back to optimistic availability', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockRejectedValueOnce(new Error('network down'))
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/couldn.t check which providers are available/)
+    const paypalRow = screen.getByRole('button', { name: /^PayPal/ })
+    expect(paypalRow).toBeDisabled()
+    expect(within(paypalRow).getByText('Availability could not be checked.')).toBeInTheDocument()
+    await user.click(paypalRow)
+    expect(screen.queryByRole('heading', { name: /Continue to PayPal|Continue with the owner PayPal connection/ })).not.toBeInTheDocument()
+  })
+
+  it('recovers via the explicit Retry action once provider status succeeds', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockRejectedValueOnce(new Error('network down'))
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await screen.findByRole('alert')
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+    const paypalRow = await screen.findByRole('button', { name: /^PayPal$/ })
+    await waitFor(() => expect(paypalRow).not.toBeDisabled())
+    await user.click(paypalRow)
+    expect(screen.getByRole('heading', { name: 'Continue with the owner PayPal connection' })).toBeInTheDocument()
+  })
+
+  it('fails closed for a provider missing from an otherwise-successful response, never defaulting it to available', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.filter((provider) => provider.id !== 'gocardless'))
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    const ingRow = await screen.findByRole('button', { name: /^ING/ })
+    await waitFor(() => expect(ingRow).toBeDisabled())
+    expect(within(ingRow).getByText('This provider is not available.')).toBeInTheDocument()
+  })
+})
+
+describe('PayPal owner-mode authorization reaching the frontend (defect: not user-specific)', () => {
+  it('disables PayPal in the picker for a non-owner user and never reaches startConnector', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'paypal'
+      ? { ...provider, available: false, reason: 'This PayPal owner connection is not available for this user.' }
+      : provider)))
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    const paypalRow = await screen.findByRole('button', { name: /^PayPal/ })
+    await waitFor(() => expect(paypalRow).toBeDisabled())
+    expect(within(paypalRow).getByText('This PayPal owner connection is not available for this user.')).toBeInTheDocument()
+    await user.click(paypalRow)
+    expect(screen.queryByRole('heading', { name: /Continue to PayPal|Continue with the owner PayPal connection/ })).not.toBeInTheDocument()
+    expect(startConnector).not.toHaveBeenCalled()
+  })
+
+  it('leaves PayPal selectable and reaching startConnector for the owner user', async () => {
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    const paypalRow = await screen.findByRole('button', { name: /^PayPal$/ })
+    await waitFor(() => expect(paypalRow).not.toBeDisabled())
+    await user.click(paypalRow)
+    await user.click(screen.getByRole('button', { name: 'Continue with owner connection' }))
+    expect(startConnector).toHaveBeenCalledWith('paypal', { institutionId: 'paypal', institutionName: 'PayPal', accountType: 'checking' })
   })
 })
 

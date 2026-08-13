@@ -258,6 +258,7 @@ export class OpenBankingProviderRegistry {
   }
 
   list() { return [...this.providers.values()].map((provider) => provider.describe()) }
+  adapters() { return [...this.providers.values()] }
   configured() { return this.list().filter((provider) => provider.available && provider.configured) }
 }
 

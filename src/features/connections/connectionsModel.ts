@@ -1,4 +1,4 @@
-import type { ConnectorAccountType, ConnectorConnection, ProviderDescriptor } from '../../connectors'
+import type { ConnectorAccountType, ConnectorConnection, ConnectorProvider, ProviderDescriptor } from '../../connectors'
 import { consentDaysRemaining } from '../../connectors'
 import { commonInstitutions, institutionById, searchInstitutions, type Institution, type InstitutionKind } from '../../institutions'
 
@@ -104,19 +104,36 @@ export function validateManualAccount({ name, accountType, balanceInput, creditL
   return { balanceCents, creditLimitCents }
 }
 
+// Explicit lifecycle for the one GET /api/connectors call ConnectionsPage
+// makes per mount. There is deliberately no "unknown, assume available"
+// state: until a successful response names a provider as available and
+// configured, every external provider fails closed.
+export type ProviderStatus =
+  | { status: 'loading' }
+  | { status: 'error' }
+  | { status: 'ready'; providers: ProviderDescriptor[] }
+
 export interface ProviderAvailability { unavailable: boolean; reason?: string }
 
 // Backend-authoritative: an institution is only ever shown as connectable
 // once its backing provider reports both available and configured. finAPI
-// (an explicit unavailable placeholder) and an unconfigured GoCardless/PayPal
-// must never masquerade as a normal, clickable institution.
-export function institutionAvailability(institution: Pick<Institution, 'provider'>, providers: ProviderDescriptor[]): ProviderAvailability {
+// (an explicit unavailable placeholder), an unconfigured GoCardless/PayPal,
+// and a provider descriptor missing from a successful response must never
+// masquerade as a normal, clickable institution -- and neither may a
+// provider whose status simply hasn't loaded yet, or failed to load.
+export function institutionAvailability(institution: Pick<Institution, 'provider'>, providerStatus: ProviderStatus): ProviderAvailability {
   if (institution.provider === 'manual') return { unavailable: false }
-  const descriptor = providers.find((provider) => provider.id === institution.provider)
-  if (!descriptor) return { unavailable: false }
+  if (providerStatus.status === 'loading') return { unavailable: true, reason: 'Checking availability…' }
+  if (providerStatus.status === 'error') return { unavailable: true, reason: 'Availability could not be checked.' }
+  const descriptor = providerStatus.providers.find((provider) => provider.id === institution.provider)
+  if (!descriptor) return { unavailable: true, reason: 'This provider is not available.' }
   if (!descriptor.available) return { unavailable: true, reason: descriptor.reason || `${descriptor.displayName} is not available right now.` }
   if (!descriptor.configured) return { unavailable: true, reason: `${descriptor.displayName} is not configured yet.` }
   return { unavailable: false }
+}
+
+export function providerDescriptorFor(providerId: ConnectorProvider, providerStatus: ProviderStatus): ProviderDescriptor | undefined {
+  return providerStatus.status === 'ready' ? providerStatus.providers.find((provider) => provider.id === providerId) : undefined
 }
 
 export function institutionIcon(institution: Institution): 'bank' | 'wallet' | 'broker' | 'card' | 'manual' {

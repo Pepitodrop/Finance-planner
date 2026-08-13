@@ -62,6 +62,16 @@ test('the provider listing and institution directory endpoints authenticate befo
   assert.ok(authentication < directoryCall, 'institution directory must authenticate before disclosing institutions')
 })
 
+test('the provider listing endpoint returns per-user descriptors, not the raw registry list', () => {
+  const providersHandler = serverSource.slice(
+    serverSource.indexOf("url.pathname === '/api/connectors') {"),
+    serverSource.indexOf('institutionsMatch'),
+  )
+  assert.match(providersHandler, /const user = userId\(request\)/)
+  assert.match(providersHandler, /describeProviderForUser\(adapter, user, env\)/)
+  assert.doesNotMatch(providersHandler, /providerRegistry\.list\(\)/, 'must not expose the same descriptor to every user regardless of owner-mode authorization')
+})
+
 test('core readiness is independent from optional bank capability readiness', () => {
   const readinessRoute = serverSource.slice(
     serverSource.indexOf("if (request.method === 'GET' && (url.pathname === '/health' || url.pathname === '/health/ready'))"),

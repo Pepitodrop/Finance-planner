@@ -18,6 +18,7 @@ const MODES = [
   ['institution-selector', 'Choose your institution'],
   ['institution-search', 'Choose your institution'],
   ['provider-unavailable', 'Choose your institution'],
+  ['paypal-unconfigured', "PayPal isn't available right now"],
   ['account-type', 'What would you like to connect?'],
   ['bank-confirmation', 'Continue to your provider'],
   ['paypal-confirmation', 'Continue with the owner PayPal connection'],
@@ -287,13 +288,13 @@ async function capture(client, sessionId, mode, expectedText, width, height, suf
   assert.equal(assertions.finalScrollReached, true)
   assert.equal(assertions.dialogContained, true)
 
-  const setupModes = new Set(['institution-selector', 'institution-search', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'manual', 'provider-unavailable'])
+  const setupModes = new Set(['institution-selector', 'institution-search', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'manual', 'provider-unavailable', 'paypal-unconfigured'])
   assert.equal(assertions.dialogOpen, setupModes.has(mode))
   if (mode === 'institution-search') assert.equal(assertions.searchValue, 'bank')
   if (mode === 'sync-selection') assert.equal(assertions.selectedAccounts, 3)
   if (mode === 'institution-selector' || mode === 'institution-search' || mode === 'provider-unavailable') assert.equal(assertions.setupStep, 'Step 1 of 3')
   if (mode === 'account-type') assert.equal(assertions.setupStep, 'Step 2 of 3')
-  if (mode === 'bank-confirmation' || mode === 'paypal-confirmation') assert.equal(assertions.setupStep, 'Step 3 of 3')
+  if (mode === 'bank-confirmation' || mode === 'paypal-confirmation' || mode === 'paypal-unconfigured') assert.equal(assertions.setupStep, 'Step 3 of 3')
   if (mode === 'institution-selector' || mode === 'institution-search' || mode === 'provider-unavailable') {
     assert.equal(assertions.categoryPillsFullyReachable, true, `category pills clipped at ${mode} ${width}x${height}`)
     assert.equal(assertions.touchTargetsOk, true, `touch target under 44px at ${mode} ${width}x${height}`)

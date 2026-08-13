@@ -13,6 +13,10 @@ Implemented as one of the `OpenBankingProvider` adapters in `server/src/provider
 
 Entirely server-side: `paypalAccessToken()` uses Basic-auth client-credential exchange. No PayPal secrets or tokens cross to the browser. `sync()` fetches EUR balance + paginated transaction report with a hard pagination cap (`MAX_PAYPAL_PAGES = 100`, throws past that) and maps results into the internal transaction/account shape.
 
+## Owner-mode listing is user-specific (fixed 2026-08-14)
+
+`GET /api/connectors` used to return `providerRegistry.list()` unfiltered, so an authenticated non-owner user saw owner-mode PayPal as available/configured and only learned it was forbidden after clicking through and hitting `start()`'s 403. `server/src/provider-access.js` now has a shared `ownerAccessState()` helper used by both `authorizeProviderUser()` (start/sync, throws) and the new `describeProviderForUser()` (listing, returns a sanitized unavailable descriptor with reason instead of the real `available`/`configured` — never the owner user id). See [[Provider Institution Selection Contract]] for the full fix and tests.
+
 ## UI must match the mode (fixed 2026-08-13)
 
 The Connections confirmation step previously showed one fixed copy — "you'll be redirected to PayPal's official site to authenticate" — regardless of mode. That's accurate for partner mode but was actively misleading for owner mode, contradicting the invariant already documented above ("must not be presented as" third-party authorization). `ConnectionsPage.tsx`'s confirmation step now reads the provider descriptor's `mode` (from `GET /api/connectors`) and renders distinct copy per state: owner (explains it's the deployment owner's configured connection, no PayPal login happens), partner (hosted-onboarding redirect language), and unconfigured (explicit unavailable state, never a broken-looking "Continue" button). Covered by `src/features/connections/ConnectionsPage.test.tsx`.

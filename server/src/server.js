@@ -12,7 +12,7 @@ import { createRateLimiters } from './distributed-rate-limiter.js'
 import { createFinanceRouter } from './finance-router.js'
 import { createGoogleSubscriptionsRouter } from './google-subscriptions-router.js'
 import { OperationalMetrics } from './operational-metrics.js'
-import { authorizeProviderUser } from './provider-access.js'
+import { authorizeProviderUser, describeProviderForUser } from './provider-access.js'
 import { createOpenBankingProviderRegistry } from './providers.js'
 import { HttpError, SlidingWindowRateLimiter, classifyError, clientIp, requestId, validateProductionConfig } from './runtime-security.js'
 import { bearerToken, createSession, issueState, verifySessionClaims, verifyState } from './security.js'
@@ -348,8 +348,9 @@ const server = createServer(async (request, response) => {
       return send(response, 200, { authenticated: true }, { 'Set-Cookie': `fp_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400${origin.startsWith('https://') ? '; Secure' : ''}` })
     }
     if (request.method === 'GET' && url.pathname === '/api/connectors') {
-      userId(request)
-      return send(response, 200, { providers: providerRegistry.list() })
+      const user = userId(request)
+      const providers = providerRegistry.adapters().map((adapter) => describeProviderForUser(adapter, user, env))
+      return send(response, 200, { providers })
     }
     const institutionsMatch = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})\/institutions$/)
     if (request.method === 'GET' && institutionsMatch) {
