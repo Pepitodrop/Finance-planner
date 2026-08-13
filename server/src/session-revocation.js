@@ -41,7 +41,10 @@ export class SessionRevocationRegistry {
   verify(claims) {
     const revokedAt = this.revokedBefore.get(sessionKey(claims.sub, this.secret))
     if (revokedAt === undefined) return claims.sub
-    const issuedAtMs = Number(claims.iat || 0) * 1_000
+    const claimedIssuedAtMs = Number(claims.iatMs)
+    const issuedAtMs = Number.isSafeInteger(claimedIssuedAtMs)
+      ? claimedIssuedAtMs
+      : Number(claims.iat || 0) * 1_000
     if (issuedAtMs <= revokedAt) throw new Error('Session revoked.')
     return claims.sub
   }
