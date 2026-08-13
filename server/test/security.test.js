@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createSession, issueState, verifySession, verifyState } from '../src/security.js'
+import { createSession, issueState, verifySession, verifySessionClaims, verifyState } from '../src/security.js'
 
 const secret = '0123456789abcdef0123456789abcdef'
 
@@ -8,6 +8,12 @@ test('signed session roundtrip and tamper rejection', () => {
   const token = createSession('user-1', secret)
   assert.equal(verifySession(token, secret), 'user-1')
   assert.throws(() => verifySession(`${token}x`, secret))
+})
+
+test('signed sessions preserve millisecond issuance precision', () => {
+  const claims = verifySessionClaims(createSession('user-1', secret), secret)
+  assert.ok(Number.isSafeInteger(claims.iatMs))
+  assert.equal(Math.floor(claims.iatMs / 1000), claims.iat)
 })
 
 test('consent state is provider-bound', () => {
