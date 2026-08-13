@@ -29,4 +29,14 @@ AI output is strictly advisory. Exact balances, totals, projections and mutation
 
 Verification state: local vs hosted split, consent gating, model-lock allowlist, and CI-enforced evaluation gates — **implemented and CI-enforced**. Hosted HF live inference — **implemented / runtime verified only when credentials are configured and the workflow is manually dispatched with `require_live_ai=true`; ordinary PR runs do not require a real successful call by default.**
 
-Related: [[COBOL Domain Core]], [[Security Decisions]], [[Provider Status]]
+## Connectivity-aware routing policy (PR #131)
+
+`FinanceAssistant.tsx` picks the engine automatically based on connectivity, not just the user's manual choice: hosted is the default while online; the user may still manually pick on-device while online; on-device is forced automatically when `navigator.onLine` is false, when the Network Information API reports a slow connection (`effectiveType` 2g/slow-2g, `downlink < 1.25`, `rtt >= 900`, or `saveData`), or when `MobileConnectivityStatus.tsx`'s own health-probe-derived status (delivered via the `finance-planner:connectivity` window event — see [[Sync and Offline]]) reports `offline`/`degraded`. During automatic fallback the hosted engine card is disabled and the UI explicitly says why ("Using the on-device path... Hosted AI is paused until connectivity recovers"). If the local model itself can't load, the assistant falls back further to deterministic local calculations — it never silently calls the hosted service to compensate. Whisper/speech-to-text (`openai/whisper-tiny`) was removed from `config/ai-model-lock.json` and `server/src/ai-model-catalog.js` as unused/unnecessary scope; no speech-input UI existed to remove alongside it.
+
+**Diagram:** `diagrams/ai-assistant-routing.mmd`, embedded in `docs/HUGGINGFACE_AI.md`'s "Connectivity-aware routing" section — the full decision tree from `navigator.onLine`/health-probe/slow-connection checks through the consent gate to the hosted call, with the hosted-inference node explicitly marked NOT provider/production verified. Added during `/diagram` (PR #131, 2026-08-11).
+
+## Detailed subgraph
+
+[[AI Index]] decomposes this note into all 8 individual model nodes ([[Model semantic-multilingual]] through [[Model Qwen3-4B-Thinking (hosted)]]), the consent/privacy boundary ([[AI Consent Gate]], [[AI Data Minimization]], [[AI Financial Snapshot]]), and routing/fallback mechanics ([[Hosted-On-Device Routing Decision]], [[Fallback Behavior]]). [[Finance Assistant Page]] and [[Finance Intelligence Page]] are the two distinct consuming pages.
+
+Related: [[COBOL Domain Core]], [[Security Decisions]], [[Provider Status]], [[Sync and Offline]], [[AI Index]]

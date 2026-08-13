@@ -10,10 +10,13 @@
 
 ---
 
-**Decision:** Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` whenever the origin is HTTPS; sessions can be centrally revoked.
-**Status:** implemented.
+**Decision:** Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` whenever the origin is HTTPS; sessions can be centrally revoked, and logout revokes the acting session server-side (not just the browser cookie).
+**Status:** implemented; the logout-revokes-server-side-token behavior was a confirmed gap, fixed and live-verified during the `/cso` security-review phase of PR #131 (2026-08-10).
 **Rationale (inferred):** standard session-fixation/XSS-exfiltration mitigation, paired with a Postgres-backed revocation registry so a compromised session can be invalidated without waiting for cookie expiry.
-**Relevant files:** `server/src/auth-router.js` (`cookie()` helper), `server/src/session-revocation.js`.
+**Rationale (fix, stated):** before the fix, `POST /api/auth/logout` only cleared the calling browser's cookie -- the signed session token itself remained valid until its natural TTL. `SessionRevocationRegistry` already existed and was wired into account deletion but not logout. Live-verified before/after: a token held in a separate cookie jar (simulating a captured/stolen token) stayed fully usable after "logout" pre-fix, and is rejected with 401 immediately after logout post-fix.
+**Relevant files:** `server/src/auth-router.js` (`cookie()` helper, `POST /api/auth/logout` handler, `createAuthRouter`'s `revokeSession` param), `server/src/session-revocation.js`, `server/src/server.js` (wires `revokeSession: (user) => sessionRevocations.revoke(user)`), `server/test/auth-router.test.js` (regression coverage).
+**QA confirmation (2026-08-11, `/qa` phase of PR #131):** live-tested with two separate browser contexts logged in as the same user (registered in context A, logged in with the same credentials in context B). Logging out from A also deauthenticated B (`GET /api/auth/session` on B flipped from `authenticated: true` to `authenticated: false` immediately after A's logout) — confirms revocation is genuinely user-scoped, not session-token-scoped, exactly as designed. Classified as **surprising UX but non-blocking**: a user signed in on two devices who logs out of one will find the other also signed out, which deviates from the common "logout = this device only" mental model, but is not a security defect (it is in fact a stronger security property) and was not changed. Left as a product-decision item, not altered by QA per instruction.
+**Diagram:** `diagrams/session-lifecycle.mmd` (embedded in README.md's "Authentication flow" section) visualizes this exact sequence, including the per-user revocation propagating to a second, unrelated session.
 
 ---
 
@@ -22,6 +25,23 @@
 **Rationale (stated):** prevents user enumeration — previously the endpoint threw (and leaked account existence) for unregistered emails. Covered by `server/test/auth-router.test.js`.
 **Relevant files:** `server/src/auth-router.js`, `TODOS.md` ("Completed" section).
 **Related:** [[Authentication]]
+
+---
+
+**Decision:** `POST /api/auth/password/login` always performs exactly one scrypt password verification per request, regardless of whether the submitted email matches an existing account.
+**Status:** implemented, fixed and live-verified 2026-08-10 (`/cso` security-review phase of PR #131).
+**Rationale (stated):** closes a confirmed, measured timing side-channel that let an attacker enumerate registered emails. Before the fix, `verifyPassword()` (which runs `scryptSync`, N=16384) was only called when a matching user existed, short-circuited via `Boolean(user) && (...)`. Local measurement: known-user-wrong-password requests ~230ms median (20 samples) vs unknown-email requests ~14ms median (20 samples) — a ~16x gap distinguishable with a single request pair, no statistical sophistication required. The same gap applied to password-less (Google-only) accounts attempting password login. Fix: always verify against a real hash when one exists, otherwise against a fixed dummy hash (`DUMMY_PASSWORD_HASH`, computed once at module load), so the scrypt cost is paid unconditionally. Re-measured after the fix: both distributions overlap in the same range.
+**Relevant files:** `server/src/auth-router.js` (`DUMMY_PASSWORD_HASH`, the login handler's `hashToVerify`/`passwordValid` computation), `server/src/password-auth.js` (`verifyPassword`), `server/test/auth-router.test.js` (timing regression test, generous 0.25 ratio floor to avoid CI flakiness while still catching a full regression).
+**Related:** [[Authentication]]
+
+---
+
+**Decision:** GitHub CodeQL alert #1 (`js/insufficient-password-hash` on `server/src/auth-store.js:10`) is a confirmed false positive and has been dismissed.
+**Status:** dismissed 2026-08-10 via the GitHub code-scanning API, after live dataflow inspection during the `/cso` follow-up phase of PR #131 (the prior `/cso` phase had assessed this as *likely* a false positive from architecture alone but left it undismissed and unresolved).
+**Rationale (stated):** `keyFromSecret()` derives a fixed 32-byte AES-256-GCM key from `AUTH_MASTER_KEY`, an operator-configured high-entropy secret (`.env.example` requires `openssl rand -hex 32`-generated values), not a human password. This follow-up inspected the actual CodeQL dataflow rather than assuming: all 5 reported source-to-sink paths trace to hardcoded literal test-fixture strings named `authKey` in `server/test/auth-router.test.js` (lines 17, 100, 131) and `server/test/reset-and-seed-demo.test.js` (lines 51, 89) — none trace through the real production `env.AUTH_MASTER_KEY` path (`auth-router.js:78`). The identical `keyFromSecret()` construction in `user-state-store.js` (deriving from `CONNECTOR_MASTER_KEY`) is not separately flagged, consistent with a naming-heuristic false match on test constants rather than a systemic issue. User password hashing remains scrypt-based (`password-auth.js`) and is entirely unaffected.
+**Consequences:** No code change was made. Replacing the SHA-256 key derivation with a password KDF would address a different threat model and would break compatibility with existing encrypted `auth-store` data without a migration — explicitly out of scope for a static-analysis false positive. Dismissed with `dismissed_reason: false positive`; the PR's native `CodeQL` check went from failing to passing immediately (no re-run needed) and `mergeStateStatus` moved from `UNSTABLE` to `CLEAN`. Alert: https://github.com/Pepitodrop/Finance-planner/security/code-scanning/1.
+**Relevant files:** `server/src/auth-store.js` (`keyFromSecret`), `server/src/user-state-store.js` (`keyFromSecret`, same pattern, unflagged), `.env.example`, `server/test/auth-router.test.js`, `server/test/reset-and-seed-demo.test.js`.
+**Related:** [[Authentication]], [[Provider Status]]
 
 ---
 
@@ -77,4 +97,8 @@
 **Rationale (stated):** `TODOS.md` (fixed 2026-08-03) — pinned specifically because `aquasecurity/trivy-action` itself was compromised in a March 2026 supply-chain attack affecting every tag from `0.0.1` through `0.34.2`; a floating tag would have reintroduced exactly the vulnerability class the step exists to catch.
 **Relevant files:** `.github/workflows/ci.yml`.
 
-Related: [[Architecture Decisions]] · [[Rejected Approaches]] · [[Provider Status]]
+## Detailed subgraph
+
+[[Security Index]] breaks each decision above into its own atomic control node (e.g. [[Timing-Safe Password Verification]], [[Session Revocation]], [[Cross-User Isolation]], [[AI Consent Gate]]), so a control can be linked directly from the page/flow/file that implements it without routing through this decision-record note first. This note stays the "why" hub; [[Security Index]] is the "what/where."
+
+Related: [[Architecture Decisions]] · [[Rejected Approaches]] · [[Provider Status]] · [[Security Index]]

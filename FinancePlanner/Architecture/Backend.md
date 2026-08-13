@@ -33,4 +33,8 @@ server/
 
 Several `config/*.json` gate files (e.g. `config/production-readiness-evidence.json`, `config/non-desktop-readiness.json`) track named readiness checks with states like `pending` / `partial` / `verified`, each requiring cited evidence. `verified` specifically requires a named, accountable human `approvedBy`/`reviewedAt` — a passing test alone does not upgrade a gate to `verified` (see the `distributedRateLimiting` correction in git history, 2026-08-03). This distinction matters when reading any "readiness" claim in this repo.
 
-Related: [[System Architecture]] · [[Authentication]] · [[Bank Connections]] · [[PayPal]] · [[AI System]] · [[Data and Persistence]]
+## Detailed subgraph
+
+Every listed module above has its own file-level node under [[Implementation Index]], linking upward to the feature it implements and downward to the specific logic it owns.
+
+Related: [[System Architecture]] · [[Authentication]] · [[Bank Connections]] · [[PayPal]] · [[AI System]] · [[Data and Persistence]] · [[Implementation Index]]

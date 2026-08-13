@@ -701,8 +701,8 @@ async function run() {
       ['assistant-hosted-running', 'hosted-running', `document.body?.innerText.includes('Building your financial analysis')`],
       ['assistant-hosted-result', 'success', `document.body?.innerText.includes('Personal financial analysis')`],
       ['assistant-hosted-fallback', 'hosted-fallback', `document.body?.innerText.includes('Rule-based analysis available')`],
-      ['assistant-local-selected', 'local-selected', `document.body?.innerText.includes('I understand this will download data')`],
-      ['assistant-local-running', 'local-running', `document.body?.innerText.includes('On-device model loading and running') || document.body?.innerText.includes('On-device model working')`],
+      ['assistant-local-selected', 'local-selected', `document.body?.innerText.includes('I understand this may download model data')`],
+      ['assistant-local-running', 'local-running', `document.body?.innerText.includes('Running on this device') || document.body?.innerText.includes('On-device analysis running')`],
     ]
     for (const [name, mode, waitExpr] of assistStates) {
       report.states[name] = await captureState(client, sessionId, name, 'data-assistant-ready', {

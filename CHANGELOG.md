@@ -15,6 +15,11 @@ All notable changes to this project are documented in this file.
   `http://localhost:*`/`ws://localhost:*` in its Content-Security-Policy.
 - CI now scans both built Docker images for HIGH/CRITICAL known vulnerabilities before
   they can ship, using a supply-chain-safety-conscious pinned commit SHA rather than a tag.
+- Password login now takes a comparable amount of time whether or not the submitted
+  email matches a registered account, closing a timing side channel that could be used
+  to enumerate registered emails.
+- Logging out now revokes the session on the server, not just the browser cookie, so a
+  previously-captured session token can no longer be used after the user logs out.
 
 ### Added
 - Automated accessibility testing (`jsdom` + `axe-core` + React Testing Library) covering
@@ -31,6 +36,22 @@ All notable changes to this project are documented in this file.
   it after closing. A native `autoFocus` on the description field was running before the
   dialog's own focus-restoration logic could record the real trigger, so focus silently
   fell back to the page body instead.
+- On narrow mobile viewports, the "Add a passkey" recommendation shown after signing in
+  could visually sit on top of the vault-setup screen's submit button, making it briefly
+  unreachable without dismissing the banner first.
+- A newer account with legitimate data could be misidentified as untouched legacy demo
+  data and have it silently cleared if any single record still matched the legacy
+  dataset closely enough; the detector now requires an exact match on every account,
+  transaction and goal field before clearing anything.
+- New accounts no longer start with the pre-redesign hardcoded sample dataset
+  (Girokonto/Tagesgeld/Bargeld accounts and sample transactions); a genuinely new vault
+  now starts empty.
+
+### Changed
+- The Finance Assistant now automatically switches to the on-device model when the
+  connection is offline, degraded, or very slow, rather than continuing to attempt a
+  hosted request; hosted analysis stays the default while online and can still be
+  chosen manually.
 
 ## [0.3.0] - 2026-07-31
 

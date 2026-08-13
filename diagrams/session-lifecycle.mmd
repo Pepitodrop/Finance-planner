@@ -1,0 +1,30 @@
+sequenceDiagram
+  participant B as Browser
+  participant C as Connector
+  participant R as SessionRevocationRegistry - Postgres
+
+  B->>C: POST /api/auth/google/callback OR /api/auth/password/login
+  C->>C: create signed session (HMAC, SESSION_SECRET)
+  C-->>B: Set-Cookie fp_session (HttpOnly, SameSite=Lax, Secure)
+
+  loop Every authenticated request
+    B->>C: request + fp_session cookie
+    C->>R: verify(userId) — refreshed ~30s cache
+    R-->>C: not revoked
+    C-->>B: 200 + data
+  end
+
+  B->>C: POST /api/auth/logout
+  C->>R: revoke(userId)
+  C-->>B: clear cookie, 200
+
+  Note over R: Revocation is per-USER, not per-token.<br/>Fixed 2026-08-10 (/cso): logout used to only<br/>clear the calling browser's cookie — the signed<br/>token itself stayed valid until its TTL.
+
+  par Any other active session, same user
+    B->>C: request + stale fp_session cookie
+    C->>R: verify(userId)
+    R-->>C: revoked
+    C-->>B: 401 Authentication required
+  end
+
+  Note over C,R: Account deletion calls the same<br/>revoke(userId) path — that path was already<br/>wired. Logout was the gap that got fixed.

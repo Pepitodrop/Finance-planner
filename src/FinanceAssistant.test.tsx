@@ -3,11 +3,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FinanceAssistant } from './FinanceAssistant'
 import { initialState } from './data'
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+  Object.defineProperty(navigator, 'onLine', { value: true, configurable: true })
+})
 
 describe('FinanceAssistant', () => {
-  it('disables the run button until hosted consent is given, and explains why', () => {
+  it('uses hosted AI as the default online path and requires session consent', () => {
+    Object.defineProperty(navigator, 'onLine', { value: true, configurable: true })
     render(<FinanceAssistant state={initialState}/>)
+    expect(screen.getByRole('radio', { name: /hosted model/i })).toHaveAttribute('aria-checked', 'true')
     const runButton = screen.getByRole('button', { name: /consent required/i })
     expect(runButton).toBeDisabled()
     fireEvent.click(screen.getByRole('checkbox', { name: /I agree that for this session/i }))
@@ -19,12 +25,30 @@ describe('FinanceAssistant', () => {
     expect(screen.getByRole('checkbox', { name: /I agree that for this session/i })).not.toBeChecked()
   })
 
-  it('switching to the local engine hides the hosted checkbox and shows an honest resource disclosure with no fake download percentage', () => {
+  it('allows the user to manually choose on-device processing while online', () => {
+    Object.defineProperty(navigator, 'onLine', { value: true, configurable: true })
     render(<FinanceAssistant state={initialState}/>)
     fireEvent.click(screen.getByRole('radio', { name: /on-device model/i }))
     expect(screen.queryByRole('checkbox', { name: /I agree that for this session/i })).not.toBeInTheDocument()
-    const warning = screen.getByText(/several hundred megabytes/i)
-    expect(warning.textContent).not.toMatch(/%/)
+    expect(screen.getByText(/several-hundred-megabyte/i)).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /may download model data/i })).toBeInTheDocument()
+  })
+
+  it('automatically selects on-device processing while offline without exposing hosted as usable', () => {
+    Object.defineProperty(navigator, 'onLine', { value: false, configurable: true })
+    render(<FinanceAssistant state={initialState}/>)
+    expect(screen.getByText(/using the on-device path/i)).toBeInTheDocument()
+    expect(screen.getByText(/finance planner is offline/i)).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /hosted model/i })).toBeDisabled()
+    expect(screen.getByRole('radio', { name: /on-device model/i })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.queryByRole('checkbox', { name: /may download model data/i })).not.toBeInTheDocument()
+  })
+
+  it('switches to the on-device path when the runtime reports degraded service connectivity', () => {
+    render(<FinanceAssistant state={initialState}/>)
+    fireEvent(window, new CustomEvent('finance-planner:connectivity', { detail: { status: 'degraded' } }))
+    expect(screen.getByText(/using the on-device path/i)).toBeInTheDocument()
+    expect(screen.getByText(/cannot reliably reach the app service/i)).toBeInTheDocument()
   })
 
   it('states the agent never moves money without approval', () => {
@@ -43,7 +67,6 @@ describe('FinanceAssistant', () => {
       expect(screen.getAllByText('Approved').length).toBeGreaterThan(0)
     }
     expect(fetchSpy.mock.calls.length).toBe(callsBeforeApprove)
-    vi.unstubAllGlobals()
   })
 
   it('never labels a smartness score as accuracy, confidence, or a prediction guarantee', () => {
@@ -76,6 +99,6 @@ describe('FinanceAssistant', () => {
   it('acceptance: local-selected mode shows the local engine without the hosted consent checkbox', () => {
     render(<FinanceAssistant state={initialState} acceptanceMode="local-selected"/>)
     expect(screen.queryByRole('checkbox', { name: /I agree that for this session/i })).not.toBeInTheDocument()
-    expect(screen.getByRole('checkbox', { name: /I understand this will download data/i })).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /may download model data/i })).toBeInTheDocument()
   })
 })

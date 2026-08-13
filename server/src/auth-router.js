@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { OAuth2Client } from 'google-auth-library'
 import {
   generateAuthenticationOptions,
@@ -8,6 +8,8 @@ import {
 } from '@simplewebauthn/server'
 import { validateAccountDeletionInput } from './account-deletion.js'
 import { AuthStore } from './auth-store.js'
+import { hashPassword, normalizeDisplayName, normalizeEmail, verifyPassword } from './password-auth.js'
+import { HttpError } from './runtime-security.js'
 import { createSession, verifySession } from './security.js'
 import { verifyTestPassword } from './test-password-auth.js'
 
@@ -15,6 +17,10 @@ const b64 = (value) => Buffer.from(value).toString('base64url')
 const unb64 = (value) => new Uint8Array(Buffer.from(value, 'base64url'))
 const DEFAULT_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 const enrollmentKey = (token) => `test-enrollment:${createHash('sha256').update(String(token), 'utf8').digest('hex')}`
+// A fixed, valid-format scrypt hash checked (and always discarded) whenever
+// there is no real password hash to verify against, so /api/auth/password/login
+// always pays the same scrypt cost regardless of whether the email exists.
+const DUMMY_PASSWORD_HASH = hashPassword('login-timing-equalization-placeholder-password')
 
 function parseCookies(request) {
   return Object.fromEntries(String(request.headers.cookie || '').split(';').map((part) => part.trim().split('=').map(decodeURIComponent)).filter((entry) => entry.length === 2))
@@ -55,7 +61,17 @@ function removeUserFromAuthStore(data, userId) {
   }
 }
 
-export async function createAuthRouter({ env, origin, sessionSecret, send, verifyActiveSession, deleteUserData }) {
+function safeUser(user) {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    picture: user.picture,
+    passkeyCount: user.passkeys?.length || 0,
+  }
+}
+
+export async function createAuthRouter({ env, origin, sessionSecret, send, verifyActiveSession, deleteUserData, revokeSession, googleClient }) {
   const rpId = env.WEBAUTHN_RP_ID || new URL(origin).hostname
   const rpName = env.WEBAUTHN_RP_NAME || 'Finance Planner'
   const sessionTtlSeconds = configuredSessionTtl(env)
@@ -82,7 +98,7 @@ export async function createAuthRouter({ env, origin, sessionSecret, send, verif
     })
   }
 
-  const google = new OAuth2Client(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET, `${origin}/api/auth/google/callback`)
+  const google = googleClient || new OAuth2Client(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET, `${origin}/api/auth/google/callback`)
 
   return async function handleAuth(request, response, url) {
     if (!url.pathname.startsWith('/api/auth/')) return false
@@ -92,12 +108,52 @@ export async function createAuthRouter({ env, origin, sessionSecret, send, verif
       try { userId = sessionUser(request, verifyToken) } catch { userId = null }
       const user = userId ? store.data.users[userId] : null
       const headers = user ? { 'Set-Cookie': cookie('fp_session', createSession(user.id, sessionSecret, sessionTtlSeconds), origin, sessionTtlSeconds) } : {}
-      send(response, 200, { authenticated: Boolean(user), user: user ? { id: user.id, email: user.email, name: user.name, picture: user.picture, passkeyCount: user.passkeys?.length || 0 } : null }, headers)
+      send(response, 200, { authenticated: Boolean(user), user: user ? safeUser(user) : null }, headers)
       return true
     }
 
     if (request.method === 'POST' && url.pathname === '/api/auth/logout') {
+      if (typeof revokeSession === 'function') {
+        let userId = null
+        try { userId = sessionUser(request, verifyToken) } catch { userId = null }
+        if (userId) await revokeSession(userId)
+      }
       send(response, 200, { authenticated: false }, { 'Set-Cookie': cookie('fp_session', '', origin, 0) })
+      return true
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/auth/password/register') {
+      const input = await jsonBody(request)
+      const email = normalizeEmail(input.email)
+      const name = normalizeDisplayName(input.name, email)
+      const passwordHash = hashPassword(input.password)
+      await store.load()
+      if (store.findByEmail(email)) throw new Error('An account with this email address already exists.')
+      const now = new Date().toISOString()
+      const user = { id: `email:${randomUUID()}`, email, name, passwordHash, passkeys: [], createdAt: now, updatedAt: now }
+      await store.mutate((data) => { data.users[user.id] = user })
+      const session = createSession(user.id, sessionSecret, sessionTtlSeconds)
+      send(response, 200, { authenticated: true, user: safeUser(user) }, { 'Set-Cookie': cookie('fp_session', session, origin, sessionTtlSeconds) })
+      return true
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/auth/password/login') {
+      const input = await jsonBody(request)
+      const email = normalizeEmail(input.email)
+      await store.load()
+      const user = store.findByEmail(email)
+      const configuredTestEmail = String(env.TEST_ACCOUNT_EMAIL || '').trim().toLowerCase()
+      const configuredTestHash = String(env.TEST_ACCOUNT_PASSWORD_HASH || '')
+      // Always run one scrypt verification, even for an unknown email or a
+      // password-less (Google-only) account, so response timing cannot be
+      // used to enumerate which emails have a password-based account here.
+      const testAccountMatch = Boolean(user) && String(user.id).startsWith('test:') && email === configuredTestEmail
+      const hashToVerify = user?.passwordHash || (testAccountMatch ? configuredTestHash : '') || DUMMY_PASSWORD_HASH
+      const verifiedAgainstHash = verifyPassword(input.password, hashToVerify)
+      const passwordValid = Boolean(user) && hashToVerify !== DUMMY_PASSWORD_HASH && verifiedAgainstHash
+      if (!passwordValid) throw new Error('Invalid email or password.')
+      const session = createSession(user.id, sessionSecret, sessionTtlSeconds)
+      send(response, 200, { authenticated: true, user: safeUser(user) }, { 'Set-Cookie': cookie('fp_session', session, origin, sessionTtlSeconds) })
       return true
     }
 
@@ -112,7 +168,7 @@ export async function createAuthRouter({ env, origin, sessionSecret, send, verif
       const user = store.findByEmail(submittedEmail)
       if (!passwordValid || submittedEmail !== configuredEmail || !user || !String(user.id).startsWith('test:')) throw new Error('Invalid email or password.')
       const session = createSession(user.id, sessionSecret, sessionTtlSeconds)
-      send(response, 200, { authenticated: true, user: { id: user.id, email: user.email, name: user.name, passkeyCount: user.passkeys?.length || 0 } }, { 'Set-Cookie': cookie('fp_session', session, origin, sessionTtlSeconds) })
+      send(response, 200, { authenticated: true, user: safeUser(user) }, { 'Set-Cookie': cookie('fp_session', session, origin, sessionTtlSeconds) })
       return true
     }
 
@@ -175,7 +231,7 @@ export async function createAuthRouter({ env, origin, sessionSecret, send, verif
           delete data.challenges[enrollmentKey(token)]
         })
         const session = createSession(user.id, sessionSecret, sessionTtlSeconds)
-        send(response, 200, { enrolled: true, user: { id: user.id, email: user.email, name: user.name } }, { 'Set-Cookie': cookie('fp_session', session, origin, sessionTtlSeconds) })
+        send(response, 200, { enrolled: true, user: safeUser(user) }, { 'Set-Cookie': cookie('fp_session', session, origin, sessionTtlSeconds) })
         return true
       }
     }
@@ -197,9 +253,22 @@ export async function createAuthRouter({ env, origin, sessionSecret, send, verif
       const ticket = await google.verifyIdToken({ idToken: tokens.id_token, audience: env.GOOGLE_CLIENT_ID })
       const claims = ticket.getPayload()
       if (!claims?.sub || !claims.email || !claims.email_verified || claims.nonce !== cookies.fp_google_nonce) throw new Error('Google identity could not be verified.')
-      const existing = store.findByEmail(claims.email)
-      const user = existing || { id: `google:${claims.sub}`, email: claims.email.toLowerCase(), passkeys: [], createdAt: new Date().toISOString() }
-      Object.assign(user, { name: claims.name || claims.email, picture: claims.picture, updatedAt: new Date().toISOString() })
+      await store.load()
+      const normalizedEmail = claims.email.toLowerCase()
+      const googleUserId = `google:${claims.sub}`
+      const emailOwner = store.findByEmail(normalizedEmail)
+      const existingGoogleUser = store.data.users[googleUserId]
+      // Email equality alone is not proof that two authentication methods
+      // belong to the same Finance Planner account. In particular, password
+      // registration currently does not verify mailbox ownership. Reusing a
+      // password-created account here would let an attacker pre-register a
+      // victim's Google email, wait for the victim to use Google, and retain
+      // password access to the victim's resulting Finance Planner account.
+      if (emailOwner && emailOwner.id !== googleUserId) {
+        throw new HttpError(409, 'account_linking_required', 'Google sign-in cannot be linked automatically to an existing Finance Planner account with this email address. Sign in with the account\'s existing method instead.')
+      }
+      const user = existingGoogleUser || { id: googleUserId, email: normalizedEmail, passkeys: [], createdAt: new Date().toISOString() }
+      Object.assign(user, { email: normalizedEmail, name: claims.name || normalizedEmail, picture: claims.picture, updatedAt: new Date().toISOString() })
       await store.mutate((data) => { data.users[user.id] = user })
       const token = createSession(user.id, sessionSecret, sessionTtlSeconds)
       response.writeHead(302, { Location: origin, 'Cache-Control': 'no-store', 'Set-Cookie': [cookie('fp_session', token, origin, sessionTtlSeconds), cookie('fp_google_state', '', origin, 0), cookie('fp_google_nonce', '', origin, 0)] })
@@ -276,7 +345,7 @@ export async function createAuthRouter({ env, origin, sessionSecret, send, verif
       if (!verification.verified) throw new Error('Passkey authentication failed.')
       await store.mutate((data) => { stored.counter = verification.authenticationInfo.newCounter; delete data.challenges[`authenticate:${user.id}`] })
       const token = createSession(user.id, sessionSecret, sessionTtlSeconds)
-      send(response, 200, { authenticated: true }, { 'Set-Cookie': cookie('fp_session', token, origin, sessionTtlSeconds) })
+      send(response, 200, { authenticated: true, user: safeUser(user) }, { 'Set-Cookie': cookie('fp_session', token, origin, sessionTtlSeconds) })
       return true
     }
 

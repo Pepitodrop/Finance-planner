@@ -51,6 +51,16 @@ export function MobileConnectivityStatus() {
   }, [refresh])
 
   useEffect(() => {
+    window.dispatchEvent(new CustomEvent('finance-planner:connectivity', { detail: { status } }))
+    document.documentElement.dataset.financePlannerConnectivity = status
+    return () => {
+      if (document.documentElement.dataset.financePlannerConnectivity === status) {
+        delete document.documentElement.dataset.financePlannerConnectivity
+      }
+    }
+  }, [status])
+
+  useEffect(() => {
     if (status !== 'degraded') return
     const recoveryTimer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refresh()

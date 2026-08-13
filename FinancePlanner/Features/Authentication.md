@@ -8,9 +8,17 @@
 
 Implemented in `server/src/auth-router.js` via `google-auth-library`'s `OAuth2Client`: `/api/auth/google/start` sets `state`+`nonce` cookies; `/api/auth/google/callback` validates state, exchanges the code, verifies ID token audience/`email_verified`/nonce, then creates a session. Requires `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` — throws "Google login is not configured" otherwise.
 
+## Email/password (production, PR #131)
+
+Alongside Google, `AuthGate.tsx`'s pre-auth screen offers normal email/password sign-in and registration as the second primary choice — never a third passkey button. `server/src/password-auth.js` implements salted `scrypt` hashing (`N=16384, r=8, p=1`, 64-byte derived key, random 16-byte salt, `format$salt$hash` encoding) and timing-safe verification (`crypto.timingSafeEqual`); passwords are validated server-side (12–200 chars). Endpoints: `POST /api/auth/password/register` (`server/src/auth-router.js`) creates a `email:<uuid>` user, rejecting if `store.findByEmail` already finds that address; `POST /api/auth/password/login` verifies against `user.passwordHash`, OR — for the configured test account specifically — against `TEST_ACCOUNT_EMAIL`/`TEST_ACCOUNT_PASSWORD_HASH` for a `test:`-prefixed id. The dedicated collapsed test-password `<details>` UI that used to exist pre-redesign is gone; the test account now goes through this same general endpoint/UI, not a separate surface (`scripts/verify-test-password-leakage.mjs` independently proves no dedicated test-password copy ships in a normal production bundle).
+
+**Same-account resolution:** both flows call `store.findByEmail(normalizedEmail)` before creating a user. Google's callback does `existing || { id: 'google:'+sub, ... }` then `Object.assign`s onto whichever object that is — so a user who already has an `email:<uuid>` account and later signs in with Google using the same verified email gets merged onto the *same* `id`, not a duplicate. The reverse direction (Google-first, then registering a password for that email) is blocked at register time (`store.findByEmail` finds the existing Google-created user and register throws "already exists") — a real UX gap (no password-add-later path) but not a duplicate-identity bug.
+
 ## WebAuthn / Passkeys
 
 Server-side via `@simplewebauthn/server`: `/api/auth/passkeys/register/options`, `/register/verify`, `/authenticate/options`, `/authenticate/verify`. `authenticatorSelection: { residentKey: 'required', userVerification: 'required' }`. Client uses `@simplewebauthn/browser`. Unit-tested compatibility coverage in `server/test/passkey-authenticator-compatibility.test.js` (no real hardware, unit-level only).
+
+**Never a primary pre-auth choice (PR #131 redesign):** `AuthGate.tsx`'s unauthenticated screen shows only Google + email/password; passkeys appear solely as an optional post-login "Add a passkey for faster sign-in" prompt (`.passkey-enrolment`, gated through the `runtime-surfaces` exclusivity system) and, once registered, as a status line on `AccountPage.tsx` (`user.passkeyCount`). The obsolete pre-redesign `src/passkeys.ts` client and its account-memory test were removed in PR #131 after confirming that their pre-auth `authenticateWithPasskey` / `switchAccount` / `known accounts` path was not imported by the active UI. Post-login passkey enrollment remains implemented directly in `AuthGate.tsx` via `@simplewebauthn/browser`.
 
 ## Sessions
 
@@ -26,6 +34,16 @@ These are explicitly scoped to non-production test accounts, not a substitute fo
 
 ## Verification state
 
-Implemented and unit/router-tested (`auth-router.test.js`, `runtime-security.test.js`). **Not runtime-verified**: no CI workflow performs a live Google OAuth handshake, and CI's production-acceptance browser suite runs under `AUTH_MODE=local`. Physical-device passkey verification (Android/iOS/Windows over HTTPS) is explicitly documented in `docs/issue-105-live-verification.md` as requiring a human-recorded manual step — see [[Provider Status]].
+Google OAuth, WebAuthn/passkeys: implemented and unit/router-tested (`auth-router.test.js`, `runtime-security.test.js`). **Not runtime-verified**: no CI workflow performs a live Google OAuth handshake, and CI's production-acceptance browser suite runs under `AUTH_MODE=local`. Physical-device passkey verification (Android/iOS/Windows over HTTPS) is explicitly documented in `docs/issue-105-live-verification.md` as requiring a human-recorded manual step — see [[Provider Status]].
 
-Related: [[Security Decisions]] · [[Data and Persistence]] · [[Provider Status]]
+Email/password: implemented, unit-tested (`server/test/password-auth.test.js`, `server/test/test-password-auth.test.js`), and **local production-style runtime verified, but not production-deployment verified**. `scripts/auth-security-production-acceptance.mjs` exercises real registration (name/password-confirmation fields, submit label) and login through the actual `/api/auth/password/register` and `/api/auth/password/login` endpoints against a real Postgres-backed connector (`AUTH_MODE=local` bootstraps the *session*, not the password path itself). Re-run locally 2026-08-09 against a fresh Postgres container + built preview, matching `production-acceptance.yml`: passed. No claim is made that the same flow has yet been exercised against the deployed production host.
+
+## Diagrams
+
+`diagrams/auth-state-flow.mmd` (AuthGate → Google/email-password → post-auth passkey-banner/VaultGate coexistence → dashboard) and `diagrams/session-lifecycle.mmd` (login → session verification → logout revocation → per-user revocation propagating to other sessions) — both embedded and GitHub-rendering in README.md's "Authentication flow" section. Added during `/diagram` (PR #131, 2026-08-11) specifically because this coexistence relationship and the per-user revocation behavior are both non-obvious enough that a prior session mis-fixed the former on the first attempt (see [[Debugging Learnings]]).
+
+## Detailed subgraph
+
+[[Pages Index]] has dedicated nodes for every auth-related screen ([[Login and Registration]], [[Passkey Enrolment Banner]], [[Account Page]]...); [[Flows Index]] has the step-by-step sequences ([[Login Flow]], [[Registration Flow]], [[Google OAuth Flow]], [[Passkey Enrolment Flow]], [[Logout Flow]]); [[Security Index]] has the atomic controls ([[Password Hashing]], [[Timing-Safe Password Verification]], [[Session Revocation]]...); [[Providers Index]] has [[Google OAuth]] and [[WebAuthn Passkeys]] as standalone verification-status nodes.
+
+Related: [[Security Decisions]] · [[Data and Persistence]] · [[Provider Status]] · [[Debugging Learnings]] · [[Pages Index]] · [[Security Index]]

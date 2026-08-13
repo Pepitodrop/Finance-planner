@@ -138,6 +138,21 @@ body:has([aria-modal="true"]) .runtime-optional-surface {
     grid-column: 1 / -1;
   }
 
+  /* The passkey banner is deliberately shown alongside VaultGate's setup/
+     unlock screen (see scripts/auth-security-production-acceptance.mjs
+     AUTH-05) rather than suppressed. A fixed-position banner can float on
+     top of that screen's own submit button at any scroll position, so
+     take it out of fixed positioning here and let it flow in-document
+     above the vault card instead -- it pushes the card down rather than
+     floating over it, which makes an overlap structurally impossible
+     regardless of scroll position or content height. */
+  body:has(.vault-screen) .passkey-enrolment {
+    position: static;
+    width: auto;
+    max-height: none;
+    margin: var(--fp-space-4) var(--fp-gutter-mobile) 0;
+  }
+
   .automatic-analysis,
   .cloud-sync-status,
   .undo-toast,

@@ -57,8 +57,7 @@ const SYNC_SUMMARY: Record<Exclude<SyncStatus['phase'], 'conflict'>, string> = {
 
 // DATA-01: Data & Backup overview. Reset (DATA-07/08) and the CSV plaintext
 // warning (DATA-05) stay as dialogs launched from here, since neither needs
-// its own sub-page; every other flow gets a focused sub-page (DataToolsView)
-// matching the approved spec's explicit back-navigation between frames.
+// its own sub-page; every other flow gets a focused sub-page (DataToolsView).
 export function DataTools({ userId, state, onRestore, onReset, acceptanceMode }: DataToolsProps) {
   const [view, setView] = useState<DataToolsView>(() => {
     if (acceptanceMode && DELETE_ACCOUNT_MODES.has(acceptanceMode)) return 'delete-account'
@@ -67,9 +66,8 @@ export function DataTools({ userId, state, onRestore, onReset, acceptanceMode }:
   })
   const [csvDialogOpen, setCsvDialogOpen] = useState(acceptanceMode === 'csv-warning')
   const [resetDialogOpen, setResetDialogOpen] = useState(acceptanceMode === 'reset')
-  // DATA-08: the completed-reset state, without ever performing a real reset
-  // -- acceptance fixtures must not mutate real persistent user data.
-  const [resetMessage, setResetMessage] = useState(acceptanceMode === 'reset-complete' ? 'Your accounts, transactions, and goals now show Finance Planner’s example dataset. Add your own transactions any time — nothing here is permanent.' : '')
+  // DATA-08 acceptance state never performs a real reset.
+  const [resetMessage, setResetMessage] = useState(acceptanceMode === 'reset-complete' ? 'Your financial data is now empty. Your Finance Planner account and sign-in are unchanged.' : '')
   const [syncStatus, setSyncStatus] = useState<SyncStatus>(() => {
     if (acceptanceMode === 'sync-offline') return { phase: 'offline', message: 'Waiting for a connection.' }
     if (acceptanceMode === 'sync-error') return { phase: 'error', message: 'The last save attempt failed. Your data is safe on this device.' }
@@ -77,9 +75,6 @@ export function DataTools({ userId, state, onRestore, onReset, acceptanceMode }:
   })
 
   useEffect(() => {
-    // Fixture modes show a fixed, deterministic status instead of the real
-    // (network-dependent) sync state, matching the guard convention already
-    // used by AutomaticTransactionAnalysis's acceptance fixture.
     if (acceptanceMode) return
     return subscribeCloudSyncStatus(setSyncStatus)
   }, [acceptanceMode])
@@ -87,7 +82,7 @@ export function DataTools({ userId, state, onRestore, onReset, acceptanceMode }:
   const runReset = () => {
     onReset()
     setResetDialogOpen(false)
-    setResetMessage('Your accounts, transactions, and goals now show Finance Planner’s example dataset. Add your own transactions any time — nothing here is permanent.')
+    setResetMessage('Your financial data is now empty. Your Finance Planner account and sign-in are unchanged.')
   }
 
   const runCsvExport = () => {
@@ -146,9 +141,9 @@ export function DataTools({ userId, state, onRestore, onReset, acceptanceMode }:
       <div className="goal-hero-icon"><RotateCcw size={22}/></div>
       <div>
         <p className="eyebrow">Reset</p>
-        <strong>Reset financial data</strong>
-        <span>Replace your accounts, transactions, goals, and learned patterns with Finance Planner's example dataset. Your account and sign-in stay.</span>
-        <button type="button" className="secondary" onClick={() => setResetDialogOpen(true)}>Reset financial data</button>
+        <strong>Clear financial data</strong>
+        <span>Remove all locally stored and synced accounts, transactions, goals, and learned patterns. Your account and sign-in stay.</span>
+        <button type="button" className="secondary" onClick={() => setResetDialogOpen(true)}>Clear financial data</button>
       </div>
     </article>
     {resetMessage && <p className="status-message success-message" role="status">{resetMessage}</p>}
@@ -166,15 +161,15 @@ export function DataTools({ userId, state, onRestore, onReset, acceptanceMode }:
     <ConfirmationDialog
       open={resetDialogOpen}
       severity="warning"
-      heading="Reset financial data?"
+      heading="Clear financial data?"
       headingId="reset-financial-data-title"
-      confirmLabel="Reset financial data"
+      confirmLabel="Clear financial data"
       onConfirm={runReset}
       onClose={() => setResetDialogOpen(false)}
     >
-      <p>This replaces your accounts, transactions, savings goals, and learned categorization patterns on this device with Finance Planner's example dataset, then syncs that change to your account and any other signed-in devices.</p>
-      <p><strong>Replaced:</strong> accounts, transactions, goals, and learned patterns — with example data, not an empty state.</p>
-      <p><strong>Kept:</strong> your account, sign-in, and any connected banks, PayPal, or Google subscriptions.</p>
+      <p>This removes your accounts, transactions, savings goals, and learned categorization patterns from the encrypted Finance Planner state and syncs the empty state to your account.</p>
+      <p><strong>Removed:</strong> accounts, transactions, goals, and learned patterns. No example or demo data will be inserted.</p>
+      <p><strong>Kept:</strong> your Finance Planner account and sign-in. Provider connections are managed separately and are not represented as fake financial records.</p>
     </ConfirmationDialog>
 
     <ConfirmationDialog

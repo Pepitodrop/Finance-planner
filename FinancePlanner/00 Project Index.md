@@ -45,6 +45,14 @@ See [[Architecture Decisions]] and [[Security Decisions]] for the reasoning behi
 
 [[Commands and Tests]] for canonical typecheck/lint/test/build commands. [[Known Issues and Limitations]] for current gaps. [[Debugging Learnings]] for durable investigation techniques worth reusing (real defects found via browser acceptance testing, CSS/measurement debugging, focus-management bugs).
 
+## Detailed subgraphs (micro-level)
+
+Ten additional hub notes index a much finer-grained decomposition added 2026-08-11 — pages, flows, AI models, technologies, COBOL responsibilities, database tables, providers, security controls, tests/CI, and implementation files:
+
+[[Pages Index]] · [[Flows Index]] · [[AI Index]] · [[Technology Index]] · [[COBOL Index]] · [[Data Index]] · [[Providers Index]] · [[Security Index]] · [[Testing and CI Index]] · [[Implementation Index]]
+
+Each atomic note in these subgraphs links back up to the relevant subsystem/feature note above, so a reader can traverse either top-down (subsystem → detail) or bottom-up (a specific file/table/test → its owning feature → the architecture).
+
 ## Memory usage
 
 See [[Memory System]] for what belongs in this vault, the graph-first maintenance rules, and the source-of-truth precedence future sessions must follow. See [[Knowledge Graph]] for the cross-domain relationship map.

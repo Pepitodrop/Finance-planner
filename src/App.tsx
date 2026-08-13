@@ -200,7 +200,7 @@ function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
           <p className="eyebrow">Personal finance</p>
           <h1>{titles[tab]}</h1>
         </div>
-        <button type="button" className="primary" onClick={openNewTransaction}><Plus size={18}/> Manual entry</button>
+        {tab === 'ai' && <button type="button" className="primary" onClick={openNewTransaction}><Plus size={18}/> Manual entry</button>}
       </header>}
 
       {tab === 'dashboard' && <Dashboard state={state} userName={userName} onAddTransaction={openNewTransaction} onEditTransaction={openEditTransaction} onNavigate={navigate}/>}

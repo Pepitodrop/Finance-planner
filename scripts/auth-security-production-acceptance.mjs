@@ -210,7 +210,7 @@ async function captureScreenshot(name, width, height, sessionId, client, suffix 
   return { path, filename }
 }
 
-async function captureStateMatrix(client, sessionId, name, { beforeEach, waitExpr, waitDescription, skipLangAssertion = false, skipMainAssertion = false, skipScrollEnd = false }) {
+async function captureStateMatrix(client, sessionId, name, { beforeEach, afterEach = async () => {}, waitExpr, waitDescription, skipLangAssertion = false, skipMainAssertion = false, skipScrollEnd = false }) {
   const results = []
   for (const [width, height] of VIEWPORTS) {
     await beforeEach(width, height)
@@ -245,6 +245,7 @@ async function captureStateMatrix(client, sessionId, name, { beforeEach, waitExp
       await evaluate(client, sessionId, `window.scrollTo({ top: 0, behavior: 'instant' })`)
     }
     results.push({ width, height, ...shot, ...assertions, scrollEnd })
+    await afterEach(width, height)
   }
   return results
 }
@@ -353,15 +354,17 @@ async function runAcceptance() {
     await delay(500)
 
     // -----------------------------------------------------------------
-    // AUTH-01 .. AUTH-04B: unauthenticated states, forced via the
+    // AUTH-01 .. AUTH-02: unauthenticated states, forced via the
     // build-time-gated __financePlannerAuthAcceptanceState fixture hook.
-    // Each state gets a fresh, unauthenticated page load.
+    // Each state gets a fresh, unauthenticated page load. Passkey-support
+    // states ('passkey-unsupported'/'passkey-error') no longer affect this
+    // screen -- passkeys are account-security-only (Account -> Security),
+    // never a primary pre-auth choice, so those two modes are exercised
+    // post-login instead, alongside the AUTH-05 recommendation banner below.
     // -----------------------------------------------------------------
     const authFixtureStates = [
       ['auth-session-restoration', 'loading', `document.body?.innerText.includes('Checking your session')`],
       ['auth-session-error', 'session-error', `document.body?.innerText.includes('We could not check your session yet')`],
-      ['auth-passkey-unsupported', 'passkey-unsupported', `document.body?.innerText.includes("aren't available on this browser or device")`],
-      ['auth-passkey-error', 'passkey-error', `document.body?.innerText.includes('Passkey sign-in is not available right now')`],
     ]
     for (const [name, mode, waitExpr] of authFixtureStates) {
       report.states[name] = await captureStateMatrix(client, sessionId, name, {
@@ -383,18 +386,37 @@ async function runAcceptance() {
     })
     report.interactions.authLogin = await evaluate(client, sessionId, `(() => ({
       googleCtaPresent: Boolean([...document.querySelectorAll('button')].find((b) => b.textContent?.includes('Continue with Google'))),
-      // This is an acceptance-fixture build (VITE_ACCEPTANCE_FIXTURES=true), so the
-      // test-password form legitimately exists in the DOM here -- it must render
-      // collapsed inside <details>, never as an open ordinary sign-in choice. The
-      // separate leakage check (verify-test-password-leakage.mjs) proves the form
-      // is entirely absent from a *normal* production build.
-      testPasswordCopyCollapsed: Boolean(document.querySelector('details.auth-test-password') && !document.querySelector('details.auth-test-password')?.open),
+      // Passkeys must never appear as a third primary pre-auth choice
+      // alongside Google and email/password (they are an optional,
+      // post-login Account -> Security feature instead).
       passkeyButtonPresent: Boolean([...document.querySelectorAll('button')].find((b) => b.textContent?.includes('Sign in with a passkey'))),
-      noUsernamePasswordRegistration: !document.body.innerText.match(/register|sign up|create account/i),
+      emailPasswordFormPresent: Boolean(document.querySelector('form.auth-credentials-form input[type=email]')) && Boolean(document.querySelector('form.auth-credentials-form input[type=password]')),
+      registrationPathPresent: Boolean([...document.querySelectorAll('button')].find((b) => b.textContent?.includes('Create an account'))),
     }))()`)
-    assert.equal(report.interactions.authLogin.googleCtaPresent, true)
-    assert.equal(report.interactions.authLogin.noUsernamePasswordRegistration, true)
-    assert.equal(report.interactions.authLogin.testPasswordCopyCollapsed, true, 'test-password form must render collapsed (details/summary), never as an ordinary open sign-in choice, even in acceptance builds')
+    assert.equal(report.interactions.authLogin.googleCtaPresent, true, 'Continue with Google must be one of the two primary sign-in choices')
+    assert.equal(report.interactions.authLogin.emailPasswordFormPresent, true, 'email/password must be the other primary sign-in choice')
+    assert.equal(report.interactions.authLogin.registrationPathPresent, true, 'a clear registration path must be offered alongside sign-in')
+    assert.equal(report.interactions.authLogin.passkeyButtonPresent, false, 'passkeys must not replace email/password as a primary login choice')
+    // The configured test account signs in through this exact same
+    // email/password form and general login endpoint (server/src/auth-router.js
+    // '/api/auth/password/login') -- there is no separate test-password
+    // surface left to leak. verify-test-password-leakage.mjs independently
+    // proves the bundle contains none of the old dedicated-UI copy.
+
+    // AUTH-02B: the registration toggle must reveal a genuine account-creation
+    // form (name, password confirmation) sharing the same visual language.
+    await clickButton(client, sessionId, 'Create an account')
+    await waitFor(client, sessionId, `document.body?.innerText.includes('Create your Finance Planner account')`, 'registration form shown')
+    report.interactions.registrationForm = await evaluate(client, sessionId, `(() => ({
+      hasNameField: Boolean(document.querySelector('form.auth-credentials-form input[autocomplete=name]')),
+      hasPasswordConfirmation: document.body.innerText.includes('Confirm password'),
+      submitLabelIsCreateAccount: Boolean([...document.querySelectorAll('form.auth-credentials-form button[type=submit]')].find((b) => b.textContent?.includes('Create account'))),
+    }))()`)
+    assert.equal(report.interactions.registrationForm.hasNameField, true, 'registration must collect a name')
+    assert.equal(report.interactions.registrationForm.hasPasswordConfirmation, true, 'registration must confirm the password')
+    assert.equal(report.interactions.registrationForm.submitLabelIsCreateAccount, true, 'registration submit action must be clearly labelled')
+    await clickButton(client, sessionId, 'Already have an account?')
+    await waitFor(client, sessionId, `document.body?.innerText.includes('Sign in to Finance Planner')`, 'sign-in form restored')
 
     // AUTH-02 retry interaction: force the error, click retry, confirm it
     // resolves without stacking a second competing loading surface.
@@ -417,30 +439,76 @@ async function runAcceptance() {
     await authenticateFresh(client, sessionId)
     await resetBrowserState(client, sessionId, { keepPasskeyDismissed: false })
     await client.send('Page.reload', { ignoreCache: true }, sessionId)
+    // QA phase 5 fix: the banner/vault-submit collision check below used to
+    // run once, after the whole VIEWPORTS loop finished, against whatever
+    // viewport the loop happened to leave the page at (the last entry,
+    // 360x844 -- not 390x844, the viewport that originally reproduced this
+    // exact bug). Checking it inside afterEach means it now runs
+    // independently at every viewport in VIEWPORTS, including 390x844.
+    const passkeyRecommendationPerViewport = []
     report.states['auth-passkey-recommendation'] = await captureStateMatrix(client, sessionId, 'auth-passkey-recommendation', {
       beforeEach: async (width, height) => {
         if (width === VIEWPORTS[0][0]) return // already on the page from the reload above for the first viewport
         await client.send('Page.reload', { ignoreCache: false }, sessionId)
       },
+      afterEach: async (width, height) => {
+        const check = await evaluate(client, sessionId, `(() => {
+          const banner = document.querySelector('.passkey-enrolment')
+          const nav = document.querySelector('.app-mobile-navigation')
+          const bannerRect = banner?.getBoundingClientRect()
+          const navRect = nav?.getBoundingClientRect()
+          // The banner is deliberately shown alongside VaultGate's own setup/
+          // unlock screen (see the comment above), but it must never be the
+          // only thing standing between a user and that screen's own primary
+          // submit button -- scrolling the button fully into view must always
+          // reach a point on it that the banner does not cover.
+          const submitButton = [...document.querySelectorAll('.vault-card button[type=submit]')][0]
+          submitButton?.scrollIntoView({ block: 'nearest' })
+          const submitRect = submitButton?.getBoundingClientRect()
+          const submitCenter = submitRect && { x: submitRect.left + submitRect.width / 2, y: submitRect.top + submitRect.height / 2 }
+          const topElementAtSubmitCenter = submitCenter && document.elementFromPoint(submitCenter.x, submitCenter.y)
+          return {
+            dismissible: Boolean(banner?.querySelector('button[aria-label="Dismiss passkey recommendation"]')),
+            obstructsNav: Boolean(bannerRect && navRect && bannerRect.bottom > navRect.top && innerWidth <= 768),
+            obstructsVaultSubmit: Boolean(submitButton && !(topElementAtSubmitCenter === submitButton || submitButton.contains(topElementAtSubmitCenter))),
+            otherOptionalSurfaces: document.querySelectorAll('.mobile-install-card, .platform-action-bar').length,
+          }
+        })()`)
+        assert.equal(check.dismissible, true, `passkey recommendation @ ${width}x${height} must be dismissible`)
+        assert.equal(check.obstructsVaultSubmit, false, `the passkey banner must never be the only way to reach the vault-card submit button @ ${width}x${height}`)
+        assert.equal(check.otherOptionalSurfaces, 0, `runtime-surface exclusivity must prevent overlapping optional prompts @ ${width}x${height}`)
+        passkeyRecommendationPerViewport.push({ width, height, ...check })
+      },
       waitExpr: `document.body?.innerText.includes('Add a passkey for faster sign-in')`,
       waitDescription: 'auth-passkey-recommendation',
     })
-    report.interactions.passkeyRecommendation = await evaluate(client, sessionId, `(() => {
-      const banner = document.querySelector('.passkey-enrolment')
-      const nav = document.querySelector('.app-mobile-navigation')
-      const bannerRect = banner?.getBoundingClientRect()
-      const navRect = nav?.getBoundingClientRect()
-      return {
-        dismissible: Boolean(banner?.querySelector('button[aria-label="Dismiss passkey recommendation"]')),
-        obstructsNav: Boolean(bannerRect && navRect && bannerRect.bottom > navRect.top && innerWidth <= 768),
-        otherOptionalSurfaces: document.querySelectorAll('.mobile-install-card, .platform-action-bar').length,
-      }
-    })()`)
-    assert.equal(report.interactions.passkeyRecommendation.dismissible, true)
-    assert.equal(report.interactions.passkeyRecommendation.otherOptionalSurfaces, 0, 'runtime-surface exclusivity must prevent overlapping optional prompts')
+    report.interactions.passkeyRecommendation = passkeyRecommendationPerViewport.at(-1)
+    report.interactions.passkeyRecommendationPerViewport = passkeyRecommendationPerViewport
     await evaluate(client, sessionId, `document.querySelector('button[aria-label="Dismiss passkey recommendation"]')?.click()`)
     await waitFor(client, sessionId, `!document.body?.innerText.includes('Add a passkey for faster sign-in')`, 'passkey recommendation dismissed')
     report.interactions.passkeyRecommendation.dismissedSuccessfully = true
+
+    // -----------------------------------------------------------------
+    // AUTH-05B/C: forced 'passkey-unsupported'/'passkey-error' acceptance
+    // modes only affect the optional post-login recommendation banner now
+    // (passkeys are never part of the pre-auth screen -- see AUTH-03 above).
+    // -----------------------------------------------------------------
+    await resetBrowserState(client, sessionId, { keepPasskeyDismissed: false })
+    await client.send('Page.reload', { ignoreCache: true }, sessionId)
+    await waitFor(client, sessionId, 'typeof window.__financePlannerAuthAcceptanceState === "function"', 'passkey-unsupported fixture hook available')
+    await evaluate(client, sessionId, `window.__financePlannerAuthAcceptanceState('passkey-unsupported')`)
+    await delay(300)
+    report.interactions.passkeyUnsupported = await evaluate(client, sessionId, `(() => ({
+      recommendationSuppressed: !document.body.innerText.includes('Add a passkey for faster sign-in'),
+    }))()`)
+    assert.equal(report.interactions.passkeyUnsupported.recommendationSuppressed, true, 'a device/browser without passkey support must not be offered passkey setup')
+
+    await evaluate(client, sessionId, `window.__financePlannerAuthAcceptanceState('passkey-error')`)
+    await waitFor(client, sessionId, `document.body?.innerText.includes('The passkey request was cancelled or timed out.')`, 'forced passkey ceremony error copy')
+    report.interactions.passkeyForcedError = { shown: true }
+    // Restore the dismissed-prompt baseline VAULT-01 below expects.
+    await evaluate(client, sessionId, `document.querySelector('button[aria-label="Dismiss passkey recommendation"]')?.click()`)
+    await waitFor(client, sessionId, `!document.body?.innerText.includes('The passkey request was cancelled or timed out.')`, 'passkey recommendation re-dismissed')
 
     // -----------------------------------------------------------------
     // VAULT-01: first-device setup, clean (recommendation dismissed).

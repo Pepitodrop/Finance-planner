@@ -186,7 +186,7 @@ export function Dashboard({ state, userName, onAddTransaction, onEditTransaction
               <b className={semantic}>{signedMoney(transaction)}</b>
             </button>
           })}
-        </div> : <div className="dashboard-empty"><strong>No transactions yet</strong><span>Add a transaction to begin your current-month summary.</span><button type="button" onClick={onAddTransaction}>Add transaction</button></div>}
+        </div> : <div className="dashboard-empty"><strong>No transactions yet</strong><span>Use the Add transaction button above to record your first transaction.</span></div>}
       </article>
     </section>
   </div>

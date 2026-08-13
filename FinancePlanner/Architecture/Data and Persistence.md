@@ -11,13 +11,13 @@
 | Bank/PayPal provider credentials | `connector_connections` | AES-256-GCM provider payload |
 | OAuth state | `oauth_nonces` | single-use |
 | Webhook leases/idempotency | `webhook_events` | — |
-| Distributed rate limiting | `rate_limit_windows` | — |
+| Distributed rate limiting | `request_rate_limits` | — |
 | Applied migrations | `schema_migrations` | — |
 | Browser copy | local vault (`src/vault.ts`) | PBKDF2-SHA-256 (310k iterations) + AES-256-GCM, device vault password, account-bound |
 
 ## Sync lifecycle (`docs/CLOUD_DATA.md`)
 
-1. Authenticate (Google or passkey) → unlock/create local vault (per-device password).
+1. Authenticate (Google or email/password) → unlock/create local vault (per-device password). Passkeys are optional post-sign-in account security, not a primary pre-auth route in the current UI.
 2. `GET /api/finance/state` with session cookie. If a server doc exists it replaces the local cache (then re-encrypted with the device's local password); otherwise the local vault uploads as version 1.
 3. Local edits debounce into `POST /api/finance/state`.
 4. Every write carries `expectedVersion`. Server compares under a row lock (`SELECT ... FOR UPDATE` in `user-state-store.js`) and rejects with a version-conflict error (surfaced as HTTP 409 by `finance-router.js`) on mismatch — classic compare-and-swap, not last-write-wins.
@@ -28,6 +28,14 @@
 
 When PostgreSQL/network is unavailable, the app keeps the encrypted local cache, shows a local/offline status, and retries with bounded exponential backoff — it does not discard local changes.
 
+## Fresh-account state is genuinely empty (PR #131 fix)
+
+`src/data.ts`'s `initialState` (used both as the default for a brand-new vault and as the "Clear financial data" target) is `emptyProductionState` — zero accounts/transactions/goals. It used to be a hardcoded German sample dataset (`Girokonto`/`Tagesgeld`/`Bargeld` accounts, `Notgroschen` goal, REWE/Minecraft/etc. transactions), which a production browser pass found was still reachable by real accounts. Root cause and fix:
+- `VaultGate.tsx`'s setup path always starts a genuinely new (non-migrating) vault from `structuredClone(emptyProductionState)`, never the old sample data.
+- `isLegacyDemoState()`/`removeLegacyDemoState()` (`src/data.ts`) now detect *only* the complete canonical untouched starter dataset: exact account count and every account field (including absence of provider metadata), exact transaction count and every transaction field (`id`, account, description, category, type, amount, date, recurring flag), exact goal count and fields, and no subscriptions. Any edit, removal, replacement, extra `tN` transaction, provider metadata, or subscription makes the state ineligible for automatic cleanup. `VaultGate.tsx` runs this check once per unlock, right after `synchronizeUnlockedState`, and persists the cleaned state back via `saveState` so a stale cloud copy cannot reintroduce the untouched starter data on the next device.
+- "Clear financial data" (`DataTools.tsx`, formerly labelled "Reset financial data") explicitly promises "No example or demo data will be inserted" and produces the same `emptyProductionState` — it never reseeds anything. `resetFinancialData`'s acceptance-script coverage was previously (bug in the *test*, not the app) asserting the opposite — see [[Debugging Learnings]].
+- Acceptance-only sample states (`accountsAcceptanceState`, `planningAcceptanceState`) remain, but are wired only through `VITE_ACCEPTANCE_FIXTURES`-gated `acceptanceMode` props, never through the production default.
+
 ## Encryption boundary
 
 Server-side stores (`user-state-store.js`, `crypto-store.js`, `auth-store.js`) all use `aes-256-gcm` via Node's `crypto` module and assert `algorithm === 'AES-256-GCM'` on read as an integrity check. The frontend vault uses Web Crypto with PBKDF2-derived keys — a structurally different, independent encryption boundary from the server envelope (double encryption in transit: local vault format is re-derived per device, then wrapped again server-side).
@@ -36,4 +44,12 @@ Server-side stores (`user-state-store.js`, `crypto-store.js`, `auth-store.js`) a
 
 `GET/POST /api/finance/state` — see `docs/CLOUD_DATA.md` for the exact JSON shape. The endpoint independently validates on client and server: rejects unknown fields, malformed IDs, invalid dates, non-integer money, duplicate IDs, transactions referencing missing accounts, oversized payloads. Nginx and the connector both cap this route at 10 MB; other API routes use a smaller general limit.
 
-Related: [[System Architecture]] · [[Sync and Offline]] · [[Authentication]] · [[COBOL Domain Core]]
+## Diagram
+
+`diagrams/finance-sync-conflict.mmd`, embedded in `docs/ARCHITECTURE.md` right after the existing ASCII "Persistence flow" diagram (which only shows the happy path) — the full round trip including the compare-and-swap 409 branch and `VaultConflict.tsx`. Added during `/diagram` (PR #131, 2026-08-11) because this exact mechanism caused real confusion during `/qa`'s own local testing (see [[Debugging Learnings]]).
+
+## Detailed subgraph
+
+Every table above has its own atomic note (with repository/API/feature/cleanup/test links) under [[Data Index]]. [[Optimistic Concurrency Version Check]] and [[Encryption Boundary (server)]] are broken out separately there too. Table name corrected 2026-08-11 (`/graph`): the rate-limiting table is `request_rate_limits`, confirmed via `grep -rh "CREATE TABLE" server/migrations/*.sql` — a prior version of this note said `rate_limit_windows`.
+
+Related: [[System Architecture]] · [[Sync and Offline]] · [[Authentication]] · [[COBOL Domain Core]] · [[Data Index]]

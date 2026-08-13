@@ -20,7 +20,7 @@ The workflow intentionally does not run after a tag is pushed, because a post-ta
 
 ### AI workers
 
-For Whisper, Florence, semantic search, and graph inference, provide an isolated worker implementation, pinned dependencies and model revision, request-size limits, timeout and memory limits, health checks, deterministic fallback behavior, privacy tests, representative evaluation results, and deployment rollback instructions.
+For Florence, semantic search, and graph inference, provide an isolated worker implementation, pinned dependencies and model revision, request-size limits, timeout and memory limits, health checks, deterministic fallback behavior, privacy tests, representative evaluation results, and deployment rollback instructions.
 
 ### Model governance
 

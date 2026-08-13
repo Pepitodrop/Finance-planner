@@ -53,6 +53,7 @@ import '../features/recurring/recurring.css'
 import '../features/subscriptions/subscriptions.css'
 import '../features/planning/planning.css'
 import '../runtime-surfaces/runtime-surfaces.css'
+import '../post-release-fixes.css'
 
 const enrollmentRoute = window.location.pathname === '/test-enrollment'
 

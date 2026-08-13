@@ -7,9 +7,13 @@
 }
 
 .auth-card {
-  width: min(100%, 30rem);
+  width: min(100%, 31rem);
   display: grid;
   gap: 1rem;
+}
+
+.auth-card--credentials {
+  padding: clamp(1.25rem, 3vw, 1.75rem);
 }
 
 .auth-card h1,
@@ -17,9 +21,59 @@
   margin-block: 0;
 }
 
-.auth-card label {
+.auth-card label,
+.auth-credentials-form {
   display: grid;
-  gap: 0.45rem;
+  gap: 0.5rem;
+}
+
+.auth-credentials-form {
+  gap: 0.85rem;
+}
+
+.auth-credentials-form label {
+  color: var(--fp-color-text-secondary, #c7ccdc);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.auth-credentials-form input {
+  width: 100%;
+  min-height: 2.875rem;
+  border: 1px solid var(--fp-color-border, rgb(151 160 199 / 22%));
+  border-radius: 0.7rem;
+  padding: 0 0.8rem;
+  color: var(--fp-color-text-primary, #f4f5fb);
+  background: var(--fp-color-surface-interactive, #19223a);
+  font: inherit;
+}
+
+.auth-credentials-form input:focus-visible {
+  outline: 2px solid var(--fp-color-accent, #8b6aee);
+  outline-offset: 2px;
+}
+
+.auth-form-hint {
+  color: var(--fp-color-text-muted, #929ab2);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.auth-mode-switch {
+  min-height: 2.75rem;
+  border: 0;
+  padding: 0.4rem 0;
+  color: var(--fp-color-accent-soft, #a892ff);
+  background: transparent;
+  font: inherit;
+  font-weight: 650;
+  text-align: center;
+  cursor: pointer;
+}
+
+.auth-mode-switch:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
 }
 
 .auth-loading {
@@ -44,7 +98,7 @@
   justify-content: center;
   gap: 0.6rem;
   width: 100%;
-  min-height: 2.75rem;
+  min-height: 2.875rem;
   border-radius: 0.75rem;
   font: inherit;
   font-weight: 700;
@@ -65,6 +119,7 @@
 .fp-action-primary:disabled,
 .auth-google:disabled {
   opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .auth-divider {
@@ -72,6 +127,7 @@
   align-items: center;
   gap: 0.8rem;
   color: #94a3b8;
+  font-size: 0.78rem;
 }
 
 .auth-divider::before,
@@ -86,7 +142,7 @@
 .auth-passkey-unsupported {
   margin: 0;
   color: var(--fp-color-text-muted, #929ab2);
-  font-size: 0.8125rem;
+  font-size: 0.78rem;
   line-height: 1.5;
 }
 
@@ -103,40 +159,6 @@
   margin: 0;
   font-weight: 700;
   color: var(--fp-color-text-primary, #f4f5fb);
-}
-
-.auth-test-password {
-  margin-top: 0.25rem;
-  padding: 0.75rem;
-  border: 1px dashed var(--fp-color-border, rgb(151 160 199 / 22%));
-  border-radius: 0.75rem;
-  color: var(--fp-color-text-muted, #929ab2);
-}
-
-.auth-test-password summary {
-  cursor: pointer;
-  font-size: 0.8125rem;
-  font-weight: 600;
-}
-
-.auth-test-password label {
-  display: grid;
-  gap: 0.45rem;
-  margin-top: 0.75rem;
-}
-
-.auth-test-password input {
-  width: 100%;
-  min-height: 2.75rem;
-  border: 1px solid var(--fp-color-border, rgb(151 160 199 / 22%));
-  border-radius: 0.6rem;
-  padding: 0 0.75rem;
-  color: var(--fp-color-text-primary, #f4f5fb);
-  background: var(--fp-color-surface-interactive, #19223a);
-}
-
-.auth-test-password .fp-action-primary {
-  margin-top: 0.75rem;
 }
 
 .passkey-enrolment {
@@ -180,8 +202,6 @@
   background: transparent;
 }
 
-/* Vault password screens (VaultGate) */
-
 .vault-form-hint {
   color: var(--fp-color-text-muted, #929ab2);
   font-size: 0.75rem;
@@ -193,8 +213,6 @@
   font-size: 0.8125rem;
   line-height: 1.5;
 }
-
-/* VAULT-04: conflict resolution dialog (replaces window.confirm) */
 
 .vault-conflict-backdrop {
   position: fixed;
@@ -261,6 +279,10 @@
 }
 
 @media (max-width: 560px) {
+  .auth-card--credentials {
+    padding: 1rem;
+  }
+
   .passkey-enrolment {
     align-items: stretch;
     flex-direction: column;
@@ -271,7 +293,8 @@
   .auth-google,
   .fp-action-primary,
   .vault-conflict-choice,
-  .passkey-enrolment {
+  .passkey-enrolment,
+  .auth-credentials-form input {
     border: 1px solid ButtonText;
   }
 }

@@ -93,12 +93,13 @@ describe('production deployment contract', () => {
     expect(securitySnippet).toContain('Cross-Origin-Resource-Policy same-origin')
   })
 
+  it('proxies runtime health probes to the connector instead of the SPA document', () => {
+    const nginx = read('deploy/nginx.conf')
+    expect(nginx).toMatch(/location = \/health\/live\s*\{[\s\S]*?proxy_pass http:\/\/connector:8787\/health\/live;/)
+    expect(nginx).toMatch(/location = \/health\/ready\s*\{[\s\S]*?proxy_pass http:\/\/connector:8787\/health\/ready;/)
+  })
+
   it('never lets a location-specific add_header silently strip the shared security headers', () => {
-    // nginx does not merge add_header directives across scopes: a location
-    // block that declares its own add_header (e.g. a location-specific
-    // Cache-Control) stops inheriting every add_header from the server
-    // block, not just the one it redeclares. Any such location must
-    // `include` the shared security-headers snippet so the headers survive.
     const nginx = read('deploy/nginx.conf')
     const securitySnippet = read('deploy/security-headers.conf')
 

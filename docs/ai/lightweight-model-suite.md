@@ -8,11 +8,12 @@ This change adds one active Hugging Face reasoning integration plus a governed c
 |---|---|---|---|
 | Financial reasoning | `Qwen/Qwen3-4B-Thinking-2507:fastest` | Integrated | Hosted and optional |
 | Multilingual semantic search | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | Catalog only | Requires a dedicated local worker |
-| Voice entry | `openai/whisper-tiny` | Catalog only | Requires a dedicated local worker |
 | Receipt extraction | `microsoft/Florence-2-base` | Catalog only | Requires a dedicated local worker |
 | Relationship prediction | `mgalkin/ultra_3g` | Catalog only, experimental | Requires an isolated graph worker |
 
 The catalog-only entries are approved candidates, not active inference integrations. They must not be presented as available product features until a worker, pinned model revision, evaluation suite, resource budget, and failure policy are implemented.
+
+Finance Planner intentionally does not include a speech-recognition model in this suite. Voice entry is out of scope for the current product.
 
 “Free” means there is no proprietary model licence fee introduced by this repository. Hosted inference can still cost money, while local inference consumes deployment CPU, RAM, storage, and possibly GPU resources. Model licences and revisions must be reviewed and pinned before production activation.
 

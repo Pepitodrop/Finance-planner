@@ -1,0 +1,28 @@
+graph TD
+  Start["App loads"] --> AuthGate
+
+  subgraph PreAuth["AuthGate"]
+    AuthGate["Unauthenticated — two primary<br/>choices only:<br/>Continue with Google<br/>Email / password"]
+  end
+
+  AuthGate -- "Continue with Google" --> Google["Google OAuth<br/>state + nonce cookies,<br/>ID token audience/email_verified check"]
+  AuthGate -- "register or sign in" --> EmailPw["Email / password<br/>scrypt hash, timing-safe verify"]
+
+  Google --> Session["Signed session issued<br/>fp_session cookie<br/>(HttpOnly, SameSite=Lax, Secure)"]
+  EmailPw --> Session
+
+  Session --> PostAuth
+
+  subgraph PostAuth["Post-authentication"]
+    direction TB
+    PasskeyBanner["Optional 'Add a passkey' banner<br/>dismissible, in normal document flow<br/>(NOT position:fixed here — see note)"]
+    VaultGate["VaultGate<br/>set up new vault OR unlock existing<br/>device-local vault password"]
+    PasskeyBanner --- VaultGate
+  end
+
+  VaultGate --> Dashboard["Dashboard"]
+
+  Note["Fixed regression, redesign phase:<br/>banner used to float (position:fixed)<br/>over VaultGate's submit button on narrow<br/>mobile viewports, blocking it. Correct fix<br/>was NOT suppressing the banner — AUTH-05's<br/>own contract requires both to coexist and<br/>stay dismissible. Fix: banner flows in normal<br/>document flow above the vault card instead,<br/>so overlap is structurally impossible.<br/>Re-verified at 390x844, 430x932, 768x1024,<br/>1024x768, 1440x900 with real elementFromPoint<br/>hit-testing during /qa."]
+  PostAuth -.-> Note
+
+  style Note fill:#fff3cd,stroke:#b8860b,color:#333

@@ -1,26 +1,11 @@
-.assistant-page { display: grid; gap: 14px; }
+.assistant-page { display: grid; gap: 14px; min-width: 0; }
 .assistant-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.assistant-hero > div:first-child { min-width: 0; }
 .assistant-hero p, .muted { color: var(--fp-color-text-secondary); line-height: var(--fp-line-height-body); margin-top: 8px; }
 
-.ai-model { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: var(--fp-border); border-radius: var(--fp-radius-control); background: var(--fp-color-surface-interactive); min-width: 260px; }
-/* min-width: 0 let the badge icon (its own natural min-content is
-   respected by default, unaffected by this rule) claim space first and
-   squeeze the name/subtitle text down to almost nothing (a single
-   truncated character) once ellipsis started working correctly --
-   found via the same visual pass that caught the wrap-related defects
-   above. .assistant-hero has no overflow: hidden, so if this floor
-   ever doesn't fit, the horizontalOverflow acceptance check fails
-   loudly instead of silently hiding content. */
+.ai-model { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: var(--fp-border); border-radius: var(--fp-radius-control); background: var(--fp-color-surface-interactive); min-width: 260px; max-width: 390px; }
 .ai-model div { min-width: 110px; }
 .ai-model strong, .ai-model span { display: block; }
-/* text-overflow: ellipsis is a no-op without white-space: nowrap -- it
-   was declared without it, so the model name never actually truncated
-   to one line; combined with the parent's min-width: 0 and the
-   site-wide `overflow-wrap: anywhere`, it wrapped one character per
-   line instead ("Qw/en3/4B/ana/lyst..."), found via real-browser visual
-   inspection of assistant-planning/assistant-hosted-consent. overflow-wrap:
-   normal on both restores plain word-boundary wrapping as a fallback
-   for the subtitle span, which has no ellipsis truncation of its own. */
 .ai-model strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; font-size: var(--fp-font-size-supporting); }
 .ai-model span { margin-top: 4px; color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); overflow-wrap: normal; }
 
@@ -29,17 +14,23 @@
 .assistant-modes button { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: var(--fp-touch-target); border: 0; border-radius: 9px; padding: 10px; color: var(--fp-color-text-secondary); background: transparent; }
 .assistant-modes button.active { color: var(--fp-color-text-primary); background: var(--fp-color-surface-pressed); }
 
-.assistant-engine { display: grid; gap: 10px; }
-.assistant-engine-card { display: flex; align-items: flex-start; gap: 12px; padding: var(--fp-panel-padding); border: var(--fp-border); border-radius: var(--fp-radius-panel); color: var(--fp-color-text-secondary); background: var(--fp-color-surface-interactive); text-align: left; min-height: var(--fp-touch-target); }
+.assistant-engine { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.assistant-engine-card { display: flex; align-items: flex-start; gap: 12px; min-width: 0; padding: var(--fp-panel-padding); border: var(--fp-border); border-radius: var(--fp-radius-panel); color: var(--fp-color-text-secondary); background: var(--fp-color-surface-interactive); text-align: left; min-height: var(--fp-touch-target); }
 .assistant-engine-card svg { flex: 0 0 auto; margin-top: 2px; color: var(--fp-color-text-muted); }
+.assistant-engine-card div { min-width: 0; }
 .assistant-engine-card strong { display: block; color: var(--fp-color-text-primary); font-size: var(--fp-font-size-supporting); }
-.assistant-engine-card span { display: block; margin-top: 4px; color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); line-height: 1.5; }
+.assistant-engine-card span { display: block; margin-top: 4px; color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); line-height: 1.5; overflow-wrap: normal; }
 .assistant-engine-card.active { border-color: var(--fp-color-border-strong); background: var(--fp-color-accent-muted); }
 .assistant-engine-card.active svg { color: var(--fp-color-accent); }
+.assistant-engine-card:disabled:not(.active) { opacity: .55; }
 
 .assistant-consent, .assistant-local-warning { display: grid; gap: 8px; }
 .assistant-consent-toggle { justify-self: start; display: inline-flex; align-items: center; gap: 6px; padding: 4px 2px; border: 0; color: var(--fp-color-accent); background: transparent; font-size: var(--fp-font-size-metadata); font-weight: 650; min-height: var(--fp-touch-target); }
 .assistant-consent-detail { margin: 0; padding-left: 20px; color: var(--fp-color-text-secondary); font-size: var(--fp-font-size-metadata); line-height: 1.55; }
+.assistant-connectivity-fallback { margin: 0; }
+.assistant-connectivity-fallback > div { min-width: 0; }
+.assistant-connectivity-fallback strong, .assistant-connectivity-fallback span { display: block; }
+.assistant-connectivity-fallback span { margin-top: 3px; }
 
 .assistant-page label { display: grid; gap: 8px; color: var(--fp-color-text-secondary); font-size: var(--fp-font-size-metadata); font-weight: 650; }
 .assistant-page textarea { width: 100%; resize: vertical; border: var(--fp-border); border-radius: var(--fp-radius-control); padding: 12px; color: var(--fp-color-text-primary); background: var(--fp-color-surface-interactive); outline: none; }
@@ -50,13 +41,13 @@
 .assistant-page .checkbox:focus-within { border-color: var(--fp-color-accent); }
 .assistant-page .primary:disabled { box-shadow: none; }
 
-.learning-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
-.learning-stats div { padding: 15px; border-radius: var(--fp-radius-control); background: var(--fp-color-surface-interactive); text-align: center; }
+.learning-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.learning-stats div { min-width: 0; padding: 15px; border-radius: var(--fp-radius-control); background: var(--fp-color-surface-interactive); text-align: center; }
 .learning-stats strong { display: block; font-size: 1.5625rem; font-variant-numeric: tabular-nums; }
-.learning-stats span { color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); }
+.learning-stats span { display: block; color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); overflow-wrap: normal; }
 
 .smart-briefing-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.smart-briefing-item { display: flex; align-items: flex-start; gap: 11px; padding: 14px; border: var(--fp-border); border-radius: var(--fp-radius-control); background: var(--fp-color-surface-interactive); }
+.smart-briefing-item { display: flex; align-items: flex-start; gap: 11px; min-width: 0; padding: 14px; border: var(--fp-border); border-radius: var(--fp-radius-control); background: var(--fp-color-surface-interactive); }
 .smart-briefing-item svg { flex: 0 0 auto; margin-top: 2px; }
 .smart-briefing-item strong { display: block; color: var(--fp-color-text-primary); }
 .smart-briefing-item p { margin: 5px 0 0; color: var(--fp-color-text-secondary); font-size: var(--fp-font-size-supporting); line-height: 1.45; }
@@ -64,15 +55,23 @@
 .smart-briefing-item.positive svg { color: var(--fp-color-income); }
 .smart-briefing-item.neutral svg { color: var(--fp-color-text-muted); }
 
-.assistant-answer { min-height: 200px; }
+.assistant-answer { min-height: 160px; }
 .answer-text { white-space: pre-wrap; line-height: 1.7; color: var(--fp-color-text-secondary); }
 
-.assistant-agent-row { align-items: flex-start; gap: 12px; }
-.assistant-smartness-caption { max-width: 46ch; }
+.assistant-agent-list { display: grid; gap: 10px; margin-top: 14px; }
+.assistant-agent-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; min-width: 0; padding: 14px; border: var(--fp-border); border-radius: var(--fp-radius-control); background: var(--fp-color-surface-interactive); }
+.assistant-agent-copy { min-width: 0; }
+.assistant-agent-copy strong, .assistant-agent-copy span { display: block; overflow-wrap: normal; }
+.assistant-agent-copy span { margin-top: 4px; color: var(--fp-color-text-secondary); font-size: var(--fp-font-size-supporting); line-height: 1.45; }
+.assistant-agent-meta { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.assistant-agent-meta .row-actions { display: flex; gap: 6px; }
+.assistant-agent-meta .row-actions button { display: inline-grid; place-items: center; width: var(--fp-touch-target); height: var(--fp-touch-target); border: var(--fp-border); border-radius: 10px; color: var(--fp-color-text-primary); background: var(--fp-color-surface-pressed); }
+.assistant-smartness-caption { max-width: 60ch; }
 
 .assistant-budget-divider { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding-top: 14px; border-top: var(--fp-divider); color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); font-weight: 650; text-transform: uppercase; letter-spacing: .04em; }
 
-.assistant-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.assistant-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.assistant-grid > .panel { min-width: 0; }
 
 .spin { animation: assistant-spin 1s linear infinite; }
 @keyframes assistant-spin { to { transform: rotate(360deg); } }
@@ -82,32 +81,23 @@
 }
 
 @media (forced-colors: active) {
-  .assistant-engine-card, .smart-briefing-item { border: 1px solid CanvasText; }
-  /* .assistant-modes button and .assistant-consent-toggle both set
-     border: 0 unconditionally, so under forced-colors they'd otherwise
-     have no boundary at all -- found via a real forced-colors
-     accessibility check on assistant-hosted-consent. */
+  .assistant-engine-card, .smart-briefing-item, .assistant-agent-row { border: 1px solid CanvasText; }
   .assistant-modes button, .assistant-consent-toggle { border: 1px solid CanvasText; }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1000px) {
   .assistant-grid { grid-template-columns: 1fr; }
   .assistant-hero { align-items: flex-start; flex-direction: column; }
-  .assistant-page .ai-model { width: 100%; }
+  .assistant-page .ai-model { width: 100%; max-width: none; }
+  .assistant-agent-row { grid-template-columns: 1fr; align-items: stretch; }
+  .assistant-agent-meta { justify-content: flex-start; }
 }
 
 @media (max-width: 760px) {
-  /* Dead legacy override: no <nav> on this or any other page actually
-     wants 6 equal columns. Its !important also silently fought the real
-     5-item bottom nav's own explicit column count (app-shell.css's
-     .app-mobile-navigation) and, once a second <nav> (the grouped More
-     sheet) existed to reuse the bare tag selector against, broke that
-     one outright -- overflowing its 390px sheet to 1311px and truncating
-     every destination label. Found via a real screenshot review. */
-  .assistant-modes { grid-template-columns: repeat(3, 1fr); position: sticky; top: 0; z-index: 2; }
+  .assistant-modes { grid-template-columns: repeat(3, minmax(0, 1fr)); position: sticky; top: 0; z-index: 2; }
   .assistant-engine { grid-template-columns: 1fr; }
-  .learning-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); overflow-x: auto; }
-  .learning-stats div { min-width: 92px; padding: 12px 8px; }
+  .learning-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .learning-stats div { min-width: 0; padding: 12px 8px; }
   .learning-stats strong { font-size: 1.3125rem; }
   .smart-briefing-list { grid-template-columns: 1fr; }
   .smart-briefing-item { min-height: 76px; }
@@ -115,5 +105,5 @@
   .assistant-page textarea { min-height: 120px; }
   .assistant-page .primary { width: 100%; }
   .assistant-page .checkbox { padding: 12px; font-size: 12px; }
-  .assistant-agent-row { flex-direction: column; align-items: stretch; }
+  .assistant-agent-meta { align-items: flex-start; flex-direction: column; }
 }

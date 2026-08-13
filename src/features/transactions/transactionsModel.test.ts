@@ -15,23 +15,28 @@ const transactions: Transaction[] = [
 const referenceDate = new Date(2026, 7, 4)
 
 describe('transactions model', () => {
+  it('defaults to all recorded history so Dashboard View all is truthful', () => {
+    expect(DEFAULT_TRANSACTION_FILTERS.date).toBe('all')
+    expect(filterTransactions(transactions, accounts, DEFAULT_TRANSACTION_FILTERS, referenceDate).map(({ id }) => id)).toEqual(['salary', 'market', 'transfer', 'prior'])
+  })
+
   it('searches description, category and account name', () => {
     expect(filterTransactions(transactions, accounts, { ...DEFAULT_TRANSACTION_FILTERS, query: 'market' }, referenceDate).map(({ id }) => id)).toEqual(['market'])
     expect(filterTransactions(transactions, accounts, { ...DEFAULT_TRANSACTION_FILTERS, query: 'groceries' }, referenceDate).map(({ id }) => id)).toEqual(['market'])
-    expect(filterTransactions(transactions, accounts, { ...DEFAULT_TRANSACTION_FILTERS, query: 'primary checking' }, referenceDate).map(({ id }) => id)).toEqual(['salary', 'market'])
+    expect(filterTransactions(transactions, accounts, { ...DEFAULT_TRANSACTION_FILTERS, query: 'primary checking' }, referenceDate).map(({ id }) => id)).toEqual(['salary', 'market', 'prior'])
   })
 
   it('supports all presentation type filters while retaining inferred transfers', () => {
     expect(filterTransactions(transactions, accounts, { ...DEFAULT_TRANSACTION_FILTERS, type: 'income' }, referenceDate).map(({ id }) => id)).toEqual(['salary'])
-    expect(filterTransactions(transactions, accounts, { ...DEFAULT_TRANSACTION_FILTERS, type: 'expense' }, referenceDate).map(({ id }) => id)).toEqual(['market'])
+    expect(filterTransactions(transactions, accounts, { ...DEFAULT_TRANSACTION_FILTERS, type: 'expense' }, referenceDate).map(({ id }) => id)).toEqual(['market', 'prior'])
     expect(filterTransactions(transactions, accounts, { ...DEFAULT_TRANSACTION_FILTERS, type: 'transfer' }, referenceDate).map(({ id }) => id)).toEqual(['transfer'])
   })
 
   it('applies date, category, account and amount filters deterministically', () => {
-    expect(filterTransactions(transactions, accounts, { ...DEFAULT_TRANSACTION_FILTERS, date: 'all' }, referenceDate)).toHaveLength(4)
+    expect(filterTransactions(transactions, accounts, { ...DEFAULT_TRANSACTION_FILTERS, date: 'month' }, referenceDate).map(({ id }) => id)).toEqual(['salary', 'market', 'transfer'])
     expect(filterTransactions(transactions, accounts, { ...DEFAULT_TRANSACTION_FILTERS, category: 'Groceries' }, referenceDate).map(({ id }) => id)).toEqual(['market'])
     expect(filterTransactions(transactions, accounts, { ...DEFAULT_TRANSACTION_FILTERS, account: 'savings' }, referenceDate).map(({ id }) => id)).toEqual(['transfer'])
-    expect(filterTransactions(transactions, accounts, { ...DEFAULT_TRANSACTION_FILTERS, amount: 'large' }, referenceDate).map(({ id }) => id)).toEqual(['salary', 'transfer'])
+    expect(filterTransactions(transactions, accounts, { ...DEFAULT_TRANSACTION_FILTERS, amount: 'large' }, referenceDate).map(({ id }) => id)).toEqual(['salary', 'transfer', 'prior'])
   })
 
   it('excludes detected transfers from expense totals, net and category breakdowns', () => {

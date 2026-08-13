@@ -48,7 +48,42 @@ PostgreSQL user_finance_state
 
 The browser vault remains an encrypted offline cache. PostgreSQL is the canonical cross-device copy. The cloud document includes accounts, transactions, savings goals, behavior-learning data, assistant memory and other secure vault values.
 
-Writes use optimistic version checks. A conflicting write is never silently accepted; the UI requires the user to choose the server or local version.
+Writes use optimistic version checks. A conflicting write is never silently accepted; the UI requires the user to choose the server or local version. The sequence below shows the full round trip, including the compare-and-swap conflict branch the diagram above doesn't capture:
+
+```mermaid
+sequenceDiagram
+  participant B as Browser - local encrypted vault
+  participant C as Connector
+  participant D as PostgreSQL
+
+  B->>C: GET /api/finance/state (session cookie)
+  C->>D: SELECT ... FOR UPDATE
+  D-->>C: server doc (version N) or none
+
+  alt server doc exists
+    C-->>B: version N + encrypted payload
+    B->>B: replace local cache,<br/>re-encrypt with device vault password
+  else no server doc yet
+    B->>C: POST /api/finance/state (version 1, initial upload)
+  end
+
+  B->>B: local edits debounce
+
+  B->>C: POST /api/finance/state<br/>{expectedVersion: N}
+  C->>D: compare-and-swap under row lock
+
+  alt expectedVersion matches
+    D-->>C: write ok, version N+1
+    C-->>B: 200
+  else version mismatch — another device wrote first
+    C-->>B: 409 conflict
+    B->>B: show VaultConflict.tsx —<br/>user picks server copy or local copy,<br/>neither is silently overwritten
+  end
+
+  Note over B,D: Optimistic concurrency, not last-write-wins.<br/>Reusing the same local-user identity across<br/>repeated local test runs (not a real multi-device<br/>scenario) can trigger this same, correct conflict<br/>path — see Debugging Learnings.
+```
+
+Source: [`diagrams/finance-sync-conflict.mmd`](../diagrams/finance-sync-conflict.mmd).
 
 ## Backend
 

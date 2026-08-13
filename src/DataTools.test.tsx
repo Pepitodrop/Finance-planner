@@ -20,7 +20,7 @@ describe('DataTools overview', () => {
     expect(screen.getByRole('button', { name: /Restore from backup/ })).toBeInTheDocument()
     expect(screen.getByText('Export as CSV (unencrypted)')).toBeInTheDocument()
     expect(screen.getByText('Plaintext')).toBeInTheDocument()
-    expect(screen.getAllByText('Reset financial data').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Clear financial data').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Delete account').length).toBeGreaterThan(0)
     expect(screen.queryByText(/leere|Ausgangsstand|Datensouveränität/)).not.toBeInTheDocument()
   })
@@ -43,17 +43,17 @@ describe('DataTools overview', () => {
     expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus()
   })
 
-  it('opens a Finance-Planner-owned reset dialog with corrected, non-empty-claiming copy', async () => {
+  it('clears financial state instead of replacing it with demo data', async () => {
     const user = userEvent.setup()
     const onReset = vi.fn()
     render(<DataTools userId="user-1" state={state} onRestore={vi.fn()} onReset={onReset}/>)
-    await user.click(screen.getByRole('button', { name: 'Reset financial data' }))
-    const dialog = screen.getByRole('dialog', { name: 'Reset financial data?' })
-    expect(within(dialog).getByText(/example data, not an empty state/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Clear financial data' }))
+    const dialog = screen.getByRole('dialog', { name: 'Clear financial data?' })
+    expect(within(dialog).getByText(/No example or demo data will be inserted/i)).toBeInTheDocument()
     expect(within(dialog).getByText(/Kept:/)).toBeInTheDocument()
-    await user.click(within(dialog).getByRole('button', { name: 'Reset financial data' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Clear financial data' }))
     expect(onReset).toHaveBeenCalledOnce()
-    expect(screen.getByRole('status')).toHaveTextContent(/example dataset/)
+    expect(screen.getByRole('status')).toHaveTextContent(/financial data is now empty/i)
   })
 
   it('navigates to the account-deletion flow via a typed-phrase page, not a native confirm', async () => {

@@ -18,14 +18,6 @@
       "productionEnabled": false
     },
     {
-      "id": "openai/whisper-tiny",
-      "revision": "PIN_REQUIRED_BEFORE_PRODUCTION",
-      "license": "VERIFY_ON_MODEL_CARD",
-      "capability": "voice-entry",
-      "runtime": "isolated-local-worker",
-      "productionEnabled": false
-    },
-    {
       "id": "microsoft/Florence-2-base",
       "revision": "PIN_REQUIRED_BEFORE_PRODUCTION",
       "license": "VERIFY_ON_MODEL_CARD",
