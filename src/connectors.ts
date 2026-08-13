@@ -12,6 +12,8 @@ export interface ConnectorStartContext {
 }
 
 export interface ConnectorConnection { id: string; provider: ConnectorProvider; displayName: string; status: ConnectorStatus; lastSyncAt?: string; consentExpiresAt?: string; error?: string }
+export interface ProviderInstitution { id: string; name: string; bic?: string; logo?: string }
+export interface ProviderDescriptor { id: ConnectorProvider; displayName: string; kind: string; available: boolean; configured: boolean; mode?: 'owner' | 'partner'; reason?: string }
 export interface ExternalAccount {
   externalId: string
   name: string
@@ -142,6 +144,16 @@ async function requestJson<T>(url: string, init: RequestInit, options: { retry?:
 }
 
 export function connectorReturnUrl(): string { const url = new URL(window.location.href); for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'institution']) url.searchParams.delete(key); url.hash = ''; return url.toString() }
+export async function fetchProviderStatus(): Promise<ProviderDescriptor[]> {
+  const result = await requestJson<{ providers?: ProviderDescriptor[] }>('/api/connectors', { method: 'GET' }, { retry: true })
+  if (!Array.isArray(result.providers)) throw new Error('The provider status response was invalid.')
+  return result.providers
+}
+export async function fetchProviderInstitutions(provider: ConnectorProvider, country = 'DE'): Promise<ProviderInstitution[]> {
+  const result = await requestJson<{ institutions?: ProviderInstitution[] }>(`/api/connectors/${provider}/institutions?country=${encodeURIComponent(country)}`, { method: 'GET' }, { retry: true })
+  if (!Array.isArray(result.institutions)) throw new Error('The bank directory response was invalid.')
+  return result.institutions
+}
 export async function startConnector(provider: ConnectorProvider, context: ConnectorStartContext = {}): Promise<void> {
   const result = await requestJson<{ redirectUrl?: string }>(`/api/connectors/${provider}/start`, {
     method: 'POST',

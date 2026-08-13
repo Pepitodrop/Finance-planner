@@ -1,6 +1,7 @@
 import { assessBankConnectionHealth, chooseBankSyncBackoff } from './bank-sync-health.js'
 import { CobolBankingCore } from './cobol-banking-core.js'
 import { normalizeSignedAmount } from './cobol-engine.js'
+import { HttpError } from './runtime-security.js'
 
 const GC_BASE = 'https://bankaccountdata.gocardless.com/api/v2'
 const PAYPAL_SANDBOX = 'https://api-m.sandbox.paypal.com'
@@ -13,6 +14,7 @@ const GOCARDLESS_CONSENT_DAYS = 90
 const CONSENT_EXPIRY_SAFETY_MS = 5 * 60_000
 const MAX_PAYPAL_PAGES = 100
 const MAX_RETRY_DELAY_MS = 30_000
+const INSTITUTIONS_CACHE_TTL_MS = 10 * 60_000
 
 const READ_ONLY_CAPABILITIES = Object.freeze({
   accountInformation: true,
@@ -221,6 +223,7 @@ export class OpenBankingProvider {
   webhookRequired() { return false }
   async start() { throw new Error(`${this.id} provider start is not implemented.`) }
   async sync() { throw new Error(`${this.id} provider sync is not implemented.`) }
+  async institutionDirectory() { throw new HttpError(404, 'institution_directory_unsupported', `${this.id} does not provide an institution directory.`) }
 
   describe() {
     return {
@@ -272,27 +275,82 @@ export async function gocardlessToken(env) {
   }
 }
 
+function sanitizeGocardlessInstitution(institution) {
+  return {
+    id: String(institution.id),
+    name: String(institution.name || institution.id),
+    ...(institution.bic ? { bic: String(institution.bic) } : {}),
+    ...(institution.logo ? { logo: String(institution.logo) } : {}),
+  }
+}
+
 class GoCardlessProvider extends OpenBankingProvider {
-  constructor(env, core) { super({ id: 'gocardless', displayName: 'Bank (GoCardless)', kind: 'psd2-account-information', env, core }) }
+  constructor(env, core) {
+    super({ id: 'gocardless', displayName: 'Bank (GoCardless)', kind: 'psd2-account-information', env, core })
+    this.institutionsCache = new Map()
+  }
+
   isConfigured() { return Boolean(this.env.GOCARDLESS_SECRET_ID && this.env.GOCARDLESS_SECRET_KEY) }
 
-  async start({ state, redirectUri, country = 'DE' }) {
+  // Shared by start() (to validate a requested institution) and the
+  // institution-directory endpoint (to let the frontend search real banks
+  // instead of guessing). Cached per country so a UI search doesn't hit
+  // GoCardless on every keystroke.
+  async listInstitutions(country, accessToken) {
+    const cached = this.institutionsCache.get(country)
+    const now = Date.now()
+    if (cached && cached.expiresAt > now) return cached.institutions
+    const token = accessToken || (await gocardlessToken(this.env)).access
+    const policy = providerPolicy(this.env)
+    const institutions = await jsonFetch(`${GC_BASE}/institutions/?country=${encodeURIComponent(country)}`, { headers: { Authorization: `Bearer ${token}` } }, policy)
+    if (!Array.isArray(institutions)) throw new Error('GoCardless institution response is invalid.')
+    this.institutionsCache.set(country, { institutions, expiresAt: now + INSTITUTIONS_CACHE_TTL_MS })
+    return institutions
+  }
+
+  async institutionDirectory(country = 'DE') {
+    if (!this.isConfigured()) throw new HttpError(503, 'provider_not_configured', `${this.displayName} is not configured.`)
+    const institutions = await this.listInstitutions(country)
+    return institutions.map(sanitizeGocardlessInstitution)
+  }
+
+  async start({ state, redirectUri, country = 'DE', institutionId }) {
     if (!this.isConfigured()) throw new Error('GoCardless credentials are not configured.')
     await this.core.validateReadOnlyScope('balances,details,transactions')
     const token = await gocardlessToken(this.env)
+    const institutions = await this.listInstitutions(country, token.access)
+
+    // The institution the user actually selected always wins -- it is
+    // validated against GoCardless's own directory, never trusted blindly
+    // and never silently swapped for institutions[0]. The env override only
+    // applies when no institution was supplied (e.g. an operator-triggered
+    // sandbox/runtime-verification run), and it is validated the same way so
+    // a stale override can't silently misroute a connection either.
+    let resolvedInstitutionId
+    let institutionSource
+    if (institutionId) {
+      const match = institutions.find((institution) => institution.id === institutionId)
+      if (!match) throw new HttpError(400, 'invalid_institution', 'The selected institution is not currently available from GoCardless for this country.')
+      resolvedInstitutionId = match.id
+      institutionSource = 'user-selected'
+    } else if (this.env.GOCARDLESS_INSTITUTION_ID) {
+      const match = institutions.find((institution) => institution.id === this.env.GOCARDLESS_INSTITUTION_ID)
+      if (!match) throw new HttpError(503, 'invalid_institution_override', 'GOCARDLESS_INSTITUTION_ID does not match a currently available GoCardless institution.')
+      resolvedInstitutionId = match.id
+      institutionSource = 'operator-override'
+    } else {
+      throw new HttpError(400, 'institution_required', 'Select a bank before continuing.')
+    }
+
     const policy = providerPolicy(this.env)
-    const institutions = await jsonFetch(`${GC_BASE}/institutions/?country=${encodeURIComponent(country)}`, { headers: { Authorization: `Bearer ${token.access}` } }, policy)
-    if (!Array.isArray(institutions)) throw new Error('GoCardless institution response is invalid.')
-    const institutionId = this.env.GOCARDLESS_INSTITUTION_ID || institutions[0]?.id
-    if (!institutionId) throw new Error('No GoCardless institution is available for this country.')
     const agreement = await jsonFetch(`${GC_BASE}/agreements/enduser/`, {
       method: 'POST', headers: { Authorization: `Bearer ${token.access}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ institution_id: institutionId, max_historical_days: 90, access_valid_for_days: GOCARDLESS_CONSENT_DAYS, access_scope: ['balances', 'details', 'transactions'] }),
+      body: JSON.stringify({ institution_id: resolvedInstitutionId, max_historical_days: 90, access_valid_for_days: GOCARDLESS_CONSENT_DAYS, access_scope: ['balances', 'details', 'transactions'] }),
     }, policy)
     if (!agreement?.id) throw new Error('GoCardless did not create an end-user agreement.')
     const requisition = await jsonFetch(`${GC_BASE}/requisitions/`, {
       method: 'POST', headers: { Authorization: `Bearer ${token.access}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ redirect: redirectUri, institution_id: institutionId, agreement: agreement.id, reference: state, user_language: 'DE' }),
+      body: JSON.stringify({ redirect: redirectUri, institution_id: resolvedInstitutionId, agreement: agreement.id, reference: state, user_language: 'DE' }),
     }, policy)
     if (!requisition?.id || !requisition?.link) throw new Error('GoCardless did not create a valid requisition.')
     return {
@@ -301,7 +359,8 @@ class GoCardlessProvider extends OpenBankingProvider {
         requisitionId: requisition.id,
         agreementId: agreement.id,
         token,
-        institutionId,
+        institutionId: resolvedInstitutionId,
+        institutionSource,
         accessValidForDays: GOCARDLESS_CONSENT_DAYS,
       },
     }
@@ -514,16 +573,16 @@ export function createOpenBankingProviderRegistry(env = {}, suppliedCore, additi
   ])
 }
 
-export async function startOpenBankingProvider({ env, provider, state, redirectUri, country = 'DE', core }) {
-  return createOpenBankingProviderRegistry(env, core).get(provider).start({ state, redirectUri, country })
+export async function startOpenBankingProvider({ env, provider, state, redirectUri, country = 'DE', institutionId, core }) {
+  return createOpenBankingProviderRegistry(env, core).get(provider).start({ state, redirectUri, country, institutionId })
 }
 
 export async function syncOpenBankingProvider(provider, credential, env, suppliedCore) {
   return createOpenBankingProviderRegistry(env, suppliedCore).get(provider).sync(credential)
 }
 
-export async function startGoCardless({ env, state, redirectUri, country = 'DE', core }) {
-  return startOpenBankingProvider({ env, provider: 'gocardless', state, redirectUri, country, core })
+export async function startGoCardless({ env, state, redirectUri, country = 'DE', institutionId, core }) {
+  return startOpenBankingProvider({ env, provider: 'gocardless', state, redirectUri, country, institutionId, core })
 }
 
 export async function syncGoCardless(credential, env, suppliedCore) {

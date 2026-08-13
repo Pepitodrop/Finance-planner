@@ -1,12 +1,29 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
+import type { ProviderDescriptor, ProviderInstitution } from '../../connectors'
 import type { AppState } from '../../types'
 import { ConnectionsPage } from './ConnectionsPage'
 
+// Every provider available and configured by default so tests that don't
+// care about availability aren't blocked by it; tests covering the
+// unavailable-provider contract (defect 5) override this per-test.
+const DEFAULT_PROVIDER_STATUS: ProviderDescriptor[] = [
+  { id: 'gocardless', displayName: 'Bank (GoCardless)', kind: 'psd2-account-information', available: true, configured: true },
+  { id: 'paypal', displayName: 'PayPal', kind: 'wallet-account-information', available: true, configured: true, mode: 'owner' },
+  { id: 'finapi', displayName: 'Bank (finAPI)', kind: 'unavailable', available: false, configured: false, reason: 'finAPI adapter is not configured.' },
+]
+
 vi.mock('../../connectors', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../connectors')>()
-  return { ...actual, startConnector: vi.fn(async () => {}), synchronizeConnections: vi.fn(async () => []), disconnectConnector: vi.fn(async () => {}) }
+  return {
+    ...actual,
+    startConnector: vi.fn(async () => {}),
+    synchronizeConnections: vi.fn(async () => []),
+    disconnectConnector: vi.fn(async () => {}),
+    fetchProviderStatus: vi.fn(async () => DEFAULT_PROVIDER_STATUS),
+    fetchProviderInstitutions: vi.fn(async (): Promise<ProviderInstitution[]> => []),
+  }
 })
 
 // Amount owed / available credit for a manual credit-card account come from
@@ -27,7 +44,7 @@ vi.mock('../../manualCreditCard', async (importOriginal) => {
   }
 })
 
-import { disconnectConnector, startConnector, synchronizeConnections } from '../../connectors'
+import { disconnectConnector, fetchProviderInstitutions, fetchProviderStatus, startConnector, synchronizeConnections } from '../../connectors'
 
 const baseState: AppState = { accounts: [], transactions: [], goals: [] }
 
@@ -93,13 +110,20 @@ describe('institution search and category filtering', () => {
   })
 })
 
+// Trade Republic is backed by finAPI, which defaults to unavailable
+// (matching the real backend's explicit UnavailableProvider placeholder --
+// see "provider availability" below). These step-mechanics tests aren't
+// about availability, so they mark it available for this one call only.
+const AVAILABLE_STATUS_WITH_FINAPI: ProviderDescriptor[] = DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'finapi' ? { ...provider, available: true, configured: true, reason: undefined } : provider))
+
 describe('setup step transitions and account-type selection', () => {
   it('sends account-type-required institutions to step 2 with a sensible default selected', async () => {
     const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(AVAILABLE_STATUS_WITH_FINAPI)
     renderConnections()
     await user.click(screen.getByRole('button', { name: 'Connect an account' }))
     await user.click(screen.getByRole('tab', { name: 'Investments' }))
-    await user.click(screen.getByRole('button', { name: /Trade Republic/ }))
+    await user.click(await screen.findByRole('button', { name: /Trade Republic/ }))
     expect(screen.getByRole('heading', { name: 'What would you like to connect?' })).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: /Investment account/ })).toHaveAttribute('aria-checked', 'true')
   })
@@ -108,53 +132,124 @@ describe('setup step transitions and account-type selection', () => {
     const user = userEvent.setup()
     renderConnections()
     await user.click(screen.getByRole('button', { name: 'Connect an account' }))
-    await user.click(screen.getByRole('button', { name: /Sparkasse/ }))
-    expect(screen.getByRole('heading', { name: 'Continue to your provider' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
+    expect(screen.getByText('Step 3 of 3')).toBeInTheDocument()
   })
 
   it('selecting an account type advances to the confirmation step', async () => {
     const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(AVAILABLE_STATUS_WITH_FINAPI)
     renderConnections()
     await user.click(screen.getByRole('button', { name: 'Connect an account' }))
     await user.click(screen.getByRole('tab', { name: 'Investments' }))
-    await user.click(screen.getByRole('button', { name: /Trade Republic/ }))
+    await user.click(await screen.findByRole('button', { name: /Trade Republic/ }))
     await user.click(screen.getByRole('radio', { name: /Checking account/ }))
     expect(screen.getByRole('heading', { name: 'Continue to your provider' })).toBeInTheDocument()
+  })
+})
+
+describe('GoCardless institution resolution (never guesses a real bank)', () => {
+  it('resolves the exact GoCardless institution against the live directory before it can be confirmed', async () => {
+    const user = userEvent.setup()
+    const match: ProviderInstitution = { id: 'SPARKASSE_AACHEN_AACSDE33', name: 'Aachener Sparkasse', bic: 'AACSDE33' }
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([match])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Sparkasse$/ }))
+    expect(screen.getByRole('heading', { name: /Find your Sparkasse branch/ })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Continue to your provider' })).not.toBeInTheDocument()
+
+    const bankRow = await screen.findByRole('button', { name: /Aachener Sparkasse/ })
+    await user.click(bankRow)
+    expect(screen.getByRole('heading', { name: 'Continue to your provider' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+    expect(startConnector).toHaveBeenCalledWith('gocardless', { institutionId: 'SPARKASSE_AACHEN_AACSDE33', institutionName: 'Aachener Sparkasse', accountType: 'checking' })
+  })
+
+  it('never falls back to a guessed institution and lets the user search when nothing narrows it down', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([
+      { id: 'SPARKASSE_AACHEN_AACSDE33', name: 'Aachener Sparkasse', bic: 'AACSDE33' },
+      { id: 'SPARKASSE_KOELN_COKSDE33', name: 'Sparkasse KoelnBonn', bic: 'COKSDE33' },
+    ])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Sparkasse$/ }))
+    await screen.findByRole('button', { name: /Aachener Sparkasse/ })
+    expect(screen.getByRole('button', { name: /Sparkasse KoelnBonn/ })).toBeInTheDocument()
+    expect(startConnector).not.toHaveBeenCalled()
+
+    const liveSearchInput = screen.getByPlaceholderText('Search by bank name or BIC')
+    await user.clear(liveSearchInput)
+    await user.type(liveSearchInput, 'Koeln')
+    expect(screen.queryByRole('button', { name: /Aachener Sparkasse/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Sparkasse KoelnBonn/ })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /All institutions/ }))
+    expect(screen.getByRole('heading', { name: 'Choose your institution' })).toBeInTheDocument()
   })
 })
 
 describe('redirect confirmation', () => {
   it('requires explicit confirmation before starting a bank connector, with the correct provider and context', async () => {
     const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(AVAILABLE_STATUS_WITH_FINAPI)
     renderConnections()
     await user.click(screen.getByRole('button', { name: 'Connect an account' }))
     await user.click(screen.getByRole('tab', { name: 'Investments' }))
-    await user.click(screen.getByRole('button', { name: /Trade Republic/ }))
+    await user.click(await screen.findByRole('button', { name: /Trade Republic/ }))
     await user.click(screen.getByRole('radio', { name: /Investment account/ }))
     expect(startConnector).not.toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: 'Continue securely' }))
     expect(startConnector).toHaveBeenCalledWith('finapi', { institutionId: 'trade-republic', institutionName: 'Trade Republic', accountType: 'investment' })
   })
 
-  it('uses distinct PayPal confirmation copy and starts the paypal provider', async () => {
+  it('uses owner-mode PayPal confirmation copy and starts the paypal provider', async () => {
     const user = userEvent.setup()
     renderConnections()
     await user.click(screen.getByRole('button', { name: 'Connect an account' }))
     await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
-    expect(screen.getByRole('heading', { name: 'Continue to PayPal' })).toBeInTheDocument()
-    expect(screen.getByText(/Finance Planner does not receive your PayPal password/)).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Continue with the owner PayPal connection' })).toBeInTheDocument()
+    expect(screen.getByText(/deployment owner.s configured PayPal reporting connection/)).toBeInTheDocument()
+    expect(screen.queryByText(/redirected to PayPal.s official site to authenticate/)).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Continue with owner connection' }))
+    expect(startConnector).toHaveBeenCalledWith('paypal', { institutionId: 'paypal', institutionName: 'PayPal', accountType: 'checking' })
+  })
+
+  it('uses partner-mode PayPal confirmation copy for hosted onboarding', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'paypal' ? { ...provider, mode: 'partner' as const } : provider)))
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
+    expect(await screen.findByRole('heading', { name: 'Continue to PayPal' })).toBeInTheDocument()
+    expect(screen.getByText(/redirected to PayPal.s hosted onboarding/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Continue to PayPal' }))
     expect(startConnector).toHaveBeenCalledWith('paypal', { institutionId: 'paypal', institutionName: 'PayPal', accountType: 'checking' })
+  })
+
+  it('shows an unavailable state instead of a live PayPal redirect when PayPal is not configured', async () => {
+    const user = userEvent.setup()
+    let resolveStatus!: (value: ProviderDescriptor[]) => void
+    vi.mocked(fetchProviderStatus).mockImplementationOnce(() => new Promise((resolve) => { resolveStatus = resolve }))
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
+    resolveStatus(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'paypal' ? { ...provider, available: false, configured: false, reason: 'PayPal credentials are not configured.' } : provider)))
+    expect(await screen.findByRole('heading', { name: "PayPal isn't available right now" })).toBeInTheDocument()
+    expect(screen.getByText('PayPal credentials are not configured.')).toBeInTheDocument()
+    expect(startConnector).not.toHaveBeenCalled()
   })
 
   it('Cancel does not start a provider', async () => {
     const user = userEvent.setup()
     renderConnections()
     await user.click(screen.getByRole('button', { name: 'Connect an account' }))
-    await user.click(screen.getByRole('button', { name: /Sparkasse/ }))
+    await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(startConnector).not.toHaveBeenCalled()
-    expect(screen.queryByRole('heading', { name: 'Continue to your provider' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Continue to PayPal' })).not.toBeInTheDocument()
   })
 
   it('routes manual institutions directly to the manual-account form instead of a redirect', async () => {
@@ -165,6 +260,77 @@ describe('redirect confirmation', () => {
     await user.click(screen.getByRole('button', { name: /Kreditkarte manuell/ }))
     expect(screen.getByRole('heading', { name: 'Add manual account' })).toBeInTheDocument()
     expect(screen.getByLabelText('Account type')).toHaveValue('credit-card')
+    expect(startConnector).not.toHaveBeenCalled()
+  })
+})
+
+describe('provider-start error visibility (defect: hidden behind the modal)', () => {
+  it('shows a provider-start failure inside the active setup dialog and supports retry', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(AVAILABLE_STATUS_WITH_FINAPI)
+    vi.mocked(startConnector).mockRejectedValueOnce(new Error('GoCardless is not configured.'))
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('tab', { name: 'Investments' }))
+    await user.click(await screen.findByRole('button', { name: /Trade Republic/ }))
+    await user.click(screen.getByRole('radio', { name: /Investment account/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+
+    const dialog = screen.getByRole('dialog')
+    const alert = await within(dialog).findByRole('alert')
+    expect(alert).toHaveTextContent('GoCardless is not configured.')
+
+    const confirmButton = screen.getByRole('button', { name: 'Continue securely' })
+    expect(confirmButton).not.toBeDisabled()
+    await user.click(confirmButton)
+    expect(startConnector).toHaveBeenCalledTimes(2)
+  })
+
+  it('clears a stale setup error when the institution or step changes', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(AVAILABLE_STATUS_WITH_FINAPI)
+    vi.mocked(startConnector).mockRejectedValueOnce(new Error('Boom.'))
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('tab', { name: 'Investments' }))
+    await user.click(await screen.findByRole('button', { name: /Trade Republic/ }))
+    await user.click(screen.getByRole('radio', { name: /Investment account/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Boom.')
+
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('clears a stale setup error when the dialog is closed and reopened', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(AVAILABLE_STATUS_WITH_FINAPI)
+    vi.mocked(startConnector).mockRejectedValueOnce(new Error('Boom.'))
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('tab', { name: 'Investments' }))
+    await user.click(await screen.findByRole('button', { name: /Trade Republic/ }))
+    await user.click(screen.getByRole('radio', { name: /Investment account/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Boom.')
+
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+})
+
+describe('provider availability (defect: unavailable providers masquerading as working)', () => {
+  it('marks an unavailable provider institution instead of letting it masquerade as connectable', async () => {
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('tab', { name: 'Investments' }))
+    const tradeRepublicRow = screen.getByRole('button', { name: /Trade Republic/ })
+    await waitFor(() => expect(tradeRepublicRow).toBeDisabled())
+    expect(within(tradeRepublicRow).getByText(/Unavailable/)).toBeInTheDocument()
+    await user.click(tradeRepublicRow)
+    expect(screen.queryByRole('heading', { name: 'What would you like to connect?' })).not.toBeInTheDocument()
     expect(startConnector).not.toHaveBeenCalled()
   })
 })
@@ -243,6 +409,25 @@ describe('connection attention, reconnect and disconnect', () => {
     await user.click(screen.getByRole('button', { name: /^Disconnect$/ }))
     await user.click(screen.getByRole('button', { name: 'Yes, disconnect' }))
     expect(disconnectConnector).toHaveBeenCalledWith('finapi')
+  })
+
+  it('shows a reconnect failure inside the attention screen and supports retry', async () => {
+    const user = userEvent.setup()
+    vi.mocked(startConnector).mockRejectedValueOnce(new Error('The connection could not be started.'))
+    renderConnections({ acceptanceMode: 'attention' })
+    await user.click(screen.getByRole('button', { name: /Reconnect/ }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('The connection could not be started.')
+    await user.click(screen.getByRole('button', { name: /Reconnect/ }))
+    expect(startConnector).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows a disconnect failure inside the attention screen', async () => {
+    const user = userEvent.setup()
+    vi.mocked(disconnectConnector).mockRejectedValueOnce(new Error('The connection could not be disconnected.'))
+    renderConnections({ acceptanceMode: 'attention' })
+    await user.click(screen.getByRole('button', { name: /^Disconnect$/ }))
+    await user.click(screen.getByRole('button', { name: 'Yes, disconnect' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('The connection could not be disconnected.')
   })
 })
 

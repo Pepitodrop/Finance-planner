@@ -10,16 +10,17 @@ const ARTIFACT_PATH = resolve(process.env.CONNECTIONS_ACCEPTANCE_ARTIFACT_PATH |
 const ARTIFACT_DIR = dirname(ARTIFACT_PATH)
 const VAULT_PASSWORD = 'Acceptance-Vault-Password-2026!'
 const DEADLINE_MS = 45_000
-const VIEWPORTS = [[1440, 900], [1024, 768], [390, 844], [360, 800]]
+const VIEWPORTS = [[1440, 900], [1024, 768], [430, 932], [390, 844], [360, 800]]
 
 const MODES = [
   ['empty', 'Connect your financial accounts'],
   ['populated', 'Connected accounts'],
   ['institution-selector', 'Choose your institution'],
   ['institution-search', 'Choose your institution'],
+  ['provider-unavailable', 'Choose your institution'],
   ['account-type', 'What would you like to connect?'],
   ['bank-confirmation', 'Continue to your provider'],
-  ['paypal-confirmation', 'Continue to PayPal'],
+  ['paypal-confirmation', 'Continue with the owner PayPal connection'],
   ['checking', 'Checking your connection'],
   ['sync-selection', 'Choose accounts'],
   ['attention', 'Connection needs attention'],
@@ -245,6 +246,31 @@ async function capture(client, sessionId, mode, expectedText, width, height, suf
       manualPasswordFields: document.querySelectorAll('.connections-manual-modal input[type=password]').length,
       setupStep: document.querySelector('.connections-step-label')?.textContent?.trim() || null,
       finalScrollReached: ${suffix === 'final-row'} ? ((document.querySelector('main#main-content')?.scrollTop || window.scrollY) > 0) : true,
+      dialogContained: !dialog || (() => { const rect = dialog.getBoundingClientRect(); return rect.left >= -1 && rect.top >= -1 && rect.right <= innerWidth + 1 && rect.bottom <= innerHeight + 1 })(),
+      categoryPillsFullyReachable: (() => {
+        const container = document.querySelector('.connections-categories')
+        if (!container) return true
+        const buttons = [...container.querySelectorAll('button')]
+        if (!buttons.length) return true
+        const containerRect = container.getBoundingClientRect()
+        const originalScrollLeft = container.scrollLeft
+        container.scrollLeft = 0
+        const firstOk = buttons[0].getBoundingClientRect().left >= containerRect.left - 1
+        container.scrollLeft = container.scrollWidth
+        const lastOk = buttons[buttons.length - 1].getBoundingClientRect().right <= containerRect.right + 1
+        container.scrollLeft = originalScrollLeft
+        return firstOk && lastOk
+      })(),
+      touchTargetsOk: [...document.querySelectorAll('.connections-institution-row, .connections-categories button, .connections-icon-button')].every((element) => {
+        const rect = element.getBoundingClientRect()
+        return rect.height === 0 || rect.height >= 43.5
+      }),
+      institutionMarksVisible: (() => {
+        const marks = [...document.querySelectorAll('.connections-row-icon .connections-mark')]
+        if (!marks.length) return true
+        return marks.every((mark) => { const rect = mark.getBoundingClientRect(); return rect.width > 0 && rect.height > 0 })
+      })(),
+      unavailableBadgePresent: Boolean(document.querySelector('.connections-unavailable-badge')),
     }
   })()`)
 
@@ -259,14 +285,21 @@ async function capture(client, sessionId, mode, expectedText, width, height, suf
   assert.equal(assertions.focusInsideDialog, true)
   assert.equal(assertions.manualPasswordFields, 0)
   assert.equal(assertions.finalScrollReached, true)
+  assert.equal(assertions.dialogContained, true)
 
-  const setupModes = new Set(['institution-selector', 'institution-search', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'manual'])
+  const setupModes = new Set(['institution-selector', 'institution-search', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'manual', 'provider-unavailable'])
   assert.equal(assertions.dialogOpen, setupModes.has(mode))
   if (mode === 'institution-search') assert.equal(assertions.searchValue, 'bank')
   if (mode === 'sync-selection') assert.equal(assertions.selectedAccounts, 3)
-  if (mode === 'institution-selector' || mode === 'institution-search') assert.equal(assertions.setupStep, 'Step 1 of 3')
+  if (mode === 'institution-selector' || mode === 'institution-search' || mode === 'provider-unavailable') assert.equal(assertions.setupStep, 'Step 1 of 3')
   if (mode === 'account-type') assert.equal(assertions.setupStep, 'Step 2 of 3')
   if (mode === 'bank-confirmation' || mode === 'paypal-confirmation') assert.equal(assertions.setupStep, 'Step 3 of 3')
+  if (mode === 'institution-selector' || mode === 'institution-search' || mode === 'provider-unavailable') {
+    assert.equal(assertions.categoryPillsFullyReachable, true, `category pills clipped at ${mode} ${width}x${height}`)
+    assert.equal(assertions.touchTargetsOk, true, `touch target under 44px at ${mode} ${width}x${height}`)
+    assert.equal(assertions.institutionMarksVisible, true, `institution mark not visible at ${mode} ${width}x${height}`)
+  }
+  if (mode === 'provider-unavailable') assert.equal(assertions.unavailableBadgePresent, true)
 
   await mkdir(ARTIFACT_DIR, { recursive: true })
   const suffixPart = suffix ? `-${suffix}` : ''

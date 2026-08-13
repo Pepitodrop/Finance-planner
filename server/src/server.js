@@ -186,10 +186,11 @@ async function start(provider, request, response) {
   const input = await body(request)
   const redirect = new URL(String(input.redirectUri || origin))
   if (redirect.origin !== origin) throw new HttpError(400, 'invalid_redirect', 'Invalid redirect origin.')
+  const institutionId = typeof input.institutionId === 'string' && input.institutionId.trim() ? input.institutionId.trim().slice(0, 128) : undefined
   const consentId = randomUUID()
   const state = issueState(user, provider, sessionSecret, { consentId, redirectUri: redirect.toString() })
   const claims = verifyState(state, provider, sessionSecret)
-  const result = await adapter.start({ state, redirectUri: redirect.toString(), country: input.country || 'DE' })
+  const result = await adapter.start({ state, redirectUri: redirect.toString(), country: input.country || 'DE', institutionId })
   await store.createConnectionSetup({
     userId: user,
     provider,
@@ -345,6 +346,19 @@ const server = createServer(async (request, response) => {
       if (env.AUTH_MODE !== 'local') return send(response, 404, { error: { code: 'not_found', message: 'Not found.' }, requestId: id })
       const token = createSession('local-user', sessionSecret, 86400)
       return send(response, 200, { authenticated: true }, { 'Set-Cookie': `fp_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400${origin.startsWith('https://') ? '; Secure' : ''}` })
+    }
+    if (request.method === 'GET' && url.pathname === '/api/connectors') {
+      userId(request)
+      return send(response, 200, { providers: providerRegistry.list() })
+    }
+    const institutionsMatch = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})\/institutions$/)
+    if (request.method === 'GET' && institutionsMatch) {
+      userId(request)
+      const adapter = providerAdapter(institutionsMatch[1])
+      const country = String(url.searchParams.get('country') || 'DE').toUpperCase()
+      if (!/^[A-Z]{2}$/.test(country)) throw new HttpError(400, 'invalid_country', 'Invalid country code.')
+      const institutions = await adapter.institutionDirectory(country)
+      return send(response, 200, { institutions })
     }
     const match = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})\/start$/)
     if (request.method === 'POST' && match) return await start(match[1], request, response)

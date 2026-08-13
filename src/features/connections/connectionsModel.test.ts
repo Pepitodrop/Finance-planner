@@ -1,16 +1,45 @@
 import { describe, expect, it } from 'vitest'
-import type { ConnectorConnection } from '../../connectors'
+import type { ConnectorConnection, ProviderDescriptor } from '../../connectors'
 import {
   connectionAttentionReason,
   connectionNeedsAttention,
   defaultAccountTypeForInstitution,
   filterInstitutions,
+  institutionAvailability,
   institutionById,
   nextSetupStepAfterInstitution,
   previousSetupStepFromConfirmation,
   summarizeAccountSelection,
   validateManualAccount,
 } from './connectionsModel'
+
+describe('institutionAvailability', () => {
+  const providers: ProviderDescriptor[] = [
+    { id: 'gocardless', displayName: 'Bank (GoCardless)', kind: 'psd2-account-information', available: true, configured: true },
+    { id: 'finapi', displayName: 'Bank (finAPI)', kind: 'unavailable', available: false, configured: false, reason: 'finAPI adapter is not configured.' },
+    { id: 'paypal', displayName: 'PayPal', kind: 'wallet-account-information', available: true, configured: false },
+  ]
+
+  it('is always available for manual institutions regardless of provider status', () => {
+    expect(institutionAvailability({ provider: 'manual' }, [])).toEqual({ unavailable: false })
+  })
+
+  it('does not block optimistically before provider status has loaded', () => {
+    expect(institutionAvailability({ provider: 'gocardless' }, [])).toEqual({ unavailable: false })
+  })
+
+  it('marks an explicitly unavailable provider (finAPI) as unavailable with its reason, never as a normal selectable institution', () => {
+    expect(institutionAvailability({ provider: 'finapi' }, providers)).toEqual({ unavailable: true, reason: 'finAPI adapter is not configured.' })
+  })
+
+  it('marks an available-but-unconfigured provider as unavailable', () => {
+    expect(institutionAvailability({ provider: 'paypal' }, providers)).toEqual({ unavailable: true, reason: 'PayPal is not configured yet.' })
+  })
+
+  it('is available once its provider reports both available and configured', () => {
+    expect(institutionAvailability({ provider: 'gocardless' }, providers)).toEqual({ unavailable: false })
+  })
+})
 
 describe('filterInstitutions', () => {
   it('filters by category, mapping "popular" to popularOnly', () => {

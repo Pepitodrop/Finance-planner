@@ -14,6 +14,8 @@ Finance Planner is a **read-only account-information application** — it never 
 
 The browser sends the selected institution ID; the server validates the return-URI origin, issues a short-lived single-use state value, stores setup metadata server-side, and redirects to the provider. Bank credentials/tokens are never returned to the browser or passed into the COBOL process (`docs/issue-105-provider-setup.md`). Consent expiry is tracked server-side (`gocardlessConsentExpiresAt()`), and the consent status is validated through the COBOL core (`core.validateProviderConsent`) before being trusted.
 
+The server validates the selected institution itself, not just the return URI: `GET /api/connectors/gocardless/institutions` exposes a sanitized, authenticated, cached live directory, and `start()` rejects any `institutionId` not present in it (never `institutions[0]`) — see [[Provider Institution Selection Contract]]. `GET /api/connectors` exposes sanitized per-provider availability/configuration so the frontend can't present an unconfigured or explicitly-unavailable provider as a normal choice.
+
 ## COBOL boundary
 
 See [[COBOL Domain Core]] — account-type normalization, fixed-point amount conversion, consent-state classification, scope enforcement, and reconciliation all happen in the compiled COBOL binary, not Node. Provider data is not accepted into state until COBOL validates it.
@@ -36,4 +38,4 @@ Verification state: **implemented / not runtime or production verified — no ev
 
 [[GoCardless]] (in [[Providers Index]]) holds the atomic verification-status breakdown; [[Bank Connection Flow]], [[Bank Consent Flow]], [[Bank Sync Flow]], [[Bank Disconnect Flow]] (in [[Flows Index]]) hold the step-by-step sequences; [[Banking Core Module]] and its responsibility nodes (in [[COBOL Index]]) hold the deterministic validation detail.
 
-Related: [[PayPal]], [[COBOL Domain Core]], [[Provider Status]], [[Architecture Decisions]], [[Providers Index]], [[Flows Index]]
+Related: [[PayPal]], [[COBOL Domain Core]], [[Provider Status]], [[Architecture Decisions]], [[Providers Index]], [[Flows Index]], [[Provider Institution Selection Contract]]

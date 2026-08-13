@@ -13,6 +13,10 @@ Implemented as one of the `OpenBankingProvider` adapters in `server/src/provider
 
 Entirely server-side: `paypalAccessToken()` uses Basic-auth client-credential exchange. No PayPal secrets or tokens cross to the browser. `sync()` fetches EUR balance + paginated transaction report with a hard pagination cap (`MAX_PAYPAL_PAGES = 100`, throws past that) and maps results into the internal transaction/account shape.
 
+## UI must match the mode (fixed 2026-08-13)
+
+The Connections confirmation step previously showed one fixed copy — "you'll be redirected to PayPal's official site to authenticate" — regardless of mode. That's accurate for partner mode but was actively misleading for owner mode, contradicting the invariant already documented above ("must not be presented as" third-party authorization). `ConnectionsPage.tsx`'s confirmation step now reads the provider descriptor's `mode` (from `GET /api/connectors`) and renders distinct copy per state: owner (explains it's the deployment owner's configured connection, no PayPal login happens), partner (hosted-onboarding redirect language), and unconfigured (explicit unavailable state, never a broken-looking "Continue" button). Covered by `src/features/connections/ConnectionsPage.test.tsx`.
+
 ## Verification status
 
 - `runtime-canaries.yml` checks PayPal control-plane access only (client-credential auth succeeds), credential-gated and non-blocking by default.

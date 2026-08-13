@@ -38,6 +38,30 @@ test('connector deletion authenticates before validating a provider identifier',
   assert.ok(disconnectRoute.indexOf('const user = userId(request)') < disconnectRoute.indexOf('providerAdapter(disconnect[1])'))
 })
 
+test('connector start forwards the client-selected institutionId to the provider adapter for server-side validation', () => {
+  const startFunction = serverSource.slice(
+    serverSource.indexOf('async function start(provider, request, response)'),
+    serverSource.indexOf('async function buildSyncPayload'),
+  )
+  assert.match(startFunction, /const institutionId = /)
+  assert.match(startFunction, /adapter\.start\(\{[^}]*institutionId[^}]*\}\)/s)
+})
+
+test('the provider listing and institution directory endpoints authenticate before returning provider data', () => {
+  const providersRoute = serverSource.slice(
+    serverSource.indexOf("url.pathname === '/api/connectors') {"),
+    serverSource.indexOf("const match = url.pathname.match(/^\\/api\\/connectors\\/([a-z0-9][a-z0-9-]{1,39})\\/start$/)"),
+  )
+  assert.ok(providersRoute.length > 0, 'provider listing/institutions route block was not found')
+  const providersHandler = providersRoute.slice(0, providersRoute.indexOf('institutionsMatch'))
+  assert.match(providersHandler, /userId\(request\)/)
+  const institutionsHandler = providersRoute.slice(providersRoute.indexOf('institutionsMatch'))
+  const authentication = institutionsHandler.indexOf('userId(request)')
+  const directoryCall = institutionsHandler.indexOf('adapter.institutionDirectory(')
+  assert.ok(authentication >= 0 && directoryCall >= 0)
+  assert.ok(authentication < directoryCall, 'institution directory must authenticate before disclosing institutions')
+})
+
 test('core readiness is independent from optional bank capability readiness', () => {
   const readinessRoute = serverSource.slice(
     serverSource.indexOf("if (request.method === 'GET' && (url.pathname === '/health' || url.pathname === '/health/ready'))"),

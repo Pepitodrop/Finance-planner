@@ -1,4 +1,4 @@
-import type { ConnectorAccountType, ConnectorConnection } from '../../connectors'
+import type { ConnectorAccountType, ConnectorConnection, ProviderDescriptor } from '../../connectors'
 import { consentDaysRemaining } from '../../connectors'
 import { commonInstitutions, institutionById, searchInstitutions, type Institution, type InstitutionKind } from '../../institutions'
 
@@ -102,6 +102,21 @@ export function validateManualAccount({ name, accountType, balanceInput, creditL
   if (creditLimitCents === null || !Number.isFinite(creditLimitCents)) return { error: 'Enter a valid credit limit, or leave it empty.', balanceCents: 0 }
   if (creditLimitCents < 0) return { error: 'Credit limit cannot be negative.', balanceCents: 0 }
   return { balanceCents, creditLimitCents }
+}
+
+export interface ProviderAvailability { unavailable: boolean; reason?: string }
+
+// Backend-authoritative: an institution is only ever shown as connectable
+// once its backing provider reports both available and configured. finAPI
+// (an explicit unavailable placeholder) and an unconfigured GoCardless/PayPal
+// must never masquerade as a normal, clickable institution.
+export function institutionAvailability(institution: Pick<Institution, 'provider'>, providers: ProviderDescriptor[]): ProviderAvailability {
+  if (institution.provider === 'manual') return { unavailable: false }
+  const descriptor = providers.find((provider) => provider.id === institution.provider)
+  if (!descriptor) return { unavailable: false }
+  if (!descriptor.available) return { unavailable: true, reason: descriptor.reason || `${descriptor.displayName} is not available right now.` }
+  if (!descriptor.configured) return { unavailable: true, reason: `${descriptor.displayName} is not configured yet.` }
+  return { unavailable: false }
 }
 
 export function institutionIcon(institution: Institution): 'bank' | 'wallet' | 'broker' | 'card' | 'manual' {

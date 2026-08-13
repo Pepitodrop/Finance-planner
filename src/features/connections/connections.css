@@ -50,11 +50,28 @@
 .connections-hidden-file input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .connections-rollback { justify-self: start; }
 
-/* Dialog shell (layered on top of the shared .modal / .modal-backdrop) */
-.connections-setup-modal, .connections-manual-modal { width: min(100%, 30rem); max-height: 92vh; padding: var(--fp-space-5); border-radius: var(--fp-radius-dialog); border-color: var(--fp-color-border); color: var(--fp-color-text-primary); background: var(--fp-color-surface-elevated); box-shadow: var(--fp-shadow-overlay); display: grid; gap: var(--fp-space-4); align-content: start; }
-.connections-setup-content { order: 3; display: grid; gap: var(--fp-space-4); }
-.connections-setup-modal > .connections-setup-header { order: 1; }
-.connections-setup-modal > .connections-setup-progress { order: 2; }
+/* Dialog shell (layered on top of the shared .modal / .modal-backdrop).
+   The setup dialog uses a fixed header/progress with exactly one internal
+   scroll region (.connections-setup-content) so it never produces the
+   nested "modal scrolls AND its list scrolls" double-scrollbar effect.
+   Selectors here are compounded with .modal (".modal.connections-setup-modal",
+   not just ".connections-setup-modal") on purpose: several later-loaded
+   stylesheets (frontend-experience.css, remaining-pages-redesign.css) style
+   the bare .modal class with equal specificity, and being imported later
+   would otherwise let them silently win the cascade -- which is exactly how
+   the shell background/overflow and the nested search-input border
+   regressed in production. Compounding both classes always outranks a bare
+   .modal rule regardless of stylesheet import order. */
+/* Background/border/box-shadow are intentionally left to the app-wide glass
+   treatment in glassy-reference-enhancements.css (`.modal { ... !important }`)
+   -- that already gives every modal, including this one, Finance Planner's
+   calm dark/glossy surface, so this rule only owns layout/sizing. */
+.modal.connections-setup-modal, .modal.connections-manual-modal { width: min(100%, 34rem); max-height: 90vh; padding: 0; border-radius: var(--fp-radius-dialog); color: var(--fp-color-text-primary); overflow: hidden; }
+.modal.connections-manual-modal { display: grid; gap: var(--fp-space-4); align-content: start; padding: var(--fp-space-5); overflow-y: auto; }
+.modal.connections-setup-modal { display: grid; grid-template-rows: auto auto minmax(0, 1fr); }
+.connections-setup-content { order: 3; display: grid; align-content: start; gap: var(--fp-space-4); min-height: 0; overflow-y: auto; padding: var(--fp-space-4) var(--fp-space-5) var(--fp-space-5); }
+.modal.connections-setup-modal > .connections-setup-header { order: 1; padding: var(--fp-space-4) var(--fp-space-5) 0; }
+.modal.connections-setup-modal > .connections-setup-progress { order: 2; padding: var(--fp-space-3) var(--fp-space-5) 0; }
 .connections-setup-header { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: var(--fp-space-2); }
 .connections-icon-button { display: grid; place-items: center; width: var(--fp-touch-target); height: var(--fp-touch-target); border: 0; border-radius: var(--fp-radius-control); color: var(--fp-color-text-secondary); background: transparent; }
 .connections-icon-button:hover:not(:disabled) { background: var(--fp-color-surface-hover); color: var(--fp-color-text-primary); }
@@ -69,18 +86,62 @@
 .connections-footnote { display: flex; align-items: flex-start; gap: var(--fp-space-2); margin: 0; color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); line-height: var(--fp-line-height-body); }
 .connections-footnote svg { flex: none; margin-top: .1rem; }
 
-/* Step 1: institution search + categories */
-.connections-search { display: flex; align-items: center; gap: var(--fp-space-2); min-height: var(--fp-touch-target); padding-inline: var(--fp-space-3); border: var(--fp-border); border-radius: var(--fp-radius-control); background: var(--fp-color-surface-interactive); color: var(--fp-color-text-muted); }
-.connections-search input { flex: 1; border: 0; background: transparent; color: var(--fp-color-text-primary); outline: none; }
+/* Step 1: institution search + categories.
+   A single :focus-within treatment on the wrapper is the only focus
+   indicator here. The input itself is reset via a selector compounded with
+   .modal (".modal .connections-search input") so a generic ".modal
+   input"/".modal input:focus" rule from another stylesheet -- which matches
+   at equal-or-lower specificity and can load later -- can never win the
+   cascade and reintroduce a second, nested border/outline around it. */
+/* .connections-search is itself a <label>, so a generic ".modal label"
+   layout rule (display: grid, its own color) elsewhere in the app would
+   otherwise outrank the bare ".connections-search" class by specificity and
+   silently break this row back into a stacked grid -- compounding with
+   .modal.connections-setup-modal guarantees this wins on specificity alone. */
+.modal.connections-setup-modal .connections-search { display: flex; align-items: center; gap: var(--fp-space-2); min-height: var(--fp-touch-target); padding-inline: var(--fp-space-3); border: 1px solid var(--fp-color-border); border-radius: var(--fp-radius-control); background: var(--fp-color-surface-interactive); color: var(--fp-color-text-muted); transition: border-color .15s ease, box-shadow .15s ease; }
+.connections-search:focus-within { border-color: var(--fp-color-accent); box-shadow: 0 0 0 3px var(--fp-color-accent-muted); }
+.modal.connections-setup-modal .connections-search input { flex: 1; min-width: 0; min-height: 0; height: 100%; background: transparent; color: var(--fp-color-text-primary); border: 0; border-radius: 0; box-shadow: none; outline: none; }
+.modal.connections-setup-modal .connections-search input:focus, .modal.connections-setup-modal .connections-search input:focus-visible { border: 0; box-shadow: none; outline: none; }
 .connections-search button { display: grid; place-items: center; border: 0; background: transparent; color: var(--fp-color-text-muted); }
-.connections-categories { display: flex; gap: var(--fp-space-2); overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
-.connections-categories button { flex: 0 0 auto; min-height: 2.25rem; padding: 0 var(--fp-space-4); border: var(--fp-border); border-radius: 999px; white-space: nowrap; color: var(--fp-color-text-secondary); background: var(--fp-color-surface-interactive); }
+.connections-live-search { margin-top: var(--fp-space-1); }
+
+/* Full-bleed horizontal scroller: the pills scroll edge-to-edge inside the
+   dialog's true width (compensating the parent's inline padding with a
+   matching negative margin) so the first/last pill is always fully
+   reachable instead of sitting flush against -- or clipped by -- the
+   padded edge. */
+.connections-categories { display: flex; gap: var(--fp-space-2); overflow-x: auto; margin-inline: calc(var(--fp-space-5) * -1); padding-inline: var(--fp-space-5); padding-bottom: var(--fp-space-2); scroll-padding-inline: var(--fp-space-5); scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
+.connections-categories button { flex: 0 0 auto; min-height: var(--fp-touch-target); padding: 0 var(--fp-space-4); border: var(--fp-border); border-radius: 999px; white-space: nowrap; color: var(--fp-color-text-secondary); background: var(--fp-color-surface-interactive); }
 .connections-categories button.active { color: var(--fp-color-text-primary); background: var(--fp-color-accent-muted); box-shadow: inset 0 0 0 1px var(--fp-color-accent); font-weight: var(--fp-font-weight-semibold); }
-.connections-institution-list { display: grid; gap: var(--fp-space-2); max-height: 22rem; overflow-y: auto; }
-.connections-institution-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--fp-space-3); min-height: var(--fp-touch-target); padding: var(--fp-space-3); border: var(--fp-border); border-radius: var(--fp-radius-control); background: var(--fp-color-surface-interactive); color: inherit; text-align: left; }
-.connections-institution-row:hover { background: var(--fp-color-surface-hover); }
-.connections-institution-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--fp-font-weight-medium); }
+
+/* One clean list/surface with clear separators instead of a stack of
+   individually outlined rows. Flex throughout, not grid: a <button> row
+   whose content wraps onto two lines (name + a long "Unavailable — reason"
+   badge) does not reliably report its own grown intrinsic block size as a
+   CSS grid box in this engine -- it collapses to min-height and lets the
+   wrapped second line spill into the next row instead of growing to fit it.
+   Flex (on both the list and the row) sizes correctly for wrapped content. */
+.connections-institution-list { display: flex; flex-direction: column; border: var(--fp-border); border-radius: var(--fp-radius-panel); overflow: hidden; background: var(--fp-color-surface); }
+.connections-institution-row { display: flex; flex-shrink: 0; align-items: center; gap: var(--fp-space-3); min-height: var(--fp-touch-target); padding: var(--fp-space-3) var(--fp-space-4); border: 0; border-bottom: 1px solid var(--fp-color-divider); border-radius: 0; background: transparent; color: inherit; text-align: left; width: 100%; font: inherit; }
+.connections-institution-row > .connections-row-icon { flex: none; }
+.connections-institution-row > .connections-institution-name { flex: 1 1 auto; }
+.connections-institution-row > svg { flex: none; }
+.connections-institution-row:last-child { border-bottom: 0; }
+.connections-institution-row:hover:not(:disabled) { background: var(--fp-color-surface-hover); }
+.connections-institution-row:disabled { opacity: .5; cursor: not-allowed; }
+.connections-institution-name { min-width: 0; display: grid; gap: .1rem; overflow-wrap: anywhere; font-weight: var(--fp-font-weight-medium); }
+.connections-unavailable-badge, .connections-institution-bic { color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); font-weight: var(--fp-font-weight-medium); }
 .connections-institution-banner { display: flex; align-items: center; gap: var(--fp-space-3); padding: var(--fp-space-3); border: var(--fp-border); border-radius: var(--fp-radius-panel); background: var(--fp-color-surface); }
+.connections-institution-banner .connections-row-body { gap: 0; }
+.connections-institution-banner .connections-row-body small { color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); }
+.connections-back.connections-live-search-back { justify-self: start; padding: 0; }
+
+/* Institution visual identity: a reviewed Simple Icons brand mark on a light
+   chip, or an original Finance Planner lettermark otherwise. */
+.connections-mark { display: grid; place-items: center; width: 100%; height: 100%; border-radius: inherit; overflow: hidden; }
+.connections-mark--logo { background: #f5f6fb; }
+.connections-mark--logo img { width: 60%; height: 60%; object-fit: contain; }
+.connections-mark--lettermark { background: var(--connections-mark-color); color: #10162b; font-size: .7rem; font-weight: var(--fp-font-weight-semibold); letter-spacing: .01em; }
 
 /* Step 2: account type */
 .connections-account-type-list { display: grid; gap: var(--fp-space-2); }
@@ -186,7 +247,14 @@
 @media (min-width: 1024px) {
   .connections-feature { max-width: 56rem; }
   .connections-list, .connections-account-select-list { max-width: 48rem; }
-  .connections-setup-modal, .connections-manual-modal { width: min(100%, 34rem); }
+  /* Must match (or exceed) the base rule's .modal.connections-setup-modal
+     specificity, otherwise the base declaration above always wins and these
+     breakpoint widths silently never apply. */
+  .modal.connections-setup-modal, .modal.connections-manual-modal { width: min(100%, 40rem); }
+}
+
+@media (min-width: 1280px) {
+  .modal.connections-setup-modal, .modal.connections-manual-modal { width: min(100%, 46rem); }
 }
 
 @media (max-width: 480px) {
@@ -194,6 +262,13 @@
   .connections-account-select-row { grid-template-columns: auto auto minmax(0, 1fr); }
   .connections-account-select-balance { grid-column: 1 / -1; justify-self: end; text-align: right; }
   .connections-preview-table { display: block; overflow-x: auto; }
+}
+
+@media (max-width: 400px) {
+  .modal.connections-setup-modal > .connections-setup-header,
+  .modal.connections-setup-modal > .connections-setup-progress,
+  .connections-setup-content { padding-inline: var(--fp-space-4); }
+  .connections-categories { margin-inline: calc(var(--fp-space-4) * -1); padding-inline: var(--fp-space-4); scroll-padding-inline: var(--fp-space-4); }
 }
 
 @media (forced-colors: active) {

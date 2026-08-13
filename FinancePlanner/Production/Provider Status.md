@@ -19,6 +19,7 @@ Runtime verified: **no dated successful canary artifact pinned** — `.github/wo
 Production verified: **no evidence found**
 Last evidence: **evidence checked 2026-08-09** — no specific successful `external-runtime-canaries` run/artifact is recorded here; no completed end-to-end consent→sync→disconnect cycle is evidenced in-repo, and `docs/issue-105-live-verification.md` requires this as a manual, human-recorded step
 Current limitations: README lists "live GoCardless... certification and reconciliation testing" as outstanding; `docs/bank-connection-production.md` states passing unit tests explicitly does not substitute for deployment/sandbox evidence
+Fixed (code-correctness, not new runtime evidence) 2026-08-13: the server used to ignore the client-selected institution and fall back to `institutions[0]`; it now validates every selection against a live, cached, sanitized institution directory and never guesses — see [[Provider Institution Selection Contract]]. This does not change the runtime/production-verified status above.
 Relevant code/docs: `server/src/providers.js`, `.github/workflows/runtime-canaries.yml`, `scripts/provider-runtime-canary.mjs`, `docs/OPEN_BANKING_ARCHITECTURE.md`, `docs/issue-105-provider-setup.md`, `docs/issue-105-live-verification.md`, `docs/bank-connection-production.md`, `docs/bank-production-runbook.md`
 
 ---
@@ -32,6 +33,7 @@ Runtime verified: **no dated successful canary artifact pinned** — `.github/wo
 Production verified: **no evidence found**
 Last evidence: **evidence checked 2026-08-09** — no specific successful `external-runtime-canaries` run/artifact is recorded here; no completed sandbox redirect→sync→disconnect cycle is evidenced in-repo, and `docs/issue-105-live-verification.md` requires manual human verification
 Current limitations: owner mode is explicitly documented as *not* equivalent to third-party user authorization; README lists live PayPal certification as outstanding
+Fixed 2026-08-13: the Connections confirmation UI previously showed one fixed "redirected to PayPal to authenticate" copy regardless of mode, which was inaccurate for owner mode (a documented invariant it was violating in production). It's now mode-aware — see [[PayPal]].
 Relevant code/docs: `server/src/providers.js`, `.github/workflows/runtime-canaries.yml`, `scripts/provider-runtime-canary.mjs`, `docs/OPEN_BANKING_ARCHITECTURE.md` ("PayPal modes"), `docs/issue-105-live-verification.md`
 
 ---
