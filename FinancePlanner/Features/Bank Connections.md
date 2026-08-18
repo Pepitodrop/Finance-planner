@@ -28,6 +28,15 @@ Real, complete integration code against the live GoCardless REST API — not a m
 - `docs/issue-105-live-verification.md` — full consent→sync→reauthorize→disconnect flow requires a **human** to complete it manually against a sandbox account, recorded with date/environment/test account/result. Not automatable, not done by CI.
 - `docs/bank-connection-production.md`: "A provider must not be enabled for real users until every critical control in `src/bankProduction.ts` is verified in the deployed environment... Passing unit tests proves the domain controls behave correctly. It does not replace deployment evidence, provider certification, security review, or sandbox end-to-end results."
 
+## Reconnect and healthy-connection disconnect (found + fixed 2026-08-18)
+
+A Codex adversarial review found two real, previously-shipped defects, both verified directly against the code:
+
+- **Reconnect was completely broken for GoCardless.** The "Reconnect" action called `startProvider(provider, {})` — an empty context, no `institutionId`. Once the institution-selection fix (2026-08-13, see [[Provider Institution Selection Contract]]) removed the `institutions[0]` fallback, `start()` began correctly throwing `institution_required` whenever no institution is supplied — which reconnect always did. Every "Reconnect" click failed. Fixed by exposing `institutionId` on the connection object returned from the server (`server.js`'s `connection()` helper — not a secret, the same id the picker already fetches from the live directory) and resubmitting it on reconnect.
+- **A healthy, working connection had no Disconnect path anywhere in the UI.** Connection rows only became clickable — opening the one screen containing Disconnect — once `connectionNeedsAttention()` was true; a working connection rendered as an inert, unclickable `<div>`. Fixed by making every connection row clickable, opening a screen that shows neutral "Manage connection" copy for a healthy connection and the existing "needs attention" framing only when genuinely needed.
+
+Both are `src/features/connections/ConnectionsPage.tsx` changes, covered by new tests in `ConnectionsPage.test.tsx`.
+
 ## Known limitations
 
 README lists "live GoCardless/PayPal certification and reconciliation testing" as outstanding. `docs/bank-production-runbook.md` describes the required operational posture (KMS-backed secrets, webhook signature verification, alerting) as a target, not a confirmed-deployed state.

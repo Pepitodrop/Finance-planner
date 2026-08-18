@@ -23,9 +23,9 @@ export type ConnectionsAcceptanceMode =
   | 'paypal-unconfigured'
 
 export const ACCEPTANCE_CONNECTIONS: ConnectorConnection[] = [
-  { id: 'accept-sparkasse', provider: 'gocardless', displayName: 'Sparkasse', status: 'connected', lastSyncAt: '2026-08-05T09:15:00.000Z' },
+  { id: 'accept-sparkasse', provider: 'gocardless', displayName: 'Sparkasse', status: 'connected', lastSyncAt: '2026-08-05T09:15:00.000Z', institutionId: 'SPARKASSE_AACHEN_AACSDE33' },
   { id: 'accept-paypal', provider: 'paypal', displayName: 'PayPal', status: 'connected', consentExpiresAt: '2026-12-10T00:00:00.000Z' },
-  { id: 'accept-deutsche-bank', provider: 'finapi', displayName: 'Deutsche Bank', status: 'error', error: 'Reauthorization required' },
+  { id: 'accept-deutsche-bank', provider: 'finapi', displayName: 'Deutsche Bank', status: 'error', error: 'Reauthorization required', institutionId: 'DEUTSCHE_BANK_DEUTDEFF' },
 ]
 
 export const ACCEPTANCE_PROVIDER_STATUS_UNAVAILABLE: ProviderDescriptor[] = [

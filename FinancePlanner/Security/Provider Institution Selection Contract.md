@@ -38,4 +38,6 @@ An independent review of the initial PR (#138) found the availability/disclosure
 
 Verification: `server/test/provider-access.test.js` (owner/non-owner/missing-binding/partner-mode/no-secret-leak/listing-start agreement), an added `open-banking-server-boundary.test.js` case asserting the listing route uses `describeProviderForUser` and never the raw list, and new `ConnectionsPage.test.tsx`/`connectionsModel.test.ts` cases for loading/error/retry/missing-descriptor/manual-stays-usable/finAPI-never-selectable and non-owner-disabled/owner-selectable PayPal gating.
 
-Related: [[GoCardless]] · [[Bank Connections]] · [[Bank Connection Flow]] · [[Connections Page]] · [[Provider Callback Binding]] · [[Provider Status]] · [[PayPal]]
+## Follow-up (2026-08-18): a real GoCardless/bank-flow trace during this same continuation session found the disconnect path had an analogous honesty gap -- fixed alongside this contract's spirit ("never claim more than the provider confirmed") rather than as part of institution selection itself; see [[Bank Disconnect Flow]] for the full fix (`OpenBankingProvider.disconnect()`, `GoCardlessProvider`/`PayPalProvider` overrides, and the server/frontend wiring that derives `providerRevoked` from the adapter instead of assuming it).
+
+Related: [[GoCardless]] · [[Bank Connections]] · [[Bank Connection Flow]] · [[Bank Disconnect Flow]] · [[Connections Page]] · [[Provider Callback Binding]] · [[Provider Status]] · [[PayPal]]

@@ -79,6 +79,14 @@ type Screen = 'overview' | 'checking' | 'sync-selection' | 'attention' | 'statem
 // the acceptanceMode effect below) instead of relying on the real fetch.
 const PROVIDER_STATUS_FIXTURE_MODES = new Set<ConnectionsAcceptanceMode | undefined>(['paypal-confirmation', 'provider-unavailable', 'paypal-unconfigured'])
 
+// Fixed, application-owned copy for a provider-return `?error=` code. Never
+// render the free-text `error_description` query param verbatim -- see the
+// callback-handling effect below.
+const CALLBACK_ERROR_COPY: Record<string, string> = {
+  invalid_state: 'It may have expired or already been used.',
+  access_denied: 'The provider reported that authorization was not granted.',
+}
+
 function formatEuro(cents: number): string {
   return new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' }).format(cents / 100)
 }
@@ -174,15 +182,25 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   // so it fails closed: 'loading' and 'error' both make every external
   // provider non-selectable (see institutionAvailability()). Exposed so the
   // "Retry" action in the setup dialog can call it again after a failure.
+  // Generation counter: only the most recently issued call may commit state,
+  // regardless of settlement order. Closes the "stale response arrives after
+  // a newer response" race (a slow mount-time fetch resolving after a faster
+  // Retry, or vice versa) independent of any UI-level mitigation -- the
+  // Retry button already can't be double-clicked in practice (it only
+  // renders while status === 'error', so clicking it flips to 'loading' and
+  // the button itself unmounts before a second click could ever land), but
+  // the counter is the actual correctness guarantee, not the button.
+  const providerStatusGeneration = useRef(0)
   const loadProviderStatus = useCallback(() => {
+    const generation = (providerStatusGeneration.current += 1)
     setProviderStatus({ status: 'loading' })
     let cancelled = false
     void (async () => {
       try {
         const providers = await fetchProviderStatus()
-        if (!cancelled) setProviderStatus({ status: 'ready', providers })
+        if (!cancelled && providerStatusGeneration.current === generation) setProviderStatus({ status: 'ready', providers })
       } catch {
-        if (!cancelled) setProviderStatus({ status: 'error' })
+        if (!cancelled && providerStatusGeneration.current === generation) setProviderStatus({ status: 'error' })
       }
     })()
     return () => { cancelled = true }
@@ -265,16 +283,22 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const providerParam = params.get('provider')
-    const callbackError = params.get('error_description') || params.get('error')
+    const errorCode = params.get('error')
     const callbackCompleted = params.has('code') || params.has('state')
-    if (!providerParam && !callbackError && !callbackCompleted) return
+    if (!providerParam && !errorCode && !callbackCompleted) return
 
     const cleanUrl = new URL(window.location.href)
     for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'institution']) cleanUrl.searchParams.delete(key)
     window.history.replaceState({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`)
 
-    if (callbackError) {
-      setError(`The connection was not completed: ${callbackError}`)
+    if (errorCode) {
+      // Fixed, application-owned copy keyed by error code only -- never
+      // render the free-text error_description query param verbatim. It
+      // comes straight from the current URL, so an attacker-crafted link to
+      // this app's own origin could otherwise make the trusted error banner
+      // display arbitrary text (phishing-adjacent), even though React
+      // escapes it (no XSS, just misleading UI content).
+      setError(`The connection was not completed: ${CALLBACK_ERROR_COPY[errorCode] ?? 'Please try again.'}`)
       return
     }
 
@@ -312,9 +336,13 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setBusy(true)
     setAttentionError('')
     try {
-      await disconnectConnector(provider)
+      const result = await disconnectConnector(provider)
       setConnections((current) => current.filter((connection) => connection.provider !== provider))
-      setMessage('The connection was disconnected. Transactions already imported remain in Finance Planner.')
+      setMessage(
+        result.providerRevokeReason === 'provider_error'
+          ? "The connection was removed from Finance Planner, but we couldn't confirm the provider revoked access on their side. Transactions already imported remain in Finance Planner."
+          : 'The connection was disconnected. Transactions already imported remain in Finance Planner.',
+      )
       setDisconnectConfirming(false)
       setAttentionProvider(null)
       setScreen('overview')
@@ -511,7 +539,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
       confirming={disconnectConfirming}
       error={attentionError}
       onBack={closeAttention}
-      onReconnect={() => void startProvider(attentionConnection.provider, {}, setAttentionError)}
+      onReconnect={() => void startProvider(attentionConnection.provider, { institutionId: attentionConnection.institutionId }, setAttentionError)}
       onDisconnectRequest={() => setDisconnectConfirming(true)}
       onDisconnectCancel={() => setDisconnectConfirming(false)}
       onDisconnectConfirm={() => void disconnect(attentionConnection.provider)}
@@ -677,9 +705,11 @@ function OverviewScreen({ connections, busy, onConnect, onRefresh, onOpenAttenti
           <span className={needsAttention ? 'connections-badge connections-badge--attention' : 'connections-badge connections-badge--ok'} aria-hidden="true">{needsAttention ? <AlertTriangle size={16}/> : <CheckCircle2 size={16}/>}</span>
           {needsAttention && <ChevronRight size={18} aria-hidden="true"/>}
         </>
-        return needsAttention
-          ? <button type="button" key={connection.id} className="connections-row connections-row--attention" onClick={() => onOpenAttention(connection.provider)}>{rowContent}</button>
-          : <div key={connection.id} className="connections-row">{rowContent}</div>
+        // Every connection opens the manage/attention screen -- a healthy
+        // connection needs a way to reach Disconnect too, not just a broken
+        // one (previously only needsAttention rows were clickable, so a
+        // working connection had no Disconnect path anywhere in the UI).
+        return <button type="button" key={connection.id} className={needsAttention ? 'connections-row connections-row--attention' : 'connections-row'} onClick={() => onOpenAttention(connection.provider)}>{rowContent}{!needsAttention && <ChevronRight size={18} aria-hidden="true"/>}</button>
       })}
     </div>
     <p className="connections-section-label">Other options</p>
@@ -940,9 +970,17 @@ function AttentionScreen({ connection, reason, busy, confirming, error, onBack, 
   const copy = reason ? ATTENTION_REASON_COPY[reason] : null
   return <div className="connections-attention-screen">
     <header className="connections-subpage-header"><button type="button" className="connections-back" onClick={onBack}><ArrowLeft size={18}/> Back</button><h2>Connections</h2></header>
-    <div className="connections-attention-icon"><AlertTriangle size={28}/></div>
-    <h2 className="connections-attention-title">Connection needs attention</h2>
-    <p className="connections-setup-subtitle connections-center">We&apos;re having trouble maintaining this connection. Please reconnect to keep your data up to date.</p>
+    {reason
+      ? <>
+        <div className="connections-attention-icon"><AlertTriangle size={28}/></div>
+        <h2 className="connections-attention-title">Connection needs attention</h2>
+        <p className="connections-setup-subtitle connections-center">We&apos;re having trouble maintaining this connection. Please reconnect to keep your data up to date.</p>
+      </>
+      : <>
+        <div className="connections-attention-icon"><CheckCircle2 size={28}/></div>
+        <h2 className="connections-attention-title">Manage connection</h2>
+        <p className="connections-setup-subtitle connections-center">This connection is working normally. You can reconnect it or disconnect it below.</p>
+      </>}
     <div className="connections-row connections-row--static"><span className="connections-row-icon">{connection.provider === 'paypal' ? <Wallet size={19}/> : <Landmark size={19}/>}</span><span className="connections-row-body"><strong>{connection.displayName}</strong></span></div>
 
     {copy && <section className="connections-reason-section" aria-labelledby="connections-reason-title">

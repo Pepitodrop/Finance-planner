@@ -224,6 +224,11 @@ export class OpenBankingProvider {
   async start() { throw new Error(`${this.id} provider start is not implemented.`) }
   async sync() { throw new Error(`${this.id} provider sync is not implemented.`) }
   async institutionDirectory() { throw new HttpError(404, 'institution_directory_unsupported', `${this.id} does not provide an institution directory.`) }
+  // Best-effort provider-side revocation on disconnect. Never assumed --
+  // callers must not report a connection as provider-revoked unless this
+  // resolves { revoked: true }. Base implementation covers providers with no
+  // per-connection token/consent to revoke.
+  async disconnect() { return { revoked: false, reason: 'not_supported' } }
 
   describe() {
     return {
@@ -274,6 +279,18 @@ export async function gocardlessToken(env) {
     issuedAt: issuedAt.toISOString(),
     accessExpiresAt: Number(token.access_expires) > 0 ? new Date(issuedAt.getTime() + Number(token.access_expires) * 1000).toISOString() : undefined,
   }
+}
+
+// Builds the address a provider redirects the browser to after consent --
+// always our own /api/connectors/callback route (never the raw client
+// redirectUri), so every provider's return is verified through the same
+// signed-state/nonce-consumption path (verifyState + activateConnection)
+// instead of each adapter inventing its own return-detection contract.
+function callbackUrl(redirectUri, provider, state) {
+  const callback = new URL('/api/connectors/callback', new URL(redirectUri).origin)
+  callback.searchParams.set('provider', provider)
+  callback.searchParams.set('state', state)
+  return callback
 }
 
 function sanitizeGocardlessInstitution(institution) {
@@ -351,7 +368,7 @@ class GoCardlessProvider extends OpenBankingProvider {
     if (!agreement?.id) throw new Error('GoCardless did not create an end-user agreement.')
     const requisition = await jsonFetch(`${GC_BASE}/requisitions/`, {
       method: 'POST', headers: { Authorization: `Bearer ${token.access}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ redirect: redirectUri, institution_id: resolvedInstitutionId, agreement: agreement.id, reference: state, user_language: 'DE' }),
+      body: JSON.stringify({ redirect: callbackUrl(redirectUri, 'gocardless', state).toString(), institution_id: resolvedInstitutionId, agreement: agreement.id, reference: state, user_language: 'DE' }),
     }, policy)
     if (!requisition?.id || !requisition?.link) throw new Error('GoCardless did not create a valid requisition.')
     return {
@@ -425,6 +442,25 @@ class GoCardlessProvider extends OpenBankingProvider {
       health,
     }
   }
+
+  // Asks GoCardless to end the requisition (and its access) so a
+  // Finance Planner disconnect also withdraws the provider-side consent,
+  // not just the local row. Never throws: a failed/unreachable revoke must
+  // not block the user's local disconnect, but it must also never be
+  // reported as confirmed when it wasn't.
+  async disconnect(credential) {
+    const requisitionId = credential?.requisitionId
+    if (!requisitionId) return { revoked: false, reason: 'not_applicable' }
+    try {
+      let token = credential.token
+      if (!tokenIsUsable(token)) token = await gocardlessToken(this.env)
+      await jsonFetch(`${GC_BASE}/requisitions/${requisitionId}/`, { method: 'DELETE', headers: { Authorization: `Bearer ${token.access}` } }, providerPolicy(this.env))
+      return { revoked: true }
+    } catch (error) {
+      if (error?.status === 404) return { revoked: true }
+      return { revoked: false, reason: 'provider_error' }
+    }
+  }
 }
 
 async function paypalAccessToken(env) {
@@ -488,10 +524,7 @@ class PayPalProvider extends OpenBankingProvider {
     if (mode === 'owner') {
       const { base, token } = await paypalAccessToken(this.env)
       await paypalEuroBalance({ base, accessToken: token.access_token, env: this.env, core: this.core })
-      const callback = new URL('/api/connectors/callback', new URL(redirectUri).origin)
-      callback.searchParams.set('provider', 'paypal')
-      callback.searchParams.set('state', state)
-      return { redirectUrl: callback.toString(), credential: { mode: 'owner', pending: true, verifiedAt: new Date().toISOString() } }
+      return { redirectUrl: callbackUrl(redirectUri, 'paypal', state).toString(), credential: { mode: 'owner', pending: true, verifiedAt: new Date().toISOString() } }
     }
 
     if (!this.env.PAYPAL_PARTNER_MERCHANT_ID) {
@@ -500,13 +533,25 @@ class PayPalProvider extends OpenBankingProvider {
     const base = this.env.PAYPAL_ENV === 'live' ? 'https://www.paypal.com' : 'https://www.sandbox.paypal.com'
     const url = new URL(`${base}/bizsignup/partner/entry`)
     url.searchParams.set('partnerId', this.env.PAYPAL_PARTNER_MERCHANT_ID)
-    url.searchParams.set('returnToPartnerUrl', redirectUri)
+    url.searchParams.set('returnToPartnerUrl', callbackUrl(redirectUri, 'paypal', state).toString())
     url.searchParams.set('partnerClientId', this.env.PAYPAL_CLIENT_ID)
     url.searchParams.set('state', state)
     return { redirectUrl: url.toString(), credential: { mode: 'partner', pending: true } }
   }
 
   async sync(credential) {
+    // Partner mode has no real per-merchant OAuth token exchange anywhere in
+    // this codebase -- there is nothing in `credential` that identifies a
+    // specific PayPal merchant. Syncing here would return the deployment's
+    // own owner-mode PayPal data (paypalAccessToken() always uses the same
+    // deployment-wide client credentials) to whichever user happens to have
+    // a stored partner-mode connection -- a cross-tenant data exposure. Fail
+    // closed and say so honestly, the same way disconnect() never claims
+    // revocation it can't confirm, rather than silently leaking someone
+    // else's PayPal account.
+    if (credential.mode === 'partner') {
+      throw new Error('PayPal partner-mode synchronization is not implemented: no per-merchant authorization exists yet, so Finance Planner cannot safely read this connection’s data without risking another user’s PayPal account. Disconnect and use the owner connection where available.')
+    }
     const completedAt = new Date()
     await this.core.validateReadOnlyScope('reporting,transactions,balances')
     const { base, token } = await paypalAccessToken(this.env)
@@ -551,6 +596,14 @@ class PayPalProvider extends OpenBankingProvider {
       health,
     }
   }
+
+  // Neither owner mode (the deployment's own app-level client-credential
+  // access, not a per-user grant) nor partner mode (this codebase syncs
+  // through the same client-credential flow, not a stored per-merchant user
+  // token) hold a per-connection token that PayPal could revoke here -- the
+  // credential this reads is Finance Planner's own record, not a PayPal
+  // consent. Disconnecting always removes the local row regardless.
+  async disconnect() { return { revoked: false, reason: 'not_applicable' } }
 }
 
 class UnavailableProvider extends OpenBankingProvider {

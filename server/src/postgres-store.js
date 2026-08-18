@@ -84,6 +84,19 @@ export class PostgresStore {
     }
   }
 
+  // Unlike createConnectionSetup (still used by Google Subscriptions, which
+  // has no separate activation step), this never touches
+  // connector_connections -- the pending credential lives only alongside
+  // its single-use nonce until activateConnection() verifies the provider
+  // callback. A currently-working connection (reconnect case) stays
+  // untouched if the user abandons or the callback never arrives.
+  async createPendingConnectionSetup(input) {
+    await this.pool.query(`INSERT INTO oauth_nonces (nonce_hash, consent_id, user_id, provider, redirect_uri, expires_at, pending_payload)
+      VALUES ($1,$2,$3,$4,$5,to_timestamp($6/1000.0),$7)
+      ON CONFLICT (nonce_hash) DO UPDATE SET consent_id=EXCLUDED.consent_id,user_id=EXCLUDED.user_id,provider=EXCLUDED.provider,redirect_uri=EXCLUDED.redirect_uri,expires_at=EXCLUDED.expires_at,pending_payload=EXCLUDED.pending_payload`,
+      [nonceKey(input.nonce), input.consentId, input.userId, input.provider, input.redirectUri, input.expiresAt, this.encode(input.connection)])
+  }
+
   async registerOAuthNonce(input) {
     await this.pool.query(`INSERT INTO oauth_nonces (nonce_hash, consent_id, user_id, provider, redirect_uri, expires_at)
       VALUES ($1,$2,$3,$4,$5,to_timestamp($6/1000.0)) ON CONFLICT (nonce_hash) DO UPDATE SET consent_id=EXCLUDED.consent_id,user_id=EXCLUDED.user_id,provider=EXCLUDED.provider,redirect_uri=EXCLUDED.redirect_uri,expires_at=EXCLUDED.expires_at`, [nonceKey(input.nonce), input.consentId, input.userId, input.provider, input.redirectUri, input.expiresAt])
@@ -98,13 +111,15 @@ export class PostgresStore {
     const client = await this.pool.connect()
     try {
       await client.query('BEGIN')
-      const nonce = await client.query('DELETE FROM oauth_nonces WHERE nonce_hash=$1 AND consent_id=$2 AND user_id=$3 AND provider=$4 AND redirect_uri=$5 AND expires_at > to_timestamp($6/1000.0) RETURNING 1', [nonceKey(input.nonce), input.consentId, input.userId, input.provider, input.redirectUri, input.now])
-      if (!nonce.rowCount) { await client.query('ROLLBACK'); return false }
-      const current = await client.query('SELECT encrypted_payload FROM connector_connections WHERE user_id=$1 AND provider=$2 FOR UPDATE', [input.userId, input.provider])
-      if (!current.rowCount) { await client.query('ROLLBACK'); return false }
-      const connection = this.decode(current.rows[0].encrypted_payload)
+      // The pending credential is consumed atomically with the nonce --
+      // there is no separate connector_connections row to race with a
+      // concurrent reconnect/disconnect until this transaction commits.
+      const nonce = await client.query('DELETE FROM oauth_nonces WHERE nonce_hash=$1 AND consent_id=$2 AND user_id=$3 AND provider=$4 AND redirect_uri=$5 AND expires_at > to_timestamp($6/1000.0) RETURNING pending_payload', [nonceKey(input.nonce), input.consentId, input.userId, input.provider, input.redirectUri, input.now])
+      if (!nonce.rowCount || !nonce.rows[0].pending_payload) { await client.query('ROLLBACK'); return false }
+      const connection = this.decode(nonce.rows[0].pending_payload)
       if (connection.consentId !== input.consentId || connection.redirectUri !== input.redirectUri) { await client.query('ROLLBACK'); return false }
-      await client.query('UPDATE connector_connections SET encrypted_payload=$3, updated_at=now() WHERE user_id=$1 AND provider=$2', [input.userId, input.provider, this.encode({ ...connection, connectedAt: input.connectedAt })])
+      await client.query(`INSERT INTO connector_connections (user_id, provider, encrypted_payload) VALUES ($1,$2,$3)
+        ON CONFLICT (user_id, provider) DO UPDATE SET encrypted_payload=EXCLUDED.encrypted_payload, updated_at=now()`, [input.userId, input.provider, this.encode({ ...connection, connectedAt: input.connectedAt })])
       await client.query('COMMIT')
       return true
     } catch (error) {

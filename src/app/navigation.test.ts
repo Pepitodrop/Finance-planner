@@ -5,7 +5,34 @@ import {
   MORE_DESTINATIONS,
   MORE_DESTINATION_GROUPS,
   NAVIGATION_DESTINATIONS,
+  initialTabFromSearch,
 } from './navigation'
+
+describe('initialTabFromSearch', () => {
+  it('boots into dashboard with no query string', () => {
+    expect(initialTabFromSearch('')).toBe('dashboard')
+  })
+
+  it('boots into subscriptions for a google-subscriptions return', () => {
+    expect(initialTabFromSearch('?provider=google-subscriptions')).toBe('subscriptions')
+  })
+
+  it('boots into connections for a real GoCardless success-redirect (provider alone, no code/state)', () => {
+    expect(initialTabFromSearch('?provider=gocardless')).toBe('connections')
+  })
+
+  it('boots into connections for a PayPal return', () => {
+    expect(initialTabFromSearch('?provider=paypal')).toBe('connections')
+  })
+
+  it('boots into connections for a failed callback even without a provider param', () => {
+    expect(initialTabFromSearch('?error=invalid_state&error_description=expired')).toBe('connections')
+  })
+
+  it('does not misfire on unrelated query strings', () => {
+    expect(initialTabFromSearch('?foo=bar')).toBe('dashboard')
+  })
+})
 
 describe('canonical navigation model', () => {
   it('defines each functional destination once with unique ordering', () => {

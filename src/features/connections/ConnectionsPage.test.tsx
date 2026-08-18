@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { ProviderDescriptor, ProviderInstitution } from '../../connectors'
@@ -20,7 +20,7 @@ vi.mock('../../connectors', async (importOriginal) => {
     ...actual,
     startConnector: vi.fn(async () => {}),
     synchronizeConnections: vi.fn(async () => []),
-    disconnectConnector: vi.fn(async () => {}),
+    disconnectConnector: vi.fn(async () => ({ disconnected: true, providerRevoked: true, providerRevokeReason: 'confirmed' as const })),
     fetchProviderStatus: vi.fn(async () => DEFAULT_PROVIDER_STATUS),
     fetchProviderInstitutions: vi.fn(async (): Promise<ProviderInstitution[]> => []),
   }
@@ -187,6 +187,57 @@ describe('GoCardless institution resolution (never guesses a real bank)', () => 
     expect(screen.getByRole('button', { name: /Sparkasse KoelnBonn/ })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /All institutions/ }))
+    expect(screen.getByRole('heading', { name: 'Choose your institution' })).toBeInTheDocument()
+  })
+
+  it('shows a loading state while the live bank directory is being fetched', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions).mockImplementationOnce(() => new Promise(() => {})) // never resolves: pins the loading state
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Sparkasse$/ }))
+    expect(screen.getByText('Loading banks…')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('shows an error, not a crash or silent empty list, when the live bank directory fails to load', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions).mockRejectedValueOnce(new Error('The bank directory could not be loaded.'))
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Sparkasse$/ }))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('The bank directory could not be loaded.')
+    expect(screen.queryByText('Loading banks…')).not.toBeInTheDocument()
+  })
+
+  it('shows an honest empty-results message when the live search matches nothing', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([
+      { id: 'SPARKASSE_AACHEN_AACSDE33', name: 'Aachener Sparkasse', bic: 'AACSDE33' },
+    ])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Sparkasse$/ }))
+    await screen.findByRole('button', { name: /Aachener Sparkasse/ })
+
+    const liveSearchInput = screen.getByPlaceholderText('Search by bank name or BIC')
+    await user.type(liveSearchInput, 'zzz-no-such-bank')
+    expect(screen.queryByRole('button', { name: /Aachener Sparkasse/ })).not.toBeInTheDocument()
+    expect(screen.getByText('No bank matches your search. Try a different name or BIC.')).toBeInTheDocument()
+  })
+
+  it('returns to the institution picker via the header Back arrow during live resolution, same as the in-step "All institutions" link', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([
+      { id: 'SPARKASSE_AACHEN_AACSDE33', name: 'Aachener Sparkasse', bic: 'AACSDE33' },
+    ])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Sparkasse$/ }))
+    await screen.findByRole('heading', { name: /Find your Sparkasse branch/ })
+
+    await user.click(screen.getByRole('button', { name: 'Back' }))
     expect(screen.getByRole('heading', { name: 'Choose your institution' })).toBeInTheDocument()
   })
 })
@@ -393,6 +444,39 @@ describe('provider status lifecycle (fails closed, never optimistic)', () => {
     expect(screen.getByRole('heading', { name: 'Continue with the owner PayPal connection' })).toBeInTheDocument()
   })
 
+  it('commits only the most recently issued provider-status call, even if an earlier call settles later (stale-response race)', async () => {
+    // The Retry button can't actually be double-clicked through the UI --
+    // it only renders while status === 'error', so the first click flips to
+    // 'loading' and the button unmounts before a second click could land.
+    // This test bypasses that UI gate entirely (two synchronous fireEvent
+    // dispatches inside one act(), before React flushes the first click's
+    // resulting re-render) to exercise the actual double-dispatch boundary
+    // the generation counter is meant to protect: two overlapping
+    // loadProviderStatus() calls settling out of issue-order.
+    let resolveEarlier!: (value: ProviderDescriptor[]) => void
+    let rejectLater!: (reason: Error) => void
+    vi.mocked(fetchProviderStatus)
+      .mockRejectedValueOnce(new Error('network down')) // initial mount-time fetch, so the Retry button exists to grab a reference to
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveEarlier = resolve })) // 1st retry dispatch (generation N) -- will resolve with SUCCESS, but late
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectLater = reject })) // 2nd retry dispatch (generation N+1) -- will fail, but settles first
+    renderConnections()
+    fireEvent.click(screen.getByRole('button', { name: 'Connect an account' }))
+    const retryButton = await screen.findByRole('button', { name: 'Retry' })
+
+    await act(async () => {
+      fireEvent.click(retryButton)
+      fireEvent.click(retryButton)
+    })
+
+    // Later-issued call (generation N+1) settles first, with an error.
+    await act(async () => { rejectLater(new Error('network down again')) })
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
+    // Earlier-issued call (generation N) settles after it, with success -- it
+    // must be a no-op: the error state from the later call must stand.
+    await act(async () => { resolveEarlier(DEFAULT_PROVIDER_STATUS) })
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+  })
+
   it('fails closed for a provider missing from an otherwise-successful response, never defaulting it to available', async () => {
     const user = userEvent.setup()
     vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.filter((provider) => provider.id !== 'gocardless'))
@@ -433,12 +517,23 @@ describe('PayPal owner-mode authorization reaching the frontend (defect: not use
 })
 
 describe('provider callback handling', () => {
-  it('strips callback parameters from the URL and checks the connection before showing results', async () => {
-    window.history.pushState({}, '', '/?code=abc&state=xyz&provider=gocardless')
+  it('strips callback parameters from the URL and checks the connection before showing results (real GoCardless success-redirect shape: ?provider= alone, no code/state)', async () => {
+    window.history.pushState({}, '', '/?provider=gocardless')
     let resolveSync!: (value: Awaited<ReturnType<typeof synchronizeConnections>>) => void
     ;(synchronizeConnections as Mock).mockImplementation(() => new Promise((resolve) => { resolveSync = resolve }))
     renderConnections()
     expect(window.location.search).toBe('')
+    expect(screen.getByRole('heading', { name: 'Checking your connection' })).toBeInTheDocument()
+    resolveSync([])
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Checking your connection' })).not.toBeInTheDocument())
+    expect(synchronizeConnections).toHaveBeenCalledTimes(1)
+  })
+
+  it('triggers synchronize for a PayPal callback return with only ?provider= present, proving the fix closes the gap rather than just moving it', async () => {
+    window.history.pushState({}, '', '/?provider=paypal')
+    let resolveSync!: (value: Awaited<ReturnType<typeof synchronizeConnections>>) => void
+    ;(synchronizeConnections as Mock).mockImplementation(() => new Promise((resolve) => { resolveSync = resolve }))
+    renderConnections()
     expect(screen.getByRole('heading', { name: 'Checking your connection' })).toBeInTheDocument()
     resolveSync([])
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'Checking your connection' })).not.toBeInTheDocument())
@@ -486,13 +581,16 @@ describe('synchronization preview and account selection', () => {
 })
 
 describe('connection attention, reconnect and disconnect', () => {
-  it('shows the attention reason and lets the user reconnect', async () => {
+  it('shows the attention reason and lets the user reconnect with the originally-selected institution, not an empty context', async () => {
     const user = userEvent.setup()
     renderConnections({ acceptanceMode: 'attention' })
     expect(screen.getByRole('heading', { name: 'Connection needs attention' })).toBeInTheDocument()
     expect(screen.getByText('Provider error')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /Reconnect/ }))
-    expect(startConnector).toHaveBeenCalledWith('finapi', {})
+    // Regression: reconnect used to pass an empty context, which
+    // GoCardless's server-validated start() now correctly rejects with
+    // institution_required -- the stored institutionId must be resubmitted.
+    expect(startConnector).toHaveBeenCalledWith('finapi', { institutionId: 'DEUTSCHE_BANK_DEUTDEFF' })
   })
 
   it('requires explicit confirmation before disconnecting, and preserves imported data in the copy', async () => {
@@ -525,6 +623,38 @@ describe('connection attention, reconnect and disconnect', () => {
     await user.click(screen.getByRole('button', { name: /^Disconnect$/ }))
     await user.click(screen.getByRole('button', { name: 'Yes, disconnect' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('The connection could not be disconnected.')
+  })
+
+  it('tells the user honestly when the local disconnect succeeded but the provider could not confirm revocation', async () => {
+    const user = userEvent.setup()
+    vi.mocked(disconnectConnector).mockResolvedValueOnce({ disconnected: true, providerRevoked: false, providerRevokeReason: 'provider_error' })
+    renderConnections({ acceptanceMode: 'attention' })
+    await user.click(screen.getByRole('button', { name: /^Disconnect$/ }))
+    await user.click(screen.getByRole('button', { name: 'Yes, disconnect' }))
+    expect(await screen.findByText(/couldn't confirm the provider revoked access/)).toBeInTheDocument()
+  })
+
+  it('lets a healthy connection be opened and disconnected too, not only a broken one', async () => {
+    // Regression: healthy rows previously rendered as an inert <div> with no
+    // click handler at all -- there was no way to reach Disconnect for a
+    // working connection anywhere in the UI.
+    const user = userEvent.setup()
+    renderConnections({ acceptanceMode: 'populated' })
+    await user.click(screen.getByRole('button', { name: /Sparkasse/ }))
+    expect(screen.getByRole('heading', { name: 'Manage connection' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Connection needs attention' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Disconnect$/ })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /^Disconnect$/ }))
+    await user.click(screen.getByRole('button', { name: 'Yes, disconnect' }))
+    expect(disconnectConnector).toHaveBeenCalledWith('gocardless')
+  })
+
+  it('reconnects a healthy connection with its stored institutionId from the manage screen too', async () => {
+    const user = userEvent.setup()
+    renderConnections({ acceptanceMode: 'populated' })
+    await user.click(screen.getByRole('button', { name: /Sparkasse/ }))
+    await user.click(screen.getByRole('button', { name: /Reconnect/ }))
+    expect(startConnector).toHaveBeenCalledWith('gocardless', { institutionId: 'SPARKASSE_AACHEN_AACSDE33' })
   })
 })
 

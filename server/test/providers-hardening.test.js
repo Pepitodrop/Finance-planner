@@ -242,6 +242,32 @@ test('PayPal partner mode still fails closed without approved partner onboarding
   assert.equal(redirect.hostname, 'www.paypal.com')
   assert.equal(redirect.pathname, '/bizsignup/partner/entry')
   assert.equal(started.credential.mode, 'partner')
+  // returnToPartnerUrl must point at our own callback route (not the raw
+  // client page) so the state/nonce verification the callback route already
+  // does for PayPal-owner mode also covers partner mode's real return.
+  const returnUrl = new URL(redirect.searchParams.get('returnToPartnerUrl'))
+  assert.equal(returnUrl.origin, 'https://finance.example.com')
+  assert.equal(returnUrl.pathname, '/api/connectors/callback')
+  assert.equal(returnUrl.searchParams.get('provider'), 'paypal')
+  assert.equal(returnUrl.searchParams.get('state'), common.state)
+})
+
+test('PayPal partner-mode synchronization fails closed instead of exposing the deployment owner\'s data to every partner-mode user', async () => {
+  // No fetch mock installed at all -- if sync() ever reaches paypalAccessToken()
+  // for a partner-mode credential, this test fails with a real network-call
+  // error instead of the intended synchronous rejection, proving the guard
+  // fires before any request is made.
+  const env = {
+    PAYPAL_CLIENT_ID: 'client',
+    PAYPAL_CLIENT_SECRET: 'secret',
+    PAYPAL_CONNECTION_MODE: 'partner',
+    PAYPAL_PARTNER_MERCHANT_ID: 'partner-merchant',
+    PAYPAL_ENV: 'live',
+  }
+  await assert.rejects(
+    syncPayPal({ mode: 'partner' }, env, fakeBankingCore()),
+    /partner-mode synchronization is not implemented/,
+  )
 })
 
 test('generic provider registry exposes replaceable read-only adapters only', () => {

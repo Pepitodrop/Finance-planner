@@ -63,6 +63,13 @@ const activeSyncs = new Map()
 const syncReplayCache = new Map()
 const SYNC_REPLAY_TTL_MS = 2 * 60_000
 
+// Fixed, application-owned copy for callback-route failures -- never reflect
+// a caller-supplied error/error_description into the redirect; only ever a
+// pre-approved code mapped to pre-approved text.
+const CALLBACK_ERROR_COPY = Object.freeze({
+  invalid_state: 'This connection could not be completed. It may have expired or already been used.',
+})
+
 function securityHeaders(contentType = 'application/json; charset=utf-8') {
   const headers = {
     'Content-Type': contentType,
@@ -173,6 +180,11 @@ function connection(provider, stored, error) {
     status: error ? 'error' : stored ? 'connected' : 'disconnected',
     lastSyncAt: stored?.lastSyncAt,
     consentExpiresAt: stored?.consentExpiresAt,
+    // Not a secret -- the same institution id the picker already fetches
+    // from the live directory. Exposed so Reconnect can resubmit the
+    // originally-selected institution instead of an empty context, which
+    // start() now correctly rejects with institution_required.
+    institutionId: stored?.institutionId,
     error,
   }
 }
@@ -187,11 +199,19 @@ async function start(provider, request, response) {
   const redirect = new URL(String(input.redirectUri || origin))
   if (redirect.origin !== origin) throw new HttpError(400, 'invalid_redirect', 'Invalid redirect origin.')
   const institutionId = typeof input.institutionId === 'string' && input.institutionId.trim() ? input.institutionId.trim().slice(0, 128) : undefined
+  // Same validation the sibling /institutions listing route already applies
+  // -- unvalidated here would let an attacker grow GoCardlessProvider's
+  // in-memory, TTL-only institutionsCache with unbounded distinct keys.
+  const country = String(input.country || 'DE').toUpperCase()
+  if (!/^[A-Z]{2}$/.test(country)) throw new HttpError(400, 'invalid_country', 'Invalid country code.')
   const consentId = randomUUID()
   const state = issueState(user, provider, sessionSecret, { consentId, redirectUri: redirect.toString() })
   const claims = verifyState(state, provider, sessionSecret)
-  const result = await adapter.start({ state, redirectUri: redirect.toString(), country: input.country || 'DE', institutionId })
-  await store.createConnectionSetup({
+  const result = await adapter.start({ state, redirectUri: redirect.toString(), country, institutionId })
+  // Pending, not yet live -- a currently-working connection for this
+  // provider (reconnect case) must not be overwritten until the callback
+  // actually verifies. See activateConnection().
+  await store.createPendingConnectionSetup({
     userId: user,
     provider,
     consentId,
@@ -354,8 +374,13 @@ const server = createServer(async (request, response) => {
     }
     const institutionsMatch = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})\/institutions$/)
     if (request.method === 'GET' && institutionsMatch) {
-      userId(request)
+      const user = userId(request)
       const adapter = providerAdapter(institutionsMatch[1])
+      // Same owner-mode gate as /start and the /api/connectors listing --
+      // no adapter today implements institutionDirectory() AND owner-mode
+      // gating simultaneously, but this route must not become the one place
+      // that forgets to check, if one ever does.
+      authorizeProviderUser(adapter, user, env)
       const country = String(url.searchParams.get('country') || 'DE').toUpperCase()
       if (!/^[A-Z]{2}$/.test(country)) throw new HttpError(400, 'invalid_country', 'Invalid country code.')
       const institutions = await adapter.institutionDirectory(country)
@@ -367,19 +392,64 @@ const server = createServer(async (request, response) => {
     const disconnect = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})$/)
     if (request.method === 'DELETE' && disconnect) {
       const user = userId(request)
-      providerAdapter(disconnect[1])
+      const adapter = providerAdapter(disconnect[1])
+      const stored = await store.get(user, disconnect[1])
+      // Best-effort: ask the provider to end its side of the consent before
+      // dropping our own record. A failed/unsupported revoke must never
+      // block the user's local disconnect, and must never be reported as
+      // confirmed when the provider didn't actually confirm it.
+      let providerRevoked = false
+      let providerRevokeReason = 'not_applicable'
+      if (stored) {
+        try {
+          const outcome = await adapter.disconnect(stored)
+          providerRevoked = Boolean(outcome?.revoked)
+          providerRevokeReason = providerRevoked ? 'confirmed' : (outcome?.reason || 'provider_error')
+        } catch {
+          providerRevokeReason = 'provider_error'
+        }
+      }
       await store.remove(user, disconnect[1])
       metrics.recordBank(disconnect[1], 'disconnected')
-      return send(response, 200, { disconnected: true })
+      return send(response, 200, { disconnected: true, providerRevoked, providerRevokeReason })
     }
     if (request.method === 'GET' && url.pathname === '/api/connectors/callback') {
+      // A real provider return (or a forged/expired/replayed/malformed hit on
+      // this URL) must never dead-end in raw JSON -- the user is mid-flow in
+      // their browser, not calling an API client. Every failure here redirects
+      // back into the app with a fixed, safe error code/description (never a
+      // caller-supplied string) so ConnectionsPage's existing error handling
+      // can show it. Redirect to state.redirectUri when it's known and
+      // cryptographically verified (state parsed successfully); otherwise fall
+      // back to the app origin.
       const provider = String(url.searchParams.get('provider') || '')
-      providerAdapter(provider)
-      const state = verifyState(url.searchParams.get('state'), provider, sessionSecret)
-      if (!state.consentId || !state.redirectUri) throw new HttpError(400, 'invalid_state', 'Consent state is incomplete.')
+      const redirectWithError = (target) => {
+        const location = new URL(target)
+        location.searchParams.set('error', 'invalid_state')
+        location.searchParams.set('error_description', CALLBACK_ERROR_COPY.invalid_state)
+        response.writeHead(302, { Location: location.toString(), 'Cache-Control': 'no-store', 'X-Request-ID': id })
+        response.end()
+      }
+      let state
+      try {
+        providerAdapter(provider)
+        state = verifyState(url.searchParams.get('state'), provider, sessionSecret)
+      } catch {
+        redirectWithError(origin)
+        return
+      }
+      if (!state.consentId || !state.redirectUri) {
+        redirectWithError(origin)
+        return
+      }
       const activated = await store.activateConnection({ nonce: state.nonce, consentId: state.consentId, userId: state.sub, provider, redirectUri: state.redirectUri, now: Date.now(), connectedAt: new Date().toISOString() })
-      if (!activated) throw new HttpError(400, 'invalid_state', 'Consent state was already used, expired, or does not match.')
-      response.writeHead(302, { Location: state.redirectUri, 'Cache-Control': 'no-store', 'X-Request-ID': id })
+      if (!activated) {
+        redirectWithError(state.redirectUri)
+        return
+      }
+      const success = new URL(state.redirectUri)
+      success.searchParams.set('provider', provider)
+      response.writeHead(302, { Location: success.toString(), 'Cache-Control': 'no-store', 'X-Request-ID': id })
       return response.end()
     }
     send(response, 404, { error: { code: 'not_found', message: 'Not found.' }, requestId: id })

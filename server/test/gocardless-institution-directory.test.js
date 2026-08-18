@@ -47,6 +47,21 @@ test('validates a user-selected institution against the live directory and uses 
   assert.equal(requisitionRequest.body.institution_id, 'ING_INGDDEFF')
 }))
 
+test('sends GoCardless our own callback route as the requisition redirect, never the raw client page URL', () => withRestoredFetch(async () => {
+  const requests = mockFetch()
+  const env = { GOCARDLESS_SECRET_ID: 'id', GOCARDLESS_SECRET_KEY: 'key' }
+  const adapter = createOpenBankingProviderRegistry(env, fakeBankingCore()).get('gocardless')
+
+  await adapter.start({ state: 'single-use-state', redirectUri: 'https://finance.example.com/connections', country: 'DE', institutionId: 'ING_INGDDEFF' })
+
+  const requisitionRequest = requests.find((request) => request.url.endsWith('/requisitions/'))
+  const redirect = new URL(requisitionRequest.body.redirect)
+  assert.equal(redirect.origin, 'https://finance.example.com')
+  assert.equal(redirect.pathname, '/api/connectors/callback')
+  assert.equal(redirect.searchParams.get('provider'), 'gocardless')
+  assert.equal(redirect.searchParams.get('state'), 'single-use-state')
+}))
+
 test('rejects an institution that is not in the live directory instead of guessing or falling through', () => withRestoredFetch(async () => {
   const requests = mockFetch()
   const env = { GOCARDLESS_SECRET_ID: 'id', GOCARDLESS_SECRET_KEY: 'key' }

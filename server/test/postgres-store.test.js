@@ -37,7 +37,11 @@ test('PostgresStore preserves encrypted connector and one-time nonce behavior', 
     const redirectUri = 'https://finance.example.test/callback'
     const expiresAt = Date.now() + 60_000
 
-    await store.createConnectionSetup({
+    // A previously-working connection (reconnect case) must survive an
+    // in-flight, not-yet-activated setup for the same user/provider.
+    await store.set(userId, 'gocardless', { accessToken: 'previously-working-token' })
+
+    await store.createPendingConnectionSetup({
       userId,
       provider: 'gocardless',
       consentId,
@@ -47,9 +51,12 @@ test('PostgresStore preserves encrypted connector and one-time nonce behavior', 
       connection: { consentId, redirectUri, accessToken: 'secret-token' },
     })
 
-    const raw = await pool.query('SELECT encrypted_payload::text AS payload FROM connector_connections WHERE user_id=$1', [userId])
-    assert.equal(raw.rowCount, 1)
-    assert.doesNotMatch(raw.rows[0].payload, /secret-token/)
+    const pendingRaw = await pool.query('SELECT pending_payload::text AS payload FROM oauth_nonces WHERE user_id=$1', [userId])
+    assert.equal(pendingRaw.rowCount, 1)
+    assert.doesNotMatch(pendingRaw.rows[0].payload, /secret-token/, 'the pending payload itself must be encrypted at rest')
+
+    const stillWorking = await store.get(userId, 'gocardless')
+    assert.equal(stillWorking.accessToken, 'previously-working-token', 'the working connection must not be overwritten before activation')
 
     assert.equal(await store.activateConnection({
       userId,

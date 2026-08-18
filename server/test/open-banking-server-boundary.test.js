@@ -30,12 +30,83 @@ test('every stored owner-account connection is re-authorized before synchronizat
   assert.ok(authorization < synchronization)
 })
 
+test('the provider callback route redirects every failure back into the app instead of returning raw JSON', () => {
+  const callbackStart = serverSource.indexOf("if (request.method === 'GET' && url.pathname === '/api/connectors/callback')")
+  const callbackRoute = serverSource.slice(
+    callbackStart,
+    serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
+  )
+  // Provider lookup and state verification must be wrapped in a try/catch
+  // that redirects (never throws out to the generic JSON error handler).
+  const tryStart = callbackRoute.indexOf('try {')
+  const providerLookup = callbackRoute.indexOf('providerAdapter(provider)')
+  const stateVerify = callbackRoute.indexOf('verifyState(url.searchParams.get')
+  const catchBlock = callbackRoute.indexOf('} catch {')
+  assert.ok(tryStart >= 0 && tryStart < providerLookup && providerLookup < stateVerify && stateVerify < catchBlock)
+  assert.match(callbackRoute.slice(catchBlock), /redirectWithError\(origin\)/, 'a state that fails to parse must redirect to the app origin, never to unverified input')
+
+  const missingClaims = callbackRoute.indexOf('!state.consentId || !state.redirectUri')
+  assert.ok(missingClaims > catchBlock)
+  assert.match(callbackRoute.slice(missingClaims, missingClaims + 200), /redirectWithError\(origin\)/)
+
+  const activateCall = callbackRoute.indexOf('await store.activateConnection(')
+  const activateFailure = callbackRoute.indexOf('if (!activated)')
+  assert.ok(activateCall > missingClaims && activateFailure > activateCall)
+  // Once state HAS been cryptographically verified, its redirectUri is
+  // trusted -- this is the one failure branch allowed to use it.
+  assert.match(callbackRoute.slice(activateFailure, activateFailure + 200), /redirectWithError\(state\.redirectUri\)/)
+})
+
+test('the provider callback route never reflects a caller-controlled value into the failure redirect copy', () => {
+  const redirectWithError = serverSource.slice(
+    serverSource.indexOf('const redirectWithError = (target) => {'),
+    serverSource.indexOf('const redirectWithError = (target) => {') + 400,
+  )
+  assert.match(redirectWithError, /searchParams\.set\('error', 'invalid_state'\)/)
+  assert.match(redirectWithError, /searchParams\.set\('error_description', CALLBACK_ERROR_COPY\.invalid_state\)/)
+  // Must be a fixed lookup table, not a passthrough of anything from the request.
+  assert.doesNotMatch(redirectWithError, /url\.searchParams\.get/, 'the failure redirect must never read attacker-influenced query params into its own copy')
+})
+
+test('the provider callback route appends ?provider= to the success redirect so the frontend return-detector actually fires', () => {
+  const callbackStart = serverSource.indexOf("if (request.method === 'GET' && url.pathname === '/api/connectors/callback')")
+  const callbackRoute = serverSource.slice(
+    callbackStart,
+    serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
+  )
+  const activateFailure = callbackRoute.indexOf('if (!activated)')
+  const successBlock = callbackRoute.slice(activateFailure)
+  assert.match(successBlock, /const success = new URL\(state\.redirectUri\)/)
+  assert.match(successBlock, /success\.searchParams\.set\('provider', provider\)/)
+  assert.match(successBlock, /Location: success\.toString\(\)/)
+})
+
 test('connector deletion authenticates before validating a provider identifier', () => {
   const disconnectRoute = serverSource.slice(
     serverSource.indexOf("if (request.method === 'DELETE' && disconnect)"),
     serverSource.indexOf("if (request.method === 'GET' && url.pathname === '/api/connectors/callback')"),
   )
   assert.ok(disconnectRoute.indexOf('const user = userId(request)') < disconnectRoute.indexOf('providerAdapter(disconnect[1])'))
+})
+
+test('connector deletion attempts provider-side revocation but never claims it succeeded without the adapter confirming, and always removes the local record', () => {
+  const disconnectRoute = serverSource.slice(
+    serverSource.indexOf("if (request.method === 'DELETE' && disconnect)"),
+    serverSource.indexOf("if (request.method === 'GET' && url.pathname === '/api/connectors/callback')"),
+  )
+  const storedLookup = disconnectRoute.indexOf('const stored = await store.get(user, disconnect[1])')
+  const revokeAttempt = disconnectRoute.indexOf('await adapter.disconnect(stored)')
+  const localRemoval = disconnectRoute.indexOf('await store.remove(user, disconnect[1])')
+  assert.ok(storedLookup >= 0 && revokeAttempt >= 0 && localRemoval >= 0)
+  assert.ok(storedLookup < revokeAttempt, 'must look up the stored credential before attempting revocation')
+  assert.ok(revokeAttempt < localRemoval, 'local removal must happen after the revocation attempt is resolved (not raced with it)')
+  // Local removal must not live inside the revoke try{} block -- a provider
+  // failure/exception must never prevent the user's own disconnect from
+  // completing.
+  const tryBlock = disconnectRoute.slice(disconnectRoute.lastIndexOf('try {', revokeAttempt), disconnectRoute.indexOf('}', revokeAttempt))
+  assert.ok(!tryBlock.includes('store.remove'), 'local removal must not be inside the provider-revoke try block')
+  assert.match(disconnectRoute, /providerRevoked = Boolean\(outcome\?\.revoked\)/, 'must derive providerRevoked from the adapter outcome, never hardcode it')
+  assert.match(disconnectRoute, /disconnected: true, providerRevoked, providerRevokeReason/)
 })
 
 test('connector start forwards the client-selected institutionId to the provider adapter for server-side validation', () => {
@@ -60,6 +131,31 @@ test('the provider listing and institution directory endpoints authenticate befo
   const directoryCall = institutionsHandler.indexOf('adapter.institutionDirectory(')
   assert.ok(authentication >= 0 && directoryCall >= 0)
   assert.ok(authentication < directoryCall, 'institution directory must authenticate before disclosing institutions')
+})
+
+test('the institution directory endpoint applies the same owner-mode authorization gate as /start, not just authentication', () => {
+  const institutionsHandler = serverSource.slice(
+    serverSource.indexOf('institutionsMatch'),
+    serverSource.indexOf("const match = url.pathname.match(/^\\/api\\/connectors\\/([a-z0-9][a-z0-9-]{1,39})\\/start$/)"),
+  )
+  const authentication = institutionsHandler.indexOf('const user = userId(request)')
+  const authorization = institutionsHandler.indexOf('authorizeProviderUser(adapter, user, env)')
+  const directoryCall = institutionsHandler.indexOf('adapter.institutionDirectory(')
+  assert.ok(authentication >= 0 && authorization >= 0 && directoryCall >= 0)
+  assert.ok(authentication < authorization && authorization < directoryCall, 'must authenticate, then authorize (owner-mode gate), then disclose institutions -- in that order')
+})
+
+test('connector start validates the country code the same way the institution directory endpoint already does', () => {
+  const startFunction = serverSource.slice(
+    serverSource.indexOf('async function start(provider, request, response)'),
+    serverSource.indexOf('async function buildSyncPayload'),
+  )
+  assert.match(startFunction, /const country = String\(input\.country \|\| 'DE'\)\.toUpperCase\(\)/)
+  assert.match(startFunction, /if \(!\/\^\[A-Z\]\{2\}\$\/\.test\(country\)\) throw new HttpError\(400, 'invalid_country'/)
+  const validation = startFunction.indexOf("throw new HttpError(400, 'invalid_country'")
+  const adapterCall = startFunction.indexOf('await adapter.start(')
+  assert.ok(validation >= 0 && validation < adapterCall, 'country must be validated before it ever reaches the adapter (and its unbounded institutionsCache)')
+  assert.doesNotMatch(startFunction, /country: input\.country \|\| 'DE'/, 'must not pass the raw unvalidated client value to the adapter')
 })
 
 test('the provider listing endpoint returns per-user descriptors, not the raw registry list', () => {

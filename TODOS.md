@@ -73,6 +73,32 @@ to wire up one secret/URL.
 **Priority:** P1
 **Depends on:** an operator-provided paging destination (external)
 
+## Connections
+
+### Preserve a retryable record when provider-side disconnect revocation fails
+
+**What:** `server/src/server.js`'s `DELETE /api/connectors/:provider` handler calls `store.remove()` unconditionally, even when `adapter.disconnect()` reports `providerRevoked: false` (e.g. `provider_error`). This deletes the only record (`requisitionId`) needed to ever retry closing a live GoCardless requisition.
+
+**Why:** A transient network failure or GoCardless 5xx during disconnect currently means the user is told "we couldn't confirm the provider revoked access" (honest), but the app has also just destroyed its own ability to ever complete that revocation — there's no record left to retry against, automated or manual. The consent stays live at the provider until it naturally expires per its `access_valid_for_days`.
+
+**Context:** Found by the Codex outside-voice review during `/plan-eng-review` on 2026-08-18, while reviewing PR #138's disconnect-revocation code (`GoCardlessProvider.disconnect()`, `PayPalProvider.disconnect()`, added the same session). Deliberately not fixed in PR #138 to avoid scope creep — the PR already spans institution selection, provider availability, PayPal listing, callback-routing architecture, and picker QA. Fixing this properly needs new state modeling (what does "disconnected locally but still pending provider revocation" look like in the UI — hidden from the normal connected list but visible somewhere for retry?) plus a retry trigger (a manual "retry revocation" action, or a scheduled background job) that doesn't exist anywhere in this codebase yet. Start by deciding whether retry should be user-initiated (simpler, no scheduler needed) or automatic (needs a job runner this codebase doesn't have).
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** None
+
+### Implement real per-merchant OAuth token exchange for PayPal partner mode
+
+**What:** `PayPalProvider.sync()` (`server/src/providers.js`) has no per-merchant PayPal token to read for partner-mode connections — it currently fails closed with an explicit error rather than the previous behavior of silently returning the deployment owner's own PayPal data to whichever user had a partner-mode connection stored. Partner mode's `start()` does send the user through PayPal's real Partner Referrals onboarding page, but nothing captures the resulting merchant-specific authorization grant afterward.
+
+**Why:** Partner mode is meant to let each Finance Planner user connect their own PayPal merchant account, distinct from owner mode's single deployment-wide account. Today it cannot actually do that — the fail-closed fix (2026-08-18) stops the cross-tenant data leak this gap caused, but partner mode still does not work end-to-end for any user.
+
+**Context:** Found by a Codex adversarial security review during `/review` on PR #138 (2026-08-18), independently verified against the code (`server/src/providers.js` `sync()` never reads anything from `credential` except `lastSyncedAt`). Not attempted in PR #138: this is a substantial new integration surface (real OAuth code exchange, refresh-token storage per connection, token-expiry handling) with no live PayPal partner sandbox available in this environment to verify it against — building it blind risks shipping a second, differently-broken version of the same trust boundary. Start by reading PayPal's Partner Referrals API docs for the actual token-exchange step the current `bizsignup/partner/entry` redirect is missing, and decide where the resulting per-connection token gets stored (likely alongside the existing encrypted `connector_connections` payload).
+
+**Effort:** L
+**Priority:** P2
+**Depends on:** None
+
 ## Completed
 
 ### Prevent user enumeration via the passkey authentication-options endpoint

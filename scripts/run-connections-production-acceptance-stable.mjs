@@ -108,6 +108,12 @@ try {
     const scriptPath = join(workspace, `connections-${mode}.mjs`)
     await writeFile(scriptPath, patched)
 
+    // A crashed attempt that dies before writing modeArtifact must never be
+    // read back as a stale pass from an earlier run of this same mode --
+    // remove it up front so a missing file after a bad exit code fails loud
+    // (readFile throws) instead of silently reusing old evidence.
+    await rm(modeArtifact, { force: true })
+
     let result
     let report
     let attempts = 0

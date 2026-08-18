@@ -191,6 +191,25 @@ export class EncryptedStore {
     })
   }
 
+  // Unlike createConnectionSetup (still used by Google Subscriptions, which
+  // has no separate activation step), this never touches
+  // data.connections -- the pending credential lives only alongside its
+  // single-use nonce until activateConnection() verifies the provider
+  // callback. A currently-working connection (reconnect case) stays
+  // untouched if the user abandons or the callback never arrives.
+  async createPendingConnectionSetup(input) {
+    return this.mutate(() => {
+      this.data.oauthNonces[nonceKey(input.nonce)] = {
+        consentId: input.consentId,
+        userId: input.userId,
+        provider: input.provider,
+        redirectUri: input.redirectUri,
+        expiresAt: input.expiresAt,
+        pendingConnection: input.connection,
+      }
+    })
+  }
+
   async registerOAuthNonce(input) {
     return this.mutate(() => {
       this.data.oauthNonces[nonceKey(input.nonce)] = {
@@ -225,14 +244,14 @@ export class EncryptedStore {
 
   async activateConnection(input) {
     return this.mutate(() => {
-      const connection = this.data.connections?.[input.userId]?.[input.provider]
       const key = nonceKey(input.nonce)
       const stored = this.data.oauthNonces[key]
-      if (!connection || !stored) return false
+      if (!stored || !stored.pendingConnection) return false
       if (stored.expiresAt <= input.now) {
         delete this.data.oauthNonces[key]
         return false
       }
+      const connection = stored.pendingConnection
       if (
         connection.consentId !== input.consentId ||
         connection.redirectUri !== input.redirectUri ||
@@ -242,6 +261,7 @@ export class EncryptedStore {
         stored.redirectUri !== input.redirectUri
       ) return false
       delete this.data.oauthNonces[key]
+      this.data.connections[input.userId] ??= {}
       this.data.connections[input.userId][input.provider] = {
         ...connection,
         connectedAt: input.connectedAt,
