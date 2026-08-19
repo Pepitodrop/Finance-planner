@@ -12,7 +12,8 @@ Hub for every external/device provider. Conservative verification terminology th
 | Provider | Node | Implementation | Runtime verified | Provider/device verified | Production verified |
 |---|---|---|---|---|---|
 | Google OAuth | [[Google OAuth]] | Yes | No | No | No |
-| GoCardless / Bank PSD2 | [[GoCardless]] | Yes | No | No | No |
+| Enable Banking / Bank AIS (preferred) | [[Enable Banking]] | Yes | No | No | No |
+| GoCardless / Bank PSD2 (fallback) | [[GoCardless]] | Yes | No | No | No |
 | PayPal | [[PayPal]] | Yes | No | No | No |
 | Google subscriptions | [[Google Subscriptions]] | Yes | No | No | No |
 | Hugging Face (hosted AI) | [[Hosted Hugging Face Inference]] | Yes | Gate-execution only | No | No |

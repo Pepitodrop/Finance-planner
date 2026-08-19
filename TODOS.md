@@ -99,6 +99,18 @@ to wire up one secret/URL.
 **Priority:** P2
 **Depends on:** None
 
+### Add 'google-subscriptions' to the connector-store provider CHECK constraint
+
+**What:** `connector_connections`/`oauth_nonces`' `provider` CHECK constraint (`server/migrations/001_connector_store.sql`) only allows `gocardless`/`finapi`/`paypal`, but `google-subscriptions-router.js` writes to the same `store` (`server.js` passes the identical `persistence.store` into both) using `provider = 'google-subscriptions'`. On a Postgres-backed deployment this would reject `createConnectionSetup()`/`registerOAuthNonce()` calls for Google Subscriptions outright.
+
+**Why:** A pre-existing latent bug, unrelated to any provider-specific feature work — just never noticed because nobody had touched this exact constraint since it was written.
+
+**Context:** Found 2026-08-20 while adding `'enablebanking'` to the same constraint (migration `009_enable_banking_provider.sql`). Deliberately not bundled into that migration — fixing an unrelated bug while touching the same line is a scope-creep temptation, not a reason. Fix is a one-line addition to a new migration's CHECK constraint value list (same drop-and-re-add pattern `009` already uses, Postgres has no `ALTER CHECK`).
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** None
+
 ## Completed
 
 ### Prevent user enumeration via the passkey authentication-options endpoint
