@@ -862,7 +862,7 @@ function InstitutionResolutionStep({ institution, query, onQuery, results, loadi
   return <>
     <button type="button" className="connections-back connections-live-search-back" onClick={onBack}><ArrowLeft size={18}/> All institutions</button>
     <h2 id="connections-setup-title" className="connections-setup-title">Find your {institution.name} branch</h2>
-    <p className="connections-setup-subtitle">Finance Planner connects to the exact bank on file with your provider — never a guess. Search and select it below.</p>
+    <p className="connections-setup-subtitle">Finance Planner connects to the exact bank on file — never a guess. Search and select it below.</p>
     <label className="connections-search connections-live-search"><Search size={18}/><input autoFocus value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search by bank name or BIC"/>{query && <button type="button" aria-label="Clear search" onClick={() => onQuery('')}><X size={16}/></button>}</label>
     <div className="connections-institution-list" aria-live="polite">
       {loading && <p className="connections-empty-copy">Loading banks…</p>}
