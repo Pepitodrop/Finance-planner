@@ -115,16 +115,41 @@ export type ProviderStatus =
 
 export interface ProviderAvailability { unavailable: boolean; reason?: string }
 
+// Enable Banking first, GoCardless second -- resolved transparently before
+// any bank-specific network call, never mid-attempt. This is the single
+// source of truth for "which concrete AIS provider backs an 'ais' bank right
+// now"; nothing else hard-codes this order.
+export const AIS_PROVIDER_PREFERENCE: ConnectorProvider[] = ['enablebanking', 'gocardless']
+
+// Picks the first AIS provider that is both available and configured, in
+// preference order. Returns null when neither is usable (including while
+// status is still loading or failed) -- callers fail closed on null exactly
+// like institutionAvailability() already does for every other provider.
+export function resolveAisProvider(providerStatus: ProviderStatus): ConnectorProvider | null {
+  if (providerStatus.status !== 'ready') return null
+  for (const id of AIS_PROVIDER_PREFERENCE) {
+    const descriptor = providerStatus.providers.find((provider) => provider.id === id)
+    if (descriptor?.available && descriptor.configured) return id
+  }
+  return null
+}
+
 // Backend-authoritative: an institution is only ever shown as connectable
 // once its backing provider reports both available and configured. finAPI
 // (an explicit unavailable placeholder), an unconfigured GoCardless/PayPal,
 // and a provider descriptor missing from a successful response must never
 // masquerade as a normal, clickable institution -- and neither may a
-// provider whose status simply hasn't loaded yet, or failed to load.
+// provider whose status simply hasn't loaded yet, or failed to load. A bank
+// with the 'ais' logical provider is available as soon as *any* preferred
+// AIS provider resolves -- which concrete one is a runtime detail resolved
+// separately (see resolveAisProvider()), not baked into this result.
 export function institutionAvailability(institution: Pick<Institution, 'provider'>, providerStatus: ProviderStatus): ProviderAvailability {
   if (institution.provider === 'manual') return { unavailable: false }
   if (providerStatus.status === 'loading') return { unavailable: true, reason: 'Checking availability…' }
   if (providerStatus.status === 'error') return { unavailable: true, reason: 'Availability could not be checked.' }
+  if (institution.provider === 'ais') {
+    return resolveAisProvider(providerStatus) ? { unavailable: false } : { unavailable: true, reason: 'Bank connections are not available right now.' }
+  }
   const descriptor = providerStatus.providers.find((provider) => provider.id === institution.provider)
   if (!descriptor) return { unavailable: true, reason: 'This provider is not available.' }
   if (!descriptor.available) return { unavailable: true, reason: descriptor.reason || `${descriptor.displayName} is not available right now.` }

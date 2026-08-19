@@ -63,6 +63,7 @@ import {
   nextSetupStepAfterInstitution,
   previousSetupStepFromConfirmation,
   providerDescriptorFor,
+  resolveAisProvider,
   summarizeAccountSelection,
   validateManualAccount,
   type InstitutionCategory,
@@ -135,6 +136,13 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   const [providerStatus, setProviderStatus] = useState<ProviderStatus>({ status: 'loading' })
 
   const [resolvingInstitution, setResolvingInstitution] = useState<Institution | null>(null)
+  // The concrete AIS provider (Enable Banking or GoCardless) this resolution
+  // attempt is searching against -- fixed once resolution begins (see
+  // chooseInstitution()) and only ever changed by the explicit "try another
+  // connection method" fallback action, never automatically. This is what
+  // actually flows into fetchProviderInstitutions()/startConnector(), not
+  // the institution's provider-agnostic 'ais' tag.
+  const [resolvingProvider, setResolvingProvider] = useState<ConnectorProvider | null>(null)
   const [resolvedProviderInstitution, setResolvedProviderInstitution] = useState<ProviderInstitution | null>(null)
   const [liveInstitutionQuery, setLiveInstitutionQuery] = useState('')
   const [liveInstitutions, setLiveInstitutions] = useState<ProviderInstitution[] | null>(null)
@@ -215,11 +223,19 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per mount; a fresh acceptanceMode always gets a fresh mount (see the `key` prop where ConnectionsPage is used)
   }, [])
 
-  const loadLiveInstitutions = useCallback(async () => {
-    if (liveInstitutions || liveInstitutionsLoading) return
+  const loadLiveInstitutions = useCallback(async (provider: ConnectorProvider, options: { force?: boolean } = {}) => {
+    // `liveInstitutions` is the whole per-country directory (filtered
+    // client-side, see filteredLiveInstitutions below), so an empty array is
+    // a legitimate "already fetched, nothing there" result -- and arrays are
+    // truthy in JS, so `!liveInstitutions` alone would never catch that
+    // case. `force` exists for the one case where reusing it would be wrong
+    // regardless of emptiness: switching resolvingProvider via the explicit
+    // fallback action, where a stale result from the *previous* provider
+    // must never be shown as if it belonged to the new one.
+    if (!options.force && (liveInstitutions || liveInstitutionsLoading)) return
     setLiveInstitutionsLoading(true)
     try {
-      const institutions = await fetchProviderInstitutions('gocardless', 'DE')
+      const institutions = await fetchProviderInstitutions(provider, 'DE')
       setLiveInstitutions(institutions)
     } catch (reason) {
       setLiveInstitutionsError(reason instanceof Error ? reason.message : 'The bank directory could not be loaded.')
@@ -228,12 +244,32 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     }
   }, [liveInstitutions, liveInstitutionsLoading])
 
+  // User-initiated only, never automatic: switches the current resolution
+  // attempt from the preferred provider to the explicit fallback and
+  // re-searches with the same query. Only offered when a real fallback
+  // exists (see InstitutionResolutionStep's gocardlessFallbackAvailable
+  // prop) and only before startConnector() has been called -- once that
+  // fires the page navigates away, so there is no code path that could
+  // change the provider mid-consent.
+  const useGoCardlessFallback = () => {
+    setResolvingProvider('gocardless')
+    setLiveInstitutions(null)
+    setLiveInstitutionsError('')
+    void loadLiveInstitutions('gocardless', { force: true })
+  }
+
   const filteredLiveInstitutions = useMemo(() => {
     if (!liveInstitutions) return []
     const query = liveInstitutionQuery.trim().toLocaleLowerCase('de-DE')
     if (!query) return liveInstitutions
     return liveInstitutions.filter((institution) => institution.name.toLocaleLowerCase('de-DE').includes(query) || institution.bic?.toLocaleLowerCase('de-DE').includes(query))
   }, [liveInstitutions, liveInstitutionQuery])
+
+  // A real, independently-available fallback exists only when GoCardless
+  // itself reports available+configured -- offering the fallback button
+  // when there is nothing to fall back to would be a dead end. Only
+  // relevant while actively resolving through the preferred provider.
+  const gocardlessFallbackAvailable = resolvingProvider === 'enablebanking' && Boolean(providerDescriptorFor('gocardless', providerStatus)?.available && providerDescriptorFor('gocardless', providerStatus)?.configured)
 
   const selectedInstitution = selectedInstitutionId ? institutionById(selectedInstitutionId) : undefined
   const filteredInstitutions = useMemo(() => filterInstitutions(searchTerm, category), [searchTerm, category])
@@ -324,10 +360,23 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
 
   const connectorContext = (): ConnectorStartContext => {
     if (!selectedInstitution) return {}
-    if (selectedInstitution.provider === 'gocardless') {
+    if (selectedInstitution.provider === 'ais') {
       return { institutionId: resolvedProviderInstitution?.id, institutionName: resolvedProviderInstitution?.name, accountType }
     }
     return { institutionId: selectedInstitution.id, institutionName: selectedInstitution.name, accountType }
+  }
+
+  // The concrete provider a start()/reconnect attempt actually targets. For
+  // an 'ais' (provider-agnostic bank) institution this is whichever provider
+  // resolution fixed for the current attempt (resolvingProvider) -- never
+  // re-derived from providerStatus at confirm time, so a status change after
+  // resolution began can never retarget an in-flight attempt. For every
+  // other institution the tile's own provider id already is the real one.
+  const effectiveProvider = (): ConnectorProvider | undefined => {
+    if (!selectedInstitution) return undefined
+    if (selectedInstitution.provider === 'ais') return resolvingProvider ?? undefined
+    if (selectedInstitution.provider === 'manual') return undefined
+    return selectedInstitution.provider
   }
 
   const refreshAll = () => void synchronize(false)
@@ -379,6 +428,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
 
   const cancelInstitutionResolution = () => {
     setResolvingInstitution(null)
+    setResolvingProvider(null)
     setSelectedInstitutionId(null)
     setResolvedProviderInstitution(null)
   }
@@ -401,24 +451,39 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     }
     setSelectedInstitutionId(id)
     setAccountType(defaultAccountTypeForInstitution(institution))
-    // Always clear a previous GoCardless resolution here, not just when
-    // re-entering the gocardless branch below -- otherwise picking a
-    // GoCardless bank, resolving it, going back, and choosing a different
-    // (non-gocardless) institution left the old resolved name in state and
-    // it rendered as a stale, unrelated subtitle on the new institution's
-    // account-type/confirmation steps.
+    // Always clear a previous resolution here, not just when re-entering the
+    // 'ais' branch below -- otherwise picking a bank, resolving it, going
+    // back, and choosing a different institution left the old resolved name
+    // in state and it rendered as a stale, unrelated subtitle on the new
+    // institution's account-type/confirmation steps.
     setResolvedProviderInstitution(null)
-    if (institution.provider === 'gocardless') {
-      // GoCardless's real institution catalogue -- not our static picker
-      // entries -- is the only thing that can be validated server-side, and
-      // a generic entry like "Sparkasse" or "Volksbank / Raiffeisenbank"
-      // cannot be mapped to one unique bank without guessing. Every
-      // GoCardless institution is resolved against the live directory here,
-      // prefilled with this tile's name so the common case is a single tap.
+    if (institution.provider === 'ais') {
+      // Enable Banking first, GoCardless second -- resolved once, here,
+      // transparently, before any bank-specific network call (see
+      // resolveAisProvider()). institutionAvailability() already guarantees
+      // this is non-null by the time chooseInstitution can be reached for an
+      // 'ais' institution. Fixed for the rest of this attempt: only the
+      // explicit "try another connection method" fallback action can change
+      // it, and only before startConnector() is ever called.
+      const resolved = resolveAisProvider(providerStatus)
+      if (!resolved) return
+      // A directory from a previous resolution attempt against a different
+      // provider (e.g. a prior fallback switch) must never be reused here --
+      // the real institution catalogue that provider offers, not our static
+      // picker entries, is the only thing that can be validated server-side,
+      // and a generic entry like "Sparkasse" or "Volksbank / Raiffeisenbank"
+      // cannot be mapped to one unique bank without guessing.
+      const providerChanged = resolvingProvider !== resolved
+      if (providerChanged) { setLiveInstitutions(null); setLiveInstitutionsError('') }
+      setResolvingProvider(resolved)
       setResolvingInstitution(institution)
       setLiveInstitutionQuery(institution.name)
-      setLiveInstitutionsError('')
-      void loadLiveInstitutions()
+      // force: true when the resolved provider changed since the last
+      // resolution -- liveInstitutions may still hold a truthy (even if
+      // empty) result from the *previous* provider at this point (state
+      // updates above haven't committed yet within this closure), and that
+      // must never be reused as if it belonged to the new provider.
+      void loadLiveInstitutions(resolved, { force: providerChanged })
       return
     }
     setSetupStep(nextSetupStepAfterInstitution(institution))
@@ -584,6 +649,8 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
                 error={liveInstitutionsError}
                 onBack={cancelInstitutionResolution}
                 onChoose={finalizeInstitutionResolution}
+                gocardlessFallbackAvailable={gocardlessFallbackAvailable}
+                onUseGoCardlessFallback={useGoCardlessFallback}
               />
             : <InstitutionStep
                 searchTerm={searchTerm}
@@ -608,9 +675,9 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
             resolvedInstitutionName={resolvedProviderInstitution?.name}
             busy={busy}
             error={setupError}
-            providerDescriptor={providerDescriptorFor(selectedInstitution.provider as ConnectorProvider, providerStatus)}
+            providerDescriptor={providerDescriptorFor(effectiveProvider() ?? 'gocardless', providerStatus)}
             onCancel={closeSetup}
-            onConfirm={() => void startProvider(selectedInstitution.provider as ConnectorProvider, connectorContext(), setSetupError)}
+            onConfirm={() => { const provider = effectiveProvider(); if (provider) void startProvider(provider, connectorContext(), setSetupError) }}
           />}
         </div>
 
@@ -781,13 +848,21 @@ interface InstitutionResolutionStepProps {
   error: string
   onBack: () => void
   onChoose: (match: ProviderInstitution) => void
+  gocardlessFallbackAvailable: boolean
+  onUseGoCardlessFallback: () => void
 }
 
-function InstitutionResolutionStep({ institution, query, onQuery, results, loading, error, onBack, onChoose }: InstitutionResolutionStepProps) {
+function InstitutionResolutionStep({ institution, query, onQuery, results, loading, error, onBack, onChoose, gocardlessFallbackAvailable, onUseGoCardlessFallback }: InstitutionResolutionStepProps) {
+  // Never names the aggregator to the user -- bank-centric copy throughout,
+  // matching how the rest of the picker never says "GoCardless"/"Enable
+  // Banking" either. The fallback affordance below is the one place a
+  // provider switch is ever user-visible, and even there it's phrased as a
+  // connection method, not a brand name.
+  const showFallback = gocardlessFallbackAvailable && !loading && (error || results.length === 0)
   return <>
     <button type="button" className="connections-back connections-live-search-back" onClick={onBack}><ArrowLeft size={18}/> All institutions</button>
     <h2 id="connections-setup-title" className="connections-setup-title">Find your {institution.name} branch</h2>
-    <p className="connections-setup-subtitle">Finance Planner connects to the exact bank on file with GoCardless — never a guess. Search and select it below.</p>
+    <p className="connections-setup-subtitle">Finance Planner connects to the exact bank on file with your provider — never a guess. Search and select it below.</p>
     <label className="connections-search connections-live-search"><Search size={18}/><input autoFocus value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search by bank name or BIC"/>{query && <button type="button" aria-label="Clear search" onClick={() => onQuery('')}><X size={16}/></button>}</label>
     <div className="connections-institution-list" aria-live="polite">
       {loading && <p className="connections-empty-copy">Loading banks…</p>}
@@ -799,6 +874,10 @@ function InstitutionResolutionStep({ institution, query, onQuery, results, loadi
       </button>)}
       {!loading && !error && results.length === 0 && <p className="connections-empty-copy">No bank matches your search. Try a different name or BIC.</p>}
     </div>
+    {showFallback && <p className="status-message connections-fallback-message">
+      Connection through the preferred bank interface is currently unavailable.{' '}
+      <button type="button" className="connections-text-button connections-retry-button" onClick={onUseGoCardlessFallback}>Try another connection method</button>
+    </p>}
   </>
 }
 

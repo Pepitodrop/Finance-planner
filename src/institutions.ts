@@ -1,4 +1,11 @@
-export type InstitutionProvider = 'gocardless' | 'finapi' | 'paypal' | 'manual'
+// 'ais' is a Finance Planner-internal logical group, not a real provider id --
+// a bank listed here has no fixed aggregator. Which concrete AIS provider
+// (Enable Banking, GoCardless) actually backs a connection attempt is
+// resolved at runtime against each provider's live directory (see
+// connectionsModel.ts's resolveAisProvider()/AIS_PROVIDER_PREFERENCE), never
+// guessed from this static catalogue. ING is not GoCardless; ING is a bank
+// that Enable Banking or GoCardless might separately be able to reach.
+export type InstitutionProvider = 'ais' | 'finapi' | 'paypal' | 'manual'
 export type InstitutionKind = 'bank' | 'wallet' | 'broker' | 'card' | 'manual'
 
 export interface Institution {
@@ -14,16 +21,16 @@ export interface Institution {
 }
 
 export const commonInstitutions: Institution[] = [
-  { id: 'sparkasse', name: 'Sparkasse', provider: 'gocardless', popular: true, kind: 'bank', aliases: ['Kreissparkasse', 'Stadtsparkasse'] },
-  { id: 'volksbank', name: 'Volksbank / Raiffeisenbank', provider: 'gocardless', popular: true, kind: 'bank', aliases: ['VR Bank', 'Raiffeisen'] },
-  { id: 'ing', name: 'ING', bic: 'INGDDEFFXXX', blz: '50010517', provider: 'gocardless', popular: true, kind: 'bank', aliases: ['ING-DiBa'] },
-  { id: 'dkb', name: 'DKB', bic: 'BYLADEM1001', blz: '12030000', provider: 'gocardless', popular: true, kind: 'bank', aliases: ['Deutsche Kreditbank'] },
-  { id: 'comdirect', name: 'Comdirect', bic: 'COBADEHDXXX', blz: '20041111', provider: 'gocardless', popular: true, kind: 'bank' },
-  { id: 'deutsche-bank', name: 'Deutsche Bank', bic: 'DEUTDEFFXXX', provider: 'gocardless', popular: true, kind: 'bank' },
-  { id: 'postbank', name: 'Postbank', bic: 'PBNKDEFFXXX', provider: 'gocardless', popular: true, kind: 'bank' },
-  { id: 'commerzbank', name: 'Commerzbank', bic: 'COBADEFFXXX', provider: 'gocardless', popular: true, kind: 'bank' },
-  { id: 'n26', name: 'N26', bic: 'NTSBDEB1XXX', provider: 'gocardless', popular: true, kind: 'bank' },
-  { id: 'hypovereinsbank', name: 'UniCredit Bank – HypoVereinsbank', bic: 'HYVEDEMMXXX', provider: 'gocardless', popular: true, kind: 'bank', aliases: ['HVB', 'Hypovereinsbank', 'UniCredit'] },
+  { id: 'sparkasse', name: 'Sparkasse', provider: 'ais', popular: true, kind: 'bank', aliases: ['Kreissparkasse', 'Stadtsparkasse'] },
+  { id: 'volksbank', name: 'Volksbank / Raiffeisenbank', provider: 'ais', popular: true, kind: 'bank', aliases: ['VR Bank', 'Raiffeisen'] },
+  { id: 'ing', name: 'ING', bic: 'INGDDEFFXXX', blz: '50010517', provider: 'ais', popular: true, kind: 'bank', aliases: ['ING-DiBa'] },
+  { id: 'dkb', name: 'DKB', bic: 'BYLADEM1001', blz: '12030000', provider: 'ais', popular: true, kind: 'bank', aliases: ['Deutsche Kreditbank'] },
+  { id: 'comdirect', name: 'Comdirect', bic: 'COBADEHDXXX', blz: '20041111', provider: 'ais', popular: true, kind: 'bank' },
+  { id: 'deutsche-bank', name: 'Deutsche Bank', bic: 'DEUTDEFFXXX', provider: 'ais', popular: true, kind: 'bank' },
+  { id: 'postbank', name: 'Postbank', bic: 'PBNKDEFFXXX', provider: 'ais', popular: true, kind: 'bank' },
+  { id: 'commerzbank', name: 'Commerzbank', bic: 'COBADEFFXXX', provider: 'ais', popular: true, kind: 'bank' },
+  { id: 'n26', name: 'N26', bic: 'NTSBDEB1XXX', provider: 'ais', popular: true, kind: 'bank' },
+  { id: 'hypovereinsbank', name: 'UniCredit Bank – HypoVereinsbank', bic: 'HYVEDEMMXXX', provider: 'ais', popular: true, kind: 'bank', aliases: ['HVB', 'Hypovereinsbank', 'UniCredit'] },
   { id: 'paypal', name: 'PayPal', provider: 'paypal', popular: true, kind: 'wallet', aliases: ['Wallet'] },
   { id: 'trade-republic', name: 'Trade Republic', provider: 'finapi', popular: true, kind: 'broker', accountTypeRequired: true, aliases: ['Depot', 'Broker'] },
   { id: 'credit-card', name: 'Kreditkarte manuell', provider: 'manual', kind: 'card', accountTypeRequired: true, aliases: ['Visa', 'Mastercard', 'Amex', 'American Express'] },
