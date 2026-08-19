@@ -442,7 +442,17 @@ const server = createServer(async (request, response) => {
         redirectWithError(origin)
         return
       }
-      const activated = await store.activateConnection({ nonce: state.nonce, consentId: state.consentId, userId: state.sub, provider, redirectUri: state.redirectUri, now: Date.now(), connectedAt: new Date().toISOString() })
+      let activated
+      try {
+        activated = await store.activateConnection({ nonce: state.nonce, consentId: state.consentId, userId: state.sub, provider, redirectUri: state.redirectUri, now: Date.now(), connectedAt: new Date().toISOString() })
+      } catch {
+        // A DB error or a corrupted pending_payload must still redirect --
+        // state.redirectUri is already cryptographically verified above, so
+        // this is the same safe fallback as an outright activation failure,
+        // not the raw-JSON path the outer catch would otherwise produce.
+        redirectWithError(state.redirectUri)
+        return
+      }
       if (!activated) {
         redirectWithError(state.redirectUri)
         return

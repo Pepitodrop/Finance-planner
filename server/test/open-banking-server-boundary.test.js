@@ -57,6 +57,24 @@ test('the provider callback route redirects every failure back into the app inst
   assert.match(callbackRoute.slice(activateFailure, activateFailure + 200), /redirectWithError\(state\.redirectUri\)/)
 })
 
+test('the provider callback route redirects instead of throwing raw JSON when activateConnection itself fails (not just returns false)', () => {
+  const callbackStart = serverSource.indexOf("if (request.method === 'GET' && url.pathname === '/api/connectors/callback')")
+  const callbackRoute = serverSource.slice(
+    callbackStart,
+    serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
+  )
+  // A DB error or a corrupted pending_payload throws out of
+  // store.activateConnection() itself, distinct from it resolving false.
+  // That throw must still be caught and redirected -- state.redirectUri is
+  // already verified by this point -- not left to propagate to the
+  // top-level handler's raw-JSON error response.
+  const activateTry = callbackRoute.indexOf('try {\n        activated = await store.activateConnection(')
+  assert.ok(activateTry >= 0, 'the activateConnection call must be inside its own try block')
+  const activateCatch = callbackRoute.indexOf('} catch {', activateTry)
+  assert.ok(activateCatch > activateTry)
+  assert.match(callbackRoute.slice(activateCatch, activateCatch + 400), /redirectWithError\(state\.redirectUri\)/)
+})
+
 test('the provider callback route never reflects a caller-controlled value into the failure redirect copy', () => {
   const redirectWithError = serverSource.slice(
     serverSource.indexOf('const redirectWithError = (target) => {'),

@@ -401,6 +401,13 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     }
     setSelectedInstitutionId(id)
     setAccountType(defaultAccountTypeForInstitution(institution))
+    // Always clear a previous GoCardless resolution here, not just when
+    // re-entering the gocardless branch below -- otherwise picking a
+    // GoCardless bank, resolving it, going back, and choosing a different
+    // (non-gocardless) institution left the old resolved name in state and
+    // it rendered as a stale, unrelated subtitle on the new institution's
+    // account-type/confirmation steps.
+    setResolvedProviderInstitution(null)
     if (institution.provider === 'gocardless') {
       // GoCardless's real institution catalogue -- not our static picker
       // entries -- is the only thing that can be validated server-side, and
@@ -408,7 +415,6 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
       // cannot be mapped to one unique bank without guessing. Every
       // GoCardless institution is resolved against the live directory here,
       // prefilled with this tile's name so the common case is a single tap.
-      setResolvedProviderInstitution(null)
       setResolvingInstitution(institution)
       setLiveInstitutionQuery(institution.name)
       setLiveInstitutionsError('')

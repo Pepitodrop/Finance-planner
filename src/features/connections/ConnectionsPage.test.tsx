@@ -190,6 +190,32 @@ describe('GoCardless institution resolution (never guesses a real bank)', () => 
     expect(screen.getByRole('heading', { name: 'Choose your institution' })).toBeInTheDocument()
   })
 
+  it('does not carry a resolved GoCardless bank name over onto a different institution chosen afterward', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce([
+      ...DEFAULT_PROVIDER_STATUS.filter((provider) => provider.id !== 'finapi'),
+      { id: 'finapi', displayName: 'Bank (finAPI)', kind: 'brokerage', available: true, configured: true },
+    ])
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([
+      { id: 'SPARKASSE_AACHEN_AACSDE33', name: 'Aachener Sparkasse', bic: 'AACSDE33' },
+    ])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Sparkasse$/ }))
+    await user.click(await screen.findByRole('button', { name: /Aachener Sparkasse/ }))
+    expect(screen.getByRole('heading', { name: 'Continue to your provider' })).toBeInTheDocument()
+    expect(screen.getByText('Aachener Sparkasse')).toBeInTheDocument()
+
+    // Back to the institution picker without disconnecting -- resolvingInstitution
+    // is already null here (resolution completed), so this exercises the header
+    // back button's plain setSetupStep(1) path, not cancelInstitutionResolution().
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    await user.click(screen.getByRole('button', { name: /^Trade Republic$/ }))
+
+    expect(screen.getByRole('heading', { name: 'What would you like to connect?' })).toBeInTheDocument()
+    expect(screen.queryByText('Aachener Sparkasse')).not.toBeInTheDocument()
+  })
+
   it('shows a loading state while the live bank directory is being fetched', async () => {
     const user = userEvent.setup()
     vi.mocked(fetchProviderInstitutions).mockImplementationOnce(() => new Promise(() => {})) // never resolves: pins the loading state
