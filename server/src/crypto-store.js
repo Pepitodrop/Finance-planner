@@ -242,14 +242,21 @@ export class EncryptedStore {
     })
   }
 
-  async activateConnection(input) {
+  // Consumes the single-use nonce and returns the pending credential it
+  // guarded, without yet promoting it into data.connections -- some
+  // providers (Enable Banking) still need to complete a server-side exchange
+  // (an authorization code -> session call) before the connection is safe to
+  // activate, and that exchange is a network call that must never happen
+  // inside mutate()'s serialized write queue. See finalizeConnection() for
+  // the second, provider-independent step.
+  async consumePendingConnectionSetup(input) {
     return this.mutate(() => {
       const key = nonceKey(input.nonce)
       const stored = this.data.oauthNonces[key]
-      if (!stored || !stored.pendingConnection) return false
+      if (!stored || !stored.pendingConnection) return null
       if (stored.expiresAt <= input.now) {
         delete this.data.oauthNonces[key]
-        return false
+        return null
       }
       const connection = stored.pendingConnection
       if (
@@ -259,15 +266,38 @@ export class EncryptedStore {
         stored.userId !== input.userId ||
         stored.provider !== input.provider ||
         stored.redirectUri !== input.redirectUri
-      ) return false
+      ) return null
       delete this.data.oauthNonces[key]
+      return connection
+    })
+  }
+
+  // Provider-independent: promotes an already-verified connection into
+  // data.connections. Never called until the nonce has been consumed AND the
+  // provider callback has completed successfully -- by that point a
+  // transient failure here is a worse outcome than one step earlier (for a
+  // provider like Enable Banking, the provider-side session already exists
+  // with zero local trace of it), so this gets a small bounded retry before
+  // giving up, mirroring the Postgres store. A second mutate() call after a
+  // failed one is safe: it simply queues behind the write queue and
+  // re-attempts the same write against current in-memory state.
+  async finalizeConnection(input) {
+    const write = () => this.mutate(() => {
       this.data.connections[input.userId] ??= {}
       this.data.connections[input.userId][input.provider] = {
-        ...connection,
+        ...input.connection,
         connectedAt: input.connectedAt,
       }
-      return true
     })
+    const attempts = 3
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        return await write()
+      } catch (error) {
+        if (attempt === attempts) throw error
+        await new Promise((resolve) => setTimeout(resolve, 100 * attempt))
+      }
+    }
   }
 
   async claimWebhookEvent(input) {

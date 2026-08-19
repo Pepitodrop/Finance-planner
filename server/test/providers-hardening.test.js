@@ -279,13 +279,15 @@ test('generic provider registry exposes replaceable read-only adapters only', ()
     PAYPAL_CONNECTION_MODE: 'owner',
   }, fakeBankingCore())
   const providers = registry.list()
-  assert.deepEqual(providers.map((provider) => provider.id), ['gocardless', 'paypal', 'finapi'])
+  assert.deepEqual(providers.map((provider) => provider.id), ['enablebanking', 'gocardless', 'paypal', 'finapi'])
   for (const provider of providers) {
     assert.equal(provider.capabilities.paymentInitiation, false)
     assert.equal(provider.capabilities.transfers, false)
     assert.equal(provider.capabilities.payouts, false)
     assert.equal(provider.capabilities.orders, false)
   }
+  // Enable Banking is registered but not configured in this env (no
+  // ENABLE_BANKING_APPLICATION_ID/key), so it correctly does not appear here.
   assert.deepEqual(registry.configured().map((provider) => provider.id), ['gocardless', 'paypal'])
 })
 

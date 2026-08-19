@@ -49,41 +49,86 @@ test('the provider callback route redirects every failure back into the app inst
   assert.ok(missingClaims > catchBlock)
   assert.match(callbackRoute.slice(missingClaims, missingClaims + 200), /redirectWithError\(origin\)/)
 
-  const activateCall = callbackRoute.indexOf('await store.activateConnection(')
-  const activateFailure = callbackRoute.indexOf('if (!activated)')
-  assert.ok(activateCall > missingClaims && activateFailure > activateCall)
+  const consumeCall = callbackRoute.indexOf('await store.consumePendingConnectionSetup(')
+  const pendingFailure = callbackRoute.indexOf('if (!pending)')
+  assert.ok(consumeCall > missingClaims && pendingFailure > consumeCall)
   // Once state HAS been cryptographically verified, its redirectUri is
-  // trusted -- this is the one failure branch allowed to use it.
-  assert.match(callbackRoute.slice(activateFailure, activateFailure + 200), /redirectWithError\(state\.redirectUri\)/)
+  // trusted -- this and every failure branch after this point uses it.
+  assert.match(callbackRoute.slice(pendingFailure, pendingFailure + 200), /redirectWithError\(state\.redirectUri\)/)
 })
 
-test('the provider callback route redirects instead of throwing raw JSON when activateConnection itself fails (not just returns false)', () => {
+test('the provider callback route redirects instead of throwing raw JSON when consumePendingConnectionSetup itself fails (not just returns null)', () => {
   const callbackStart = serverSource.indexOf("if (request.method === 'GET' && url.pathname === '/api/connectors/callback')")
   const callbackRoute = serverSource.slice(
     callbackStart,
     serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
   )
   // A DB error or a corrupted pending_payload throws out of
-  // store.activateConnection() itself, distinct from it resolving false.
-  // That throw must still be caught and redirected -- state.redirectUri is
-  // already verified by this point -- not left to propagate to the
+  // store.consumePendingConnectionSetup() itself, distinct from it resolving
+  // null. That throw must still be caught and redirected -- state.redirectUri
+  // is already verified by this point -- not left to propagate to the
   // top-level handler's raw-JSON error response.
-  const activateTry = callbackRoute.indexOf('try {\n        activated = await store.activateConnection(')
-  assert.ok(activateTry >= 0, 'the activateConnection call must be inside its own try block')
-  const activateCatch = callbackRoute.indexOf('} catch {', activateTry)
-  assert.ok(activateCatch > activateTry)
-  assert.match(callbackRoute.slice(activateCatch, activateCatch + 400), /redirectWithError\(state\.redirectUri\)/)
+  const consumeTry = callbackRoute.indexOf('try {\n        pending = await store.consumePendingConnectionSetup(')
+  assert.ok(consumeTry >= 0, 'the consumePendingConnectionSetup call must be inside its own try block')
+  const consumeCatch = callbackRoute.indexOf('} catch {', consumeTry)
+  assert.ok(consumeCatch > consumeTry)
+  assert.match(callbackRoute.slice(consumeCatch, consumeCatch + 200), /redirectWithError\(state\.redirectUri\)/)
 })
 
-test('the provider callback route never reflects a caller-controlled value into the failure redirect copy', () => {
-  const redirectWithError = serverSource.slice(
-    serverSource.indexOf('const redirectWithError = (target) => {'),
-    serverSource.indexOf('const redirectWithError = (target) => {') + 400,
+test('the provider callback route runs completeCallback() only after the nonce has been consumed, and redirects on failure without exposing raw JSON', () => {
+  const callbackStart = serverSource.indexOf("if (request.method === 'GET' && url.pathname === '/api/connectors/callback')")
+  const callbackRoute = serverSource.slice(
+    callbackStart,
+    serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
   )
-  assert.match(redirectWithError, /searchParams\.set\('error', 'invalid_state'\)/)
-  assert.match(redirectWithError, /searchParams\.set\('error_description', CALLBACK_ERROR_COPY\.invalid_state\)/)
-  // Must be a fixed lookup table, not a passthrough of anything from the request.
+  const pendingFailure = callbackRoute.indexOf('if (!pending)')
+  const completeCallbackCall = callbackRoute.indexOf('providerAdapter(provider).completeCallback(')
+  assert.ok(completeCallbackCall > pendingFailure, 'completeCallback() must only run after the pending setup has been consumed')
+  assert.match(callbackRoute.slice(completeCallbackCall, completeCallbackCall + 200), /code: url\.searchParams\.get\('code'\), pending/)
+
+  const completeCatch = callbackRoute.indexOf('} catch (error) {', completeCallbackCall)
+  assert.ok(completeCatch > completeCallbackCall)
+  const completeCatchBody = callbackRoute.slice(completeCatch, completeCatch + 800)
+  // Distinguishes the provider denying authorization (an honest, distinct
+  // error code) from every other completeCallback() failure (the generic
+  // copy) -- but never reflects the raw provider/error text itself.
+  assert.match(completeCatchBody, /error\?\.code === 'authorization_denied' \? 'access_denied' : 'invalid_state'/)
+  assert.match(completeCatchBody, /redirectWithError\(state\.redirectUri,/)
+})
+
+test('the provider callback route never activates a connection until finalizeConnection succeeds, and redirects (not raw JSON) if it fails', () => {
+  const callbackStart = serverSource.indexOf("if (request.method === 'GET' && url.pathname === '/api/connectors/callback')")
+  const callbackRoute = serverSource.slice(
+    callbackStart,
+    serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
+  )
+  const completeCallbackCall = callbackRoute.indexOf('providerAdapter(provider).completeCallback(')
+  const finalizeCall = callbackRoute.indexOf('await store.finalizeConnection(')
+  assert.ok(finalizeCall > completeCallbackCall, 'finalizeConnection must only run after completeCallback() has succeeded')
+  const finalizeCatch = callbackRoute.indexOf('} catch {', finalizeCall)
+  assert.ok(finalizeCatch > finalizeCall)
+  assert.match(callbackRoute.slice(finalizeCatch, finalizeCatch + 200), /redirectWithError\(state\.redirectUri\)/)
+  // The success redirect must come strictly after finalizeConnection, never before it.
+  const successRedirect = callbackRoute.indexOf('const success = new URL(state.redirectUri)')
+  assert.ok(successRedirect > finalizeCall)
+})
+
+test('the provider callback route never reflects a caller-controlled value into the failure redirect copy, for any error code', () => {
+  const redirectWithError = serverSource.slice(
+    serverSource.indexOf('const redirectWithError = (target, errorCode'),
+    serverSource.indexOf('const redirectWithError = (target, errorCode') + 400,
+  )
+  // A fixed lookup table keyed by a fixed set of our own error codes, not a
+  // passthrough of anything from the request -- CALLBACK_ERROR_COPY[errorCode]
+  // only ever selects between our own pre-approved copy strings.
+  assert.match(redirectWithError, /searchParams\.set\('error', errorCode\)/)
+  assert.match(redirectWithError, /CALLBACK_ERROR_COPY\[errorCode\] \|\| CALLBACK_ERROR_COPY\.invalid_state/)
   assert.doesNotMatch(redirectWithError, /url\.searchParams\.get/, 'the failure redirect must never read attacker-influenced query params into its own copy')
+
+  // CALLBACK_ERROR_COPY itself must be a frozen, fixed set of our own strings.
+  const errorCopy = serverSource.slice(serverSource.indexOf('const CALLBACK_ERROR_COPY = Object.freeze({'), serverSource.indexOf('const CALLBACK_ERROR_COPY = Object.freeze({') + 300)
+  assert.match(errorCopy, /invalid_state:/)
+  assert.match(errorCopy, /access_denied:/)
 })
 
 test('the provider callback route appends ?provider= to the success redirect so the frontend return-detector actually fires', () => {
@@ -92,8 +137,8 @@ test('the provider callback route appends ?provider= to the success redirect so 
     callbackStart,
     serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
   )
-  const activateFailure = callbackRoute.indexOf('if (!activated)')
-  const successBlock = callbackRoute.slice(activateFailure)
+  const finalizeCall = callbackRoute.indexOf('await store.finalizeConnection(')
+  const successBlock = callbackRoute.slice(finalizeCall)
   assert.match(successBlock, /const success = new URL\(state\.redirectUri\)/)
   assert.match(successBlock, /success\.searchParams\.set\('provider', provider\)/)
   assert.match(successBlock, /Location: success\.toString\(\)/)

@@ -85,7 +85,7 @@ test('oauth nonce consumption rejects consent mismatches without consuming the v
   }
 })
 
-test('pending connection setup and nonce registration persist as one transition, and a currently-working connection is untouched until activation', async () => {
+test('pending connection setup and nonce registration persist as one transition; consumePendingConnectionSetup + finalizeConnection replace a currently-working connection only once both steps succeed', async () => {
   const { directory, path, store } = await fixture()
   try {
     const input = setupInput()
@@ -95,13 +95,17 @@ test('pending connection setup and nonce registration persist as one transition,
     await store.createPendingConnectionSetup(input)
     const restarted = new EncryptedStore(path, secret)
     await restarted.load()
-    assert.equal(restarted.get(input.userId, input.provider).requisitionId, 'req-previously-working', 'the working connection must not be overwritten before activation')
-    assert.equal(await restarted.activateConnection({
-      ...input,
-      now: Date.now(),
-      connectedAt: '2026-07-27T12:00:00.000Z',
-    }), true)
-    assert.equal(restarted.get(input.userId, input.provider).requisitionId, 'req-atomic', 'activation replaces the working connection with the newly-verified one')
+    assert.equal(restarted.get(input.userId, input.provider).requisitionId, 'req-previously-working', 'the working connection must not be overwritten before consumption')
+
+    const consumed = await restarted.consumePendingConnectionSetup({ ...input, now: Date.now() })
+    assert.equal(consumed?.requisitionId, 'req-atomic')
+    assert.equal(restarted.get(input.userId, input.provider).requisitionId, 'req-previously-working', 'consuming the nonce alone must not yet touch the working connection -- that is finalizeConnection\'s job, standing in for a provider completeCallback() step that has not run yet')
+
+    // The nonce is single-use: replay must fail even though finalizeConnection was never called.
+    assert.equal(await restarted.consumePendingConnectionSetup({ ...input, now: Date.now() }), null)
+
+    await restarted.finalizeConnection({ userId: input.userId, provider: input.provider, connection: consumed, connectedAt: '2026-07-27T12:00:00.000Z' })
+    assert.equal(restarted.get(input.userId, input.provider).requisitionId, 'req-atomic', 'finalization replaces the working connection with the newly-verified one')
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -116,39 +120,66 @@ test('failed pending setup persistence rolls back both the pending credential an
     await assert.rejects(() => store.createPendingConnectionSetup(input), /disk unavailable/)
     store.save = originalSave
     assert.equal(store.get(input.userId, input.provider), null)
-    assert.equal(await store.activateConnection({
-      ...input,
-      now: Date.now(),
-      connectedAt: '2026-07-27T12:00:00.000Z',
-    }), false)
+    assert.equal(await store.consumePendingConnectionSetup({ ...input, now: Date.now() }), null)
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
 })
 
-test('failed callback persistence leaves the pending nonce/credential retryable, and does not touch any existing working connection until it succeeds', async () => {
+test('finalizeConnection retries a transient write failure internally and still succeeds', async () => {
   const { directory, path, store } = await fixture()
+  try {
+    const input = setupInput()
+    await store.createPendingConnectionSetup(input)
+    const pending = await store.consumePendingConnectionSetup({ ...input, now: Date.now() })
+    assert.ok(pending)
+
+    let attempts = 0
+    const originalSave = store.save.bind(store)
+    store.save = async (...args) => {
+      attempts += 1
+      if (attempts < 2) throw new Error('disk unavailable')
+      return originalSave(...args)
+    }
+    await store.finalizeConnection({ userId: input.userId, provider: input.provider, connection: pending, connectedAt: '2026-07-27T12:00:00.000Z' })
+    store.save = originalSave
+
+    assert.ok(attempts >= 2, 'finalizeConnection should retry a transient failure before succeeding')
+    const restarted = new EncryptedStore(path, secret)
+    await restarted.load()
+    assert.equal(restarted.get(input.userId, input.provider).connectedAt, '2026-07-27T12:00:00.000Z')
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('a persistent finalizeConnection failure never touches a previously-working connection, and the already-consumed nonce cannot be reused for a silent retry', async () => {
+  const { directory, store } = await fixture()
   try {
     const input = setupInput()
     await store.set(input.userId, input.provider, { requisitionId: 'req-previously-working', connectedAt: '2026-07-01T00:00:00.000Z' })
     await store.createPendingConnectionSetup(input)
+    const pending = await store.consumePendingConnectionSetup({ ...input, now: Date.now() })
+    assert.ok(pending)
+
     const originalSave = store.save.bind(store)
     store.save = async () => { throw new Error('disk unavailable') }
-    await assert.rejects(() => store.activateConnection({
-      ...input,
-      now: Date.now(),
-      connectedAt: '2026-07-27T12:00:00.000Z',
-    }), /disk unavailable/)
+    await assert.rejects(
+      () => store.finalizeConnection({ userId: input.userId, provider: input.provider, connection: pending, connectedAt: '2026-07-27T12:00:00.000Z' }),
+      /disk unavailable/,
+    )
+    assert.equal(store.get(input.userId, input.provider).requisitionId, 'req-previously-working', 'a failed finalization must not have touched the still-working connection')
+
+    // mutate() persists unconditionally on every call, including a no-op
+    // lookup -- restore save() first so this checks the real question
+    // (is the nonce gone for good) rather than re-hitting the same
+    // still-broken disk.
     store.save = originalSave
-    assert.equal(store.get(input.userId, input.provider).requisitionId, 'req-previously-working', 'a failed activation attempt must not have touched the still-working connection')
-    assert.equal(await store.activateConnection({
-      ...input,
-      now: Date.now(),
-      connectedAt: '2026-07-27T12:01:00.000Z',
-    }), true)
-    const restarted = new EncryptedStore(path, secret)
-    await restarted.load()
-    assert.equal(restarted.get(input.userId, input.provider).connectedAt, '2026-07-27T12:01:00.000Z')
+    assert.equal(
+      await store.consumePendingConnectionSetup({ ...input, now: Date.now() }),
+      null,
+      'the nonce was already consumed by the first (ultimately-failed) attempt and cannot be reused -- the user must restart the connection attempt, same as any code-exchange OAuth flow',
+    )
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
