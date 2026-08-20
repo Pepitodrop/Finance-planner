@@ -87,9 +87,10 @@ export class PostgresStore {
   // Unlike createConnectionSetup (still used by Google Subscriptions, which
   // has no separate activation step), this never touches
   // connector_connections -- the pending credential lives only alongside
-  // its single-use nonce until activateConnection() verifies the provider
-  // callback. A currently-working connection (reconnect case) stays
-  // untouched if the user abandons or the callback never arrives.
+  // its single-use nonce until consumePendingConnectionSetup() + completeCallback()
+  // + finalizeConnection() verify the provider callback and promote it. A
+  // currently-working connection (reconnect case) stays untouched if the
+  // user abandons or the callback never arrives.
   async createPendingConnectionSetup(input) {
     await this.pool.query(`INSERT INTO oauth_nonces (nonce_hash, consent_id, user_id, provider, redirect_uri, expires_at, pending_payload)
       VALUES ($1,$2,$3,$4,$5,to_timestamp($6/1000.0),$7)

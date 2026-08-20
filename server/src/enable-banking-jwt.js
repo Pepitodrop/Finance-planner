@@ -24,31 +24,50 @@ export function isEnableBankingConfigured(env) {
 // File takes precedence when both are set -- matches the production-preferred
 // posture the env var names imply. Never includes key material in any thrown
 // error: only the config problem (missing/unreadable/malformed), never the PEM.
+//
+// Cached by config (file path, or the raw PEM content itself when no file is
+// set -- already resident in `env`, so this adds no new exposure): a sync()
+// call can invoke signEnableBankingJwt() dozens of times (once per account
+// balance fetch, once per transaction page), and re-running a blocking
+// readFileSync()+PEM-parse that many times on Node's single event-loop
+// thread was a real, self-inflicted latency/availability cost, not just
+// wasted CPU. The one capability this trades away is picking up a rotated
+// key file's new content without a process restart -- an accepted tradeoff
+// for an application-level credential that doesn't rotate live in practice.
+const resolvedKeyCache = new Map()
 function resolvePrivateKey(env) {
-  const source = env.ENABLE_BANKING_PRIVATE_KEY_FILE
+  const filePath = env.ENABLE_BANKING_PRIVATE_KEY_FILE
+  const cacheKey = filePath ? `file:${filePath}` : `raw:${env.ENABLE_BANKING_PRIVATE_KEY || ''}`
+  const cached = resolvedKeyCache.get(cacheKey)
+  if (cached) return cached
+
+  const source = filePath
     ? { label: 'ENABLE_BANKING_PRIVATE_KEY_FILE', pem: (() => {
         try {
-          return readFileSync(env.ENABLE_BANKING_PRIVATE_KEY_FILE, 'utf8')
+          return readFileSync(filePath, 'utf8')
         } catch {
           throw new EnableBankingConfigError('ENABLE_BANKING_PRIVATE_KEY_FILE could not be read.')
         }
       })() }
     : { label: 'ENABLE_BANKING_PRIVATE_KEY', pem: env.ENABLE_BANKING_PRIVATE_KEY }
   if (!source.pem) throw new EnableBankingConfigError('No Enable Banking private key is configured.')
+  let key
   try {
-    return createPrivateKey(source.pem)
+    key = createPrivateKey(source.pem)
   } catch {
     throw new EnableBankingConfigError(`${source.label} is not a valid private key.`)
   }
+  resolvedKeyCache.set(cacheKey, key)
+  return key
 }
 
 // RS256 by hand: header.payload signed with RSASSA-PKCS1-v1_5/SHA-256, which
 // is exactly what crypto.sign('RSA-SHA256', ...) produces against a plain RSA
 // key (not RSA-PSS) -- no jsonwebtoken/jwa dependency needed for this one
-// application-level JWT. No caching: signing is cheap synchronous crypto and
-// this is called at most once per request on a non-hot path (setup/sync/
-// disconnect), so a fresh signature per call avoids any stale-token-window
-// class of bug for negligible cost.
+// application-level JWT. The signature itself is always freshly computed per
+// call (only key *resolution* is cached, above) -- RSA signing is cheap
+// synchronous crypto, and a fresh iat/exp per call avoids any stale-token-
+// window class of bug for negligible cost.
 export function signEnableBankingJwt(env) {
   const applicationId = String(env.ENABLE_BANKING_APPLICATION_ID || '').trim()
   if (!applicationId) throw new EnableBankingConfigError('ENABLE_BANKING_APPLICATION_ID is not configured.')

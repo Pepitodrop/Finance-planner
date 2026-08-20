@@ -169,7 +169,10 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     if (acceptanceMode === 'institution-selector') { setConnections(ACCEPTANCE_CONNECTIONS); setSetupStep(1); setCategory('popular'); setSearchTerm(''); setSetupOpen(true); return }
     if (acceptanceMode === 'institution-search') { setConnections(ACCEPTANCE_CONNECTIONS); setSetupStep(1); setCategory('popular'); setSearchTerm('bank'); setSetupOpen(true); return }
     if (acceptanceMode === 'account-type') { setSelectedInstitutionId('ing'); setAccountType('checking'); setSetupStep(2); setSetupOpen(true); return }
-    if (acceptanceMode === 'bank-confirmation') { setSelectedInstitutionId('ing'); setResolvedProviderInstitution({ id: 'INGDDEFF_INGDDEFFXXX', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }); setSetupStep(3); setSetupOpen(true); return }
+    // 'ing' is an 'ais' institution -- bypassing chooseInstitution() here
+    // means resolvingProvider must be set explicitly too, or effectiveProvider()
+    // returns undefined and "Continue securely" silently does nothing.
+    if (acceptanceMode === 'bank-confirmation') { setSelectedInstitutionId('ing'); setResolvingProvider('gocardless'); setResolvedProviderInstitution({ id: 'INGDDEFF_INGDDEFFXXX', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }); setSetupStep(3); setSetupOpen(true); return }
     if (acceptanceMode === 'paypal-confirmation') { setSelectedInstitutionId('paypal'); setProviderStatus({ status: 'ready', providers: [{ id: 'paypal', displayName: 'PayPal', kind: 'wallet-account-information', available: true, configured: true, mode: 'owner' }] }); setSetupStep(3); setSetupOpen(true); return }
     if (acceptanceMode === 'checking') { setScreen('checking'); return }
     if (acceptanceMode === 'sync-selection') {

@@ -148,7 +148,16 @@ export function institutionAvailability(institution: Pick<Institution, 'provider
   if (providerStatus.status === 'loading') return { unavailable: true, reason: 'Checking availability…' }
   if (providerStatus.status === 'error') return { unavailable: true, reason: 'Availability could not be checked.' }
   if (institution.provider === 'ais') {
-    return resolveAisProvider(providerStatus) ? { unavailable: false } : { unavailable: true, reason: 'Bank connections are not available right now.' }
+    if (resolveAisProvider(providerStatus)) return { unavailable: false }
+    // Neither preferred provider resolved -- surface whichever one carries a
+    // specific, actionable descriptor.reason (the same field the generic
+    // branch below already prefers over its own default message) rather
+    // than always collapsing to the generic fallback, so a genuinely
+    // diagnosable cause (e.g. a specific config problem) isn't hidden.
+    const reason = providerStatus.status === 'ready'
+      ? AIS_PROVIDER_PREFERENCE.map((id) => providerStatus.providers.find((provider) => provider.id === id)?.reason).find(Boolean)
+      : undefined
+    return { unavailable: true, reason: reason || 'Bank connections are not available right now.' }
   }
   const descriptor = providerStatus.providers.find((provider) => provider.id === institution.provider)
   if (!descriptor) return { unavailable: true, reason: 'This provider is not available.' }

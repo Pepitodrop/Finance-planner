@@ -92,6 +92,22 @@ describe('institutionAvailability', () => {
     expect(institutionAvailability({ provider: 'ais' }, neitherAvailable)).toEqual({ unavailable: true, reason: 'Bank connections are not available right now.' })
   })
 
+  it('surfaces a specific descriptor reason for an unavailable "ais" institution when one exists, instead of always collapsing to the generic message', () => {
+    const withReason = readyStatus([
+      { ...ENABLEBANKING_READY, available: false, reason: 'Enable Banking application credentials are invalid.' },
+      { ...GOCARDLESS_READY, available: false },
+    ])
+    expect(institutionAvailability({ provider: 'ais' }, withReason)).toEqual({ unavailable: true, reason: 'Enable Banking application credentials are invalid.' })
+  })
+
+  it('prefers the preferred provider\'s reason over the fallback provider\'s when both carry one', () => {
+    const bothHaveReasons = readyStatus([
+      { ...ENABLEBANKING_READY, available: false, reason: 'Enable Banking reason' },
+      { ...GOCARDLESS_READY, available: false, reason: 'GoCardless reason' },
+    ])
+    expect(institutionAvailability({ provider: 'ais' }, bothHaveReasons)).toEqual({ unavailable: true, reason: 'Enable Banking reason' })
+  })
+
   it('marks an explicitly unavailable provider (finAPI) as unavailable with its reason, never as a normal selectable institution', () => {
     expect(institutionAvailability({ provider: 'finapi' }, ready)).toEqual({ unavailable: true, reason: 'finAPI adapter is not configured.' })
   })

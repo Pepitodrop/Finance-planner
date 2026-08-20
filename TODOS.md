@@ -87,6 +87,18 @@ to wire up one secret/URL.
 **Priority:** P2
 **Depends on:** None
 
+### Concurrent disconnect can be overwritten by an in-flight completeCallback()/finalizeConnection()
+
+**What:** The two-phase callback flow (`store.consumePendingConnectionSetup()` → `providerAdapter(provider).completeCallback()` → `store.finalizeConnection()`, in `server/src/server.js`'s callback route) burns the single-use nonce before the provider-side network exchange runs. If a user disconnects the same provider's existing connection (`DELETE /api/connectors/:provider`) while that exchange is still in flight, `finalizeConnection()`'s `INSERT ... ON CONFLICT (user_id, provider) DO UPDATE` can land after the disconnect and silently resurrect the connection the user just removed.
+
+**Why:** For GoCardless/PayPal this window was effectively the width of one local DB write (sub-millisecond) under the old single-step `activateConnection()`, since their entire credential is known at `start()` time. Enable Banking's `completeCallback()` (`server/src/providers.js`) added a real network call (`POST /sessions` to Enable Banking, bounded by `DEFAULT_TIMEOUT_MS` = 15s plus retries) between nonce consumption and finalization, meaningfully widening the race window for every provider that goes through the shared callback route, not just Enable Banking.
+
+**Context:** Found during the independent `/code-review` pass on PR #142 (2026-08-19/20), while auditing "callback replay protection" and "existing working connection preservation on failed reconnect" per the review's explicit checklist. Deliberately not fixed here to avoid scope creep on a review-driven follow-up pass — closing it properly needs either optimistic concurrency (a version/generation column on `connector_connections`, checked by `finalizeConnection()` before writing) or having disconnect ask `finalizeConnection()` to no-op if a disconnect landed after the nonce was consumed, and neither exists in this codebase's persistence layer today. Start by deciding whether a version column is worth adding to `connector_connections` for this alone, or whether disconnect should instead record a short-lived tombstone that `finalizeConnection()` checks.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** None
+
 ### Implement real per-merchant OAuth token exchange for PayPal partner mode
 
 **What:** `PayPalProvider.sync()` (`server/src/providers.js`) has no per-merchant PayPal token to read for partner-mode connections — it currently fails closed with an explicit error rather than the previous behavior of silently returning the deployment owner's own PayPal data to whichever user had a partner-mode connection stored. Partner mode's `start()` does send the user through PayPal's real Partner Referrals onboarding page, but nothing captures the resulting merchant-specific authorization grant afterward.

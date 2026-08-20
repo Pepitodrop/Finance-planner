@@ -211,7 +211,8 @@ async function start(provider, request, response) {
   const result = await adapter.start({ state, redirectUri: redirect.toString(), country, institutionId })
   // Pending, not yet live -- a currently-working connection for this
   // provider (reconnect case) must not be overwritten until the callback
-  // actually verifies. See activateConnection().
+  // route's consumePendingConnectionSetup() + completeCallback() +
+  // finalizeConnection() sequence actually verifies it.
   await store.createPendingConnectionSetup({
     userId: user,
     provider,
@@ -482,6 +483,15 @@ const server = createServer(async (request, response) => {
       try {
         await store.finalizeConnection({ userId: state.sub, provider, connection: completed, connectedAt: new Date().toISOString() })
       } catch {
+        // completeCallback() already succeeded -- for a provider like Enable
+        // Banking, a real session/consent now exists at their end with zero
+        // local trace of it. Best-effort ask the provider to revoke what it
+        // just created rather than leaving it permanently orphaned. Never
+        // lets a revoke failure change the error the user sees, and never
+        // throws (disconnect() implementations already never throw; the
+        // wrapper is defense-in-depth against a future adapter breaking
+        // that contract).
+        try { await providerAdapter(provider).disconnect(completed) } catch {}
         redirectWithError(state.redirectUri)
         return
       }

@@ -299,7 +299,7 @@ export async function gocardlessToken(env) {
 // Builds the address a provider redirects the browser to after consent --
 // always our own /api/connectors/callback route (never the raw client
 // redirectUri), so every provider's return is verified through the same
-// signed-state/nonce-consumption path (verifyState + activateConnection)
+// signed-state/nonce-consumption path (verifyState + consumePendingConnectionSetup)
 // instead of each adapter inventing its own return-detection contract.
 function callbackUrl(redirectUri, provider, state) {
   const callback = new URL('/api/connectors/callback', new URL(redirectUri).origin)
@@ -553,6 +553,12 @@ class EnableBankingProvider extends OpenBankingProvider {
     if (!institutionId) throw new HttpError(400, 'institution_required', 'Select a bank before continuing.')
     const decoded = decodeAspspId(institutionId)
     if (!decoded) throw new HttpError(400, 'invalid_institution', 'The selected institution is not currently available from Enable Banking.')
+    // Same bound the sibling /institutions listing route already applies to
+    // its own country param (see server.js) -- decoded.country comes straight
+    // from the client-supplied institutionId, and listAspsps() caches by
+    // country string, so an unvalidated value here would let an attacker grow
+    // institutionsCache with unbounded distinct keys.
+    if (!/^[A-Z]{2}$/.test(decoded.country)) throw new HttpError(400, 'invalid_institution', 'The selected institution is not currently available from Enable Banking.')
     const aspsps = await this.listAspsps(decoded.country || country)
     // Never guessed, never a [0] fallback -- the exact same anti-guessing
     // contract as GoCardlessProvider.start(): the picker's selection must
@@ -587,6 +593,13 @@ class EnableBankingProvider extends OpenBankingProvider {
     return {
       redirectUrl: response.url,
       credential: {
+        // Round-trips through server.js's connection() helper as
+        // stored.institutionId, exactly like GoCardlessProvider's
+        // resolvedInstitutionId -- without this, Reconnect (which resubmits
+        // the stored institutionId) has nothing to resubmit and start()
+        // rejects it with institution_required, making Reconnect
+        // unconditionally broken for every Enable Banking connection.
+        institutionId: encodeAspspId(match.name, match.country),
         aspspName: match.name,
         aspspCountry: match.country,
         authorizationId: response.authorization_id,
@@ -640,7 +653,8 @@ class EnableBankingProvider extends OpenBankingProvider {
     const seen = new Set()
     for (const account of credential.accounts ?? []) {
       const balances = await jsonFetch(`${EB_BASE}/accounts/${account.uid}/balances`, { headers: enableBankingHeaders(this.env) }, policy)
-      const balance = selectEnableBankingBalance(balances?.balances)
+      if (!Array.isArray(balances?.balances)) throw new Error('Enable Banking balance response is invalid.')
+      const balance = selectEnableBankingBalance(balances.balances)
       const type = await normalizeProviderAccountType({ cashAccountType: account.cashAccountType }, this.env, this.core)
       const balanceCents = await this.core.normalizeProviderAmount(balance)
       accounts.push({ externalId: account.uid, name: account.name || 'Bankkonto', type, balanceCents, currency: 'EUR' })

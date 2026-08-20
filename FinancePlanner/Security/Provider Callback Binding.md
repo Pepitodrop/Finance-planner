@@ -42,4 +42,10 @@ Also added: a distinguishable `authorization_denied` error from `completeCallbac
 
 **Runtime verified** (real Postgres, not mocked): `server/test/postgres-store.test.js` covers a working connection surviving a `completeCallback()`-equivalent failure, the nonce still being single-use even when `finalizeConnection` never runs, and `finalizeConnection`'s bounded retry actually retrying a transient failure before giving up.
 
-Related: [[Security Index]] · [[OAuth State and Nonce]] · [[Bank Connection Flow]] · [[Provider Status]] · [[Provider Institution Selection Contract]] · [[Enable Banking]]
+## Known gap, not fixed 2026-08-20: the split above widens a pre-existing concurrent-disconnect race
+
+Found during the independent `/code-review` pass on PR #142, auditing callback replay protection and reconnect-preservation specifically. The nonce is burned by `consumePendingConnectionSetup()` *before* `completeCallback()`'s network exchange runs — so a `DELETE /api/connectors/:provider` landing while that exchange is in flight can be silently overwritten when `finalizeConnection()`'s `INSERT ... ON CONFLICT DO UPDATE` completes afterward, resurrecting the connection the user just disconnected. This window already existed under the old single-step `activateConnection()` (one local DB write wide); the split above widens it to a full network round-trip for any provider using `completeCallback()`, in practice only Enable Banking today.
+
+Deliberately not fixed here — needs either an optimistic-concurrency version column on `connector_connections` or a disconnect-tombstone `finalizeConnection()` checks before writing, neither of which this persistence layer has today. See [[Known Issues and Limitations]] and the TODOS.md "Connections" section.
+
+Related: [[Security Index]] · [[OAuth State and Nonce]] · [[Bank Connection Flow]] · [[Provider Status]] · [[Provider Institution Selection Contract]] · [[Enable Banking]] · [[Known Issues and Limitations]]

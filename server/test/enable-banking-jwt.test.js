@@ -70,6 +70,42 @@ test('reads the private key from ENABLE_BANKING_PRIVATE_KEY_FILE when set', () =
   }
 })
 
+test('caches the resolved private key by file path -- a second call succeeds even after the file is deleted, proving it does not re-read disk every call', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'eb-key-cache-'))
+  const keyPath = join(dir, 'key.pem')
+  try {
+    writeFileSync(keyPath, privateKey, 'utf8')
+    const env = { ENABLE_BANKING_APPLICATION_ID: 'app-cache-test', ENABLE_BANKING_PRIVATE_KEY_FILE: keyPath }
+    const first = signEnableBankingJwt(env)
+    assert.equal(verifiesAgainst(first), true)
+
+    rmSync(keyPath, { force: true })
+    const second = signEnableBankingJwt(env)
+    assert.equal(verifiesAgainst(second), true, 'a cached key resolution must let signing keep working after the on-disk file is gone')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a distinct file path is resolved independently, never reusing another path\'s cached key', () => {
+  const other = generateKeyPairSync('rsa', { modulusLength: 2048, publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } })
+  const dir = mkdtempSync(join(tmpdir(), 'eb-key-cache2-'))
+  const pathA = join(dir, 'a.pem')
+  const pathB = join(dir, 'b.pem')
+  try {
+    writeFileSync(pathA, privateKey, 'utf8')
+    writeFileSync(pathB, other.privateKey, 'utf8')
+    const jwtA = signEnableBankingJwt({ ENABLE_BANKING_APPLICATION_ID: 'app-a', ENABLE_BANKING_PRIVATE_KEY_FILE: pathA })
+    const jwtB = signEnableBankingJwt({ ENABLE_BANKING_APPLICATION_ID: 'app-b', ENABLE_BANKING_PRIVATE_KEY_FILE: pathB })
+    assert.equal(verifiesAgainst(jwtA, publicKey), true)
+    assert.equal(verifiesAgainst(jwtB, other.publicKey), true)
+    assert.equal(verifiesAgainst(jwtA, other.publicKey), false)
+    assert.equal(verifiesAgainst(jwtB, publicKey), false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('ENABLE_BANKING_PRIVATE_KEY_FILE takes precedence over ENABLE_BANKING_PRIVATE_KEY when both are set', () => {
   const other = generateKeyPairSync('rsa', { modulusLength: 2048, publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } })
   const dir = mkdtempSync(join(tmpdir(), 'eb-key-'))

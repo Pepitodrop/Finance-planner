@@ -194,9 +194,10 @@ export class EncryptedStore {
   // Unlike createConnectionSetup (still used by Google Subscriptions, which
   // has no separate activation step), this never touches
   // data.connections -- the pending credential lives only alongside its
-  // single-use nonce until activateConnection() verifies the provider
-  // callback. A currently-working connection (reconnect case) stays
-  // untouched if the user abandons or the callback never arrives.
+  // single-use nonce until consumePendingConnectionSetup() + completeCallback()
+  // + finalizeConnection() verify the provider callback and promote it. A
+  // currently-working connection (reconnect case) stays untouched if the
+  // user abandons or the callback never arrives.
   async createPendingConnectionSetup(input) {
     return this.mutate(() => {
       this.data.oauthNonces[nonceKey(input.nonce)] = {

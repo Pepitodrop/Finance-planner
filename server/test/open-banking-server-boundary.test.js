@@ -107,7 +107,7 @@ test('the provider callback route never activates a connection until finalizeCon
   assert.ok(finalizeCall > completeCallbackCall, 'finalizeConnection must only run after completeCallback() has succeeded')
   const finalizeCatch = callbackRoute.indexOf('} catch {', finalizeCall)
   assert.ok(finalizeCatch > finalizeCall)
-  assert.match(callbackRoute.slice(finalizeCatch, finalizeCatch + 200), /redirectWithError\(state\.redirectUri\)/)
+  assert.match(callbackRoute.slice(finalizeCatch, finalizeCatch + 800), /redirectWithError\(state\.redirectUri\)/)
   // The success redirect must come strictly after finalizeConnection, never before it.
   const successRedirect = callbackRoute.indexOf('const success = new URL(state.redirectUri)')
   assert.ok(successRedirect > finalizeCall)

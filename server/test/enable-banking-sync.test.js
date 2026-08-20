@@ -140,6 +140,32 @@ test('defaults to a zero balance (never throws) when no EUR balance is present a
   assert.equal(result.accounts[0].balanceCents, 0)
 }))
 
+test('a malformed balance response (balances not an array) throws a clean domain error, not a raw TypeError', () => withRestoredFetch(async () => {
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({ status: 'AUTHORIZED' }), { status: 200 })
+    if (url.includes('/balances')) return new Response(JSON.stringify({ balances: { amount: '1.00' } }), { status: 200 })
+    if (url.includes('/transactions')) return new Response(JSON.stringify({ transactions: [] }), { status: 200 })
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  await assert.rejects(adapter.sync(CREDENTIAL), /balance response is invalid/)
+}))
+
+test('a missing balances field entirely also throws the same clean domain error', () => withRestoredFetch(async () => {
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({ status: 'AUTHORIZED' }), { status: 200 })
+    if (url.includes('/balances')) return new Response(JSON.stringify({}), { status: 200 })
+    if (url.includes('/transactions')) return new Response(JSON.stringify({ transactions: [] }), { status: 200 })
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  await assert.rejects(adapter.sync(CREDENTIAL), /balance response is invalid/)
+}))
+
 test('maps booked and pending transactions from the BOOK/PEND status field', () => withRestoredFetch(async () => {
   globalThis.fetch = async (input) => {
     const url = String(input)

@@ -48,6 +48,22 @@ test('validates a user-selected ASPSP against the live directory and requests re
   assert.equal(result.credential.aspspName, 'ING-DiBa')
   assert.equal(result.credential.aspspCountry, 'DE')
   assert.equal(result.credential.authorizationId, 'auth-1')
+  assert.equal(result.credential.institutionId, 'DE:ING-DiBa', 'the credential must carry the resolved institutionId so a later Reconnect has something to resubmit')
+}))
+
+test('Reconnect round-trip: the institutionId returned from the first start() call resubmits successfully on a second start() call, exactly like the real reconnect flow', () => withRestoredFetch(async () => {
+  mockAuthFetch()
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  const first = await adapter.start({ state: 'state-1', redirectUri: 'https://finance.example.com/connections', country: 'DE', institutionId: 'DE:ING-DiBa' })
+  assert.ok(first.credential.institutionId, 'start() must return an institutionId to store on the connection')
+
+  // server.js's connection() helper exposes exactly this stored field, and
+  // ConnectionsPage.tsx's onReconnect resubmits it verbatim -- simulate that
+  // round-trip precisely, not just check the field is non-empty.
+  const reconnect = await adapter.start({ state: 'state-2', redirectUri: 'https://finance.example.com/connections', country: 'DE', institutionId: first.credential.institutionId })
+  assert.equal(reconnect.credential.institutionId, first.credential.institutionId)
+  assert.equal(reconnect.credential.aspspName, 'ING-DiBa')
 }))
 
 test('sends our own callback route as redirect_url, never the raw client page URL, carrying the correct provider and state', () => withRestoredFetch(async () => {
