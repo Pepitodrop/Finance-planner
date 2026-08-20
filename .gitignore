@@ -12,6 +12,11 @@ server/*.env
 .gstack/
 public/vendor/transformers-3.8.1.min.js
 
+# Provider private key material (e.g. Enable Banking's RSA key) must never be
+# committed. deploy/enable-banking-private-key.placeholder is intentionally
+# not a .pem file and stays tracked -- it holds no key material.
+*.pem
+
 # Android build output and local signing material.
 android/.gradle/
 android/local.properties

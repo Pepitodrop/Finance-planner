@@ -87,9 +87,10 @@ export class PostgresStore {
   // Unlike createConnectionSetup (still used by Google Subscriptions, which
   // has no separate activation step), this never touches
   // connector_connections -- the pending credential lives only alongside
-  // its single-use nonce until activateConnection() verifies the provider
-  // callback. A currently-working connection (reconnect case) stays
-  // untouched if the user abandons or the callback never arrives.
+  // its single-use nonce until consumePendingConnectionSetup() + completeCallback()
+  // + finalizeConnection() verify the provider callback and promote it. A
+  // currently-working connection (reconnect case) stays untouched if the
+  // user abandons or the callback never arrives.
   async createPendingConnectionSetup(input) {
     await this.pool.query(`INSERT INTO oauth_nonces (nonce_hash, consent_id, user_id, provider, redirect_uri, expires_at, pending_payload)
       VALUES ($1,$2,$3,$4,$5,to_timestamp($6/1000.0),$7)
@@ -107,26 +108,56 @@ export class PostgresStore {
     return result.rowCount === 1
   }
 
-  async activateConnection(input) {
+  // Consumes the single-use nonce and returns the pending credential it
+  // guarded, without yet promoting it into connector_connections -- some
+  // providers (Enable Banking) still need to complete a server-side exchange
+  // (an authorization code -> session call) before the connection is safe to
+  // activate, and that exchange is a network call that must never happen
+  // inside an open DB transaction. Stays a single local transaction (no
+  // network I/O) so nonce consumption itself remains atomic and replay-proof
+  // -- unchanged in substance from the single-step activateConnection() this
+  // replaces. See finalizeConnection() for the second, provider-independent
+  // step, and server.js's callback route for how the two are sequenced
+  // around providerAdapter(provider).completeCallback().
+  async consumePendingConnectionSetup(input) {
     const client = await this.pool.connect()
     try {
       await client.query('BEGIN')
-      // The pending credential is consumed atomically with the nonce --
-      // there is no separate connector_connections row to race with a
-      // concurrent reconnect/disconnect until this transaction commits.
       const nonce = await client.query('DELETE FROM oauth_nonces WHERE nonce_hash=$1 AND consent_id=$2 AND user_id=$3 AND provider=$4 AND redirect_uri=$5 AND expires_at > to_timestamp($6/1000.0) RETURNING pending_payload', [nonceKey(input.nonce), input.consentId, input.userId, input.provider, input.redirectUri, input.now])
-      if (!nonce.rowCount || !nonce.rows[0].pending_payload) { await client.query('ROLLBACK'); return false }
+      if (!nonce.rowCount || !nonce.rows[0].pending_payload) { await client.query('ROLLBACK'); return null }
       const connection = this.decode(nonce.rows[0].pending_payload)
-      if (connection.consentId !== input.consentId || connection.redirectUri !== input.redirectUri) { await client.query('ROLLBACK'); return false }
-      await client.query(`INSERT INTO connector_connections (user_id, provider, encrypted_payload) VALUES ($1,$2,$3)
-        ON CONFLICT (user_id, provider) DO UPDATE SET encrypted_payload=EXCLUDED.encrypted_payload, updated_at=now()`, [input.userId, input.provider, this.encode({ ...connection, connectedAt: input.connectedAt })])
+      if (connection.consentId !== input.consentId || connection.redirectUri !== input.redirectUri) { await client.query('ROLLBACK'); return null }
       await client.query('COMMIT')
-      return true
+      return connection
     } catch (error) {
       await client.query('ROLLBACK')
       throw error
     } finally {
       client.release()
+    }
+  }
+
+  // Provider-independent: promotes an already-verified connection (the
+  // pending credential, patched with whatever completeCallback() returned)
+  // into connector_connections. Never called until the nonce has been
+  // consumed AND the provider callback has completed successfully -- by that
+  // point a transient failure here is a worse outcome than one step earlier
+  // (for a provider like Enable Banking, the provider-side session already
+  // exists with zero local trace of it), so this gets a small bounded retry
+  // for a local DB write rather than giving up on the first error.
+  async finalizeConnection(input) {
+    const write = () => this.pool.query(`INSERT INTO connector_connections (user_id, provider, encrypted_payload) VALUES ($1,$2,$3)
+      ON CONFLICT (user_id, provider) DO UPDATE SET encrypted_payload=EXCLUDED.encrypted_payload, updated_at=now()`,
+      [input.userId, input.provider, this.encode({ ...input.connection, connectedAt: input.connectedAt })])
+    const attempts = 3
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        await write()
+        return
+      } catch (error) {
+        if (attempt === attempts) throw error
+        await new Promise((resolve) => setTimeout(resolve, 100 * attempt))
+      }
     }
   }
 

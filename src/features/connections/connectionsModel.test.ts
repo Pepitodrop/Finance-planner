@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ConnectorConnection, ProviderDescriptor } from '../../connectors'
 import {
+  AIS_PROVIDER_PREFERENCE,
   connectionAttentionReason,
   connectionNeedsAttention,
   defaultAccountTypeForInstitution,
@@ -10,20 +11,58 @@ import {
   nextSetupStepAfterInstitution,
   previousSetupStepFromConfirmation,
   providerDescriptorFor,
+  resolveAisProvider,
   summarizeAccountSelection,
   validateManualAccount,
   type ProviderStatus,
 } from './connectionsModel'
 
+function readyStatus(providers: ProviderDescriptor[]): ProviderStatus { return { status: 'ready', providers } }
+
+const ENABLEBANKING_READY: ProviderDescriptor = { id: 'enablebanking', displayName: 'Bank connection', kind: 'psd2-account-information', available: true, configured: true }
+const GOCARDLESS_READY: ProviderDescriptor = { id: 'gocardless', displayName: 'Bank (GoCardless)', kind: 'psd2-account-information', available: true, configured: true }
+const FINAPI_UNAVAILABLE: ProviderDescriptor = { id: 'finapi', displayName: 'Bank (finAPI)', kind: 'unavailable', available: false, configured: false, reason: 'finAPI adapter is not configured.' }
+const PAYPAL_UNCONFIGURED: ProviderDescriptor = { id: 'paypal', displayName: 'PayPal', kind: 'wallet-account-information', available: true, configured: false }
+
+describe('resolveAisProvider', () => {
+  it('prefers Enable Banking when both Enable Banking and GoCardless are available and configured', () => {
+    expect(resolveAisProvider(readyStatus([ENABLEBANKING_READY, GOCARDLESS_READY]))).toBe('enablebanking')
+  })
+
+  it('falls back to GoCardless when Enable Banking is unconfigured', () => {
+    expect(resolveAisProvider(readyStatus([{ ...ENABLEBANKING_READY, configured: false }, GOCARDLESS_READY]))).toBe('gocardless')
+  })
+
+  it('falls back to GoCardless when Enable Banking is unavailable', () => {
+    expect(resolveAisProvider(readyStatus([{ ...ENABLEBANKING_READY, available: false }, GOCARDLESS_READY]))).toBe('gocardless')
+  })
+
+  it('falls back to GoCardless when Enable Banking is entirely missing from the response', () => {
+    expect(resolveAisProvider(readyStatus([GOCARDLESS_READY]))).toBe('gocardless')
+  })
+
+  it('returns null when neither AIS provider is available -- never guesses, never silently uses PayPal/finAPI', () => {
+    expect(resolveAisProvider(readyStatus([FINAPI_UNAVAILABLE, PAYPAL_UNCONFIGURED]))).toBeNull()
+  })
+
+  it('returns null while status is loading, never optimistically resolving a provider', () => {
+    expect(resolveAisProvider({ status: 'loading' })).toBeNull()
+  })
+
+  it('returns null when status failed to load', () => {
+    expect(resolveAisProvider({ status: 'error' })).toBeNull()
+  })
+
+  it('always resolves in the same fixed preference order regardless of array order in the response', () => {
+    expect(resolveAisProvider(readyStatus([GOCARDLESS_READY, ENABLEBANKING_READY]))).toBe('enablebanking')
+    expect(AIS_PROVIDER_PREFERENCE).toEqual(['enablebanking', 'gocardless'])
+  })
+})
+
 describe('institutionAvailability', () => {
   const loading: ProviderStatus = { status: 'loading' }
   const errored: ProviderStatus = { status: 'error' }
-  const providers: ProviderDescriptor[] = [
-    { id: 'gocardless', displayName: 'Bank (GoCardless)', kind: 'psd2-account-information', available: true, configured: true },
-    { id: 'finapi', displayName: 'Bank (finAPI)', kind: 'unavailable', available: false, configured: false, reason: 'finAPI adapter is not configured.' },
-    { id: 'paypal', displayName: 'PayPal', kind: 'wallet-account-information', available: true, configured: false },
-  ]
-  const ready: ProviderStatus = { status: 'ready', providers }
+  const ready: ProviderStatus = readyStatus([ENABLEBANKING_READY, GOCARDLESS_READY, FINAPI_UNAVAILABLE, PAYPAL_UNCONFIGURED])
 
   it('is always available for manual institutions regardless of provider status', () => {
     expect(institutionAvailability({ provider: 'manual' }, loading).unavailable).toBe(false)
@@ -31,16 +70,42 @@ describe('institutionAvailability', () => {
     expect(institutionAvailability({ provider: 'manual' }, ready).unavailable).toBe(false)
   })
 
-  it('fails closed for an external provider while status is loading, never optimistically available', () => {
-    expect(institutionAvailability({ provider: 'gocardless' }, loading)).toEqual({ unavailable: true, reason: 'Checking availability…' })
+  it('fails closed for an "ais" (bank) institution while status is loading, never optimistically available', () => {
+    expect(institutionAvailability({ provider: 'ais' }, loading)).toEqual({ unavailable: true, reason: 'Checking availability…' })
   })
 
-  it('fails closed for an external provider when status failed to load', () => {
-    expect(institutionAvailability({ provider: 'gocardless' }, errored)).toEqual({ unavailable: true, reason: 'Availability could not be checked.' })
+  it('fails closed for an "ais" institution when status failed to load', () => {
+    expect(institutionAvailability({ provider: 'ais' }, errored)).toEqual({ unavailable: true, reason: 'Availability could not be checked.' })
   })
 
-  it('fails closed when a successful response is missing a descriptor for the provider (never defaults to available)', () => {
-    expect(institutionAvailability({ provider: 'gocardless' }, { status: 'ready', providers: [] })).toEqual({ unavailable: true, reason: 'This provider is not available.' })
+  it('is available once Enable Banking resolves', () => {
+    expect(institutionAvailability({ provider: 'ais' }, ready)).toEqual({ unavailable: false })
+  })
+
+  it('is available via the GoCardless fallback when Enable Banking alone is unusable', () => {
+    const fallbackOnly = readyStatus([{ ...ENABLEBANKING_READY, configured: false }, GOCARDLESS_READY])
+    expect(institutionAvailability({ provider: 'ais' }, fallbackOnly)).toEqual({ unavailable: false })
+  })
+
+  it('marks an "ais" institution unavailable, never defaulting to available, when neither AIS provider resolves', () => {
+    const neitherAvailable = readyStatus([{ ...ENABLEBANKING_READY, available: false }, { ...GOCARDLESS_READY, available: false }])
+    expect(institutionAvailability({ provider: 'ais' }, neitherAvailable)).toEqual({ unavailable: true, reason: 'Bank connections are not available right now.' })
+  })
+
+  it('surfaces a specific descriptor reason for an unavailable "ais" institution when one exists, instead of always collapsing to the generic message', () => {
+    const withReason = readyStatus([
+      { ...ENABLEBANKING_READY, available: false, reason: 'Enable Banking application credentials are invalid.' },
+      { ...GOCARDLESS_READY, available: false },
+    ])
+    expect(institutionAvailability({ provider: 'ais' }, withReason)).toEqual({ unavailable: true, reason: 'Enable Banking application credentials are invalid.' })
+  })
+
+  it('prefers the preferred provider\'s reason over the fallback provider\'s when both carry one', () => {
+    const bothHaveReasons = readyStatus([
+      { ...ENABLEBANKING_READY, available: false, reason: 'Enable Banking reason' },
+      { ...GOCARDLESS_READY, available: false, reason: 'GoCardless reason' },
+    ])
+    expect(institutionAvailability({ provider: 'ais' }, bothHaveReasons)).toEqual({ unavailable: true, reason: 'Enable Banking reason' })
   })
 
   it('marks an explicitly unavailable provider (finAPI) as unavailable with its reason, never as a normal selectable institution', () => {
@@ -49,10 +114,6 @@ describe('institutionAvailability', () => {
 
   it('marks an available-but-unconfigured provider as unavailable', () => {
     expect(institutionAvailability({ provider: 'paypal' }, ready)).toEqual({ unavailable: true, reason: 'PayPal is not configured yet.' })
-  })
-
-  it('is available only once status is ready and its provider reports both available and configured', () => {
-    expect(institutionAvailability({ provider: 'gocardless' }, ready)).toEqual({ unavailable: false })
   })
 })
 

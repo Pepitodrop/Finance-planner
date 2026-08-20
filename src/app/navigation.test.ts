@@ -21,6 +21,14 @@ describe('initialTabFromSearch', () => {
     expect(initialTabFromSearch('?provider=gocardless')).toBe('connections')
   })
 
+  it('boots into connections for an Enable Banking success-redirect', () => {
+    expect(initialTabFromSearch('?provider=enablebanking')).toBe('connections')
+  })
+
+  it('boots into connections for a provider-denied authorization return', () => {
+    expect(initialTabFromSearch('?error=access_denied&error_description=denied')).toBe('connections')
+  })
+
   it('boots into connections for a PayPal return', () => {
     expect(initialTabFromSearch('?provider=paypal')).toBe('connections')
   })

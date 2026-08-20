@@ -94,6 +94,6 @@ export const MORE_DESTINATION_GROUPS: readonly MoreDestinationGroup[] = MORE_GRO
 // ConnectionsPage's own return-detection effect never mounts to see it.
 export function initialTabFromSearch(search: string): DestinationId {
   if (search.includes('provider=google-subscriptions')) return 'subscriptions'
-  if (search.includes('provider=gocardless') || search.includes('provider=paypal') || search.includes('error=invalid_state')) return 'connections'
+  if (search.includes('provider=enablebanking') || search.includes('provider=gocardless') || search.includes('provider=paypal') || search.includes('error=invalid_state') || search.includes('error=access_denied')) return 'connections'
   return 'dashboard'
 }

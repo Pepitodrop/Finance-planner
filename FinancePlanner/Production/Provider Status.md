@@ -10,7 +10,23 @@ For first-party internal flows with no external provider (for example Finance Pl
 
 ---
 
-## GoCardless (bank data, PSD2 AISP)
+## Enable Banking (bank data, AIS) — preferred provider
+
+Implementation: **implemented** (real Enable Banking API client, `server/src/providers.js` `EnableBankingProvider`, `server/src/enable-banking-jwt.js`)
+Configuration: **optional** (requires `ENABLE_BANKING_APPLICATION_ID` + `ENABLE_BANKING_PRIVATE_KEY_FILE` or `ENABLE_BANKING_PRIVATE_KEY`)
+Provider-dependent: yes
+Runtime verified: **no** — no dated execution evidence, no Enable Banking sandbox credentials configured anywhere in this environment
+Production verified: **no evidence found**
+Last evidence: **evidence checked 2026-08-20** — implementation added this session, verified against current official Enable Banking docs (`enablebanking.com/docs/api/quick-start/`, `/docs/api/reference/`) at implementation time, not from memory. Every server-side test mocks `fetch`; none has ever reached the real Enable Banking API.
+Current limitations: same class of gap as GoCardless below — no completed end-to-end consent→sync→disconnect cycle evidenced against a live sandbox. Requires Control Panel setup (sandbox application, allowed callback URL `{APP_ORIGIN}/api/connectors/callback`, application id, RSA private key) before any real verification can begin — see [[Enable Banking]].
+Architecture note (2026-08-20): implementing Enable Banking required generalizing PR #138's callback contract — `OpenBankingProvider` gained a `completeCallback()` lifecycle step (a no-op pass-through for GoCardless/PayPal) because Enable Banking's session isn't known until after a server-side code exchange that happens *after* the callback lands, and `activateConnection()` was split into `consumePendingConnectionSetup()` + `finalizeConnection()` so that exchange's network call never happens inside an open DB transaction. This is a structural change to the callback path all three bank/wallet providers now share; see [[Provider Callback Binding]] for why none of its existing guarantees (atomic single-use nonce, working-connection-preserved-until-verified) were weakened by the split.
+Confirmed during implementation (2026-08-20): GnuCOBOL's `VALIDATE-PROVIDER-CONSENT`, `NORMALIZE-PROVIDER-ACCOUNT-TYPE`, and `NORMALIZE-PROVIDER-AMOUNT` COBOL operations were already provider-agnostic where it mattered (a generic non-`gocardless` status-mapping branch already existed) — Enable Banking required zero COBOL source changes. Read directly from `core/cobol/banking/banking-core.cob` before relying on this, not inferred.
+Deployment wiring (added 2026-08-20): **implemented, not yet runtime verified**. `compose.yaml`'s connector service now sources `ENABLE_BANKING_APPLICATION_ID` from the host environment and bind-mounts the RSA private key read-only from `ENABLE_BANKING_PRIVATE_KEY_HOST_FILE` (defaulting to a committed, non-secret placeholder so deployments without Enable Banking still start cleanly). Verified with `docker compose config`/`create` in both the unconfigured and dummy-key-configured cases; actual container boot with the real key was not exercised — see [[Enable Banking]] for the full verification detail.
+Relevant code/docs: `server/src/providers.js`, `server/src/enable-banking-jwt.js`, `server/migrations/009_enable_banking_provider.sql`, `.env.example`, `compose.yaml`
+
+---
+
+## GoCardless (bank data, PSD2 AISP) — fallback provider
 
 Implementation: **implemented** (real GoCardless Bank Account Data API client, `server/src/providers.js` `GoCardlessProvider`)
 Configuration: **optional** (requires `GOCARDLESS_SECRET_ID`/`GOCARDLESS_SECRET_KEY`)
@@ -24,6 +40,7 @@ Fixed (code-correctness, not new runtime evidence) 2026-08-18: disconnect previo
 Fixed (code-correctness, not new runtime evidence) 2026-08-18: the requisition's `redirect` field previously carried the raw client page URL instead of `/api/connectors/callback`, making the callback route's nonce-consumption/replay-protection dead code for GoCardless — see [[Provider Callback Binding]] for the full fix and [[Provider Institution Selection Contract]] for the security contract this restores.
 Known limitation (not fixed, documented 2026-08-18): disconnect's `store.remove()` runs unconditionally even when provider revocation fails, so a transient GoCardless outage during disconnect permanently loses the local `requisitionId` needed to ever retry the revocation — see the TODOS.md "Connections" section entry. The consent stays live at GoCardless until it naturally expires; there is no automated or manual retry path today.
 Fixed (code-correctness, runtime-verified against real Postgres, not against live GoCardless) 2026-08-18: reconnect always failed with `institution_required` (empty context submitted); a healthy connection had no Disconnect path in the UI at all; and `createConnectionSetup` unconditionally overwrote a working connection the instant any new setup began, losing it permanently on an abandoned reconnect. All three found by Codex adversarial review, independently verified, fixed — see [[Bank Connections]] and [[Provider Callback Binding]].
+Role change (not a runtime-evidence change) 2026-08-20: GoCardless is now the **fallback** AIS provider — [[Enable Banking]] is preferred when configured and offers the selected bank. `GoCardlessProvider` itself is functionally unchanged; it now implements the shared `completeCallback()` lifecycle method as a no-op pass-through (added to support Enable Banking's server-side code exchange) and is promoted into `connector_connections` via the new `finalizeConnection()` split of `activateConnection()` — behaviorally identical to before, runtime-verified against real Postgres (`server/test/postgres-store.test.js`), not against live GoCardless. See [[Provider Callback Binding]] and [[Bank Connections]] for the full mechanism.
 Relevant code/docs: `server/src/providers.js`, `.github/workflows/runtime-canaries.yml`, `scripts/provider-runtime-canary.mjs`, `docs/OPEN_BANKING_ARCHITECTURE.md`, `docs/issue-105-provider-setup.md`, `docs/issue-105-live-verification.md`, `docs/bank-connection-production.md`, `docs/bank-production-runbook.md`
 
 ---
@@ -124,4 +141,4 @@ Relevant code/docs: `src/aiModels.ts`, `README.md` ("AI architecture")
 
 [[Providers Index]] mirrors this note's verification table as individually-linkable atomic nodes (one per provider, each with its own implementation/config/test/verification-state breakdown) so a specific provider can be reached directly from [[Pages Index]], [[Flows Index]], or [[Security Index]] without returning here first.
 
-Related: [[Authentication]], [[Bank Connections]], [[PayPal]], [[AI System]], [[Known Issues and Limitations]], [[Rejected Approaches]], [[Providers Index]], [[Provider Callback Binding]], [[Bank Disconnect Flow]]
+Related: [[Authentication]], [[Bank Connections]], [[Enable Banking]], [[PayPal]], [[AI System]], [[Known Issues and Limitations]], [[Rejected Approaches]], [[Providers Index]], [[Provider Callback Binding]], [[Bank Disconnect Flow]]

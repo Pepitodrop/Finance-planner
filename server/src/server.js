@@ -68,6 +68,7 @@ const SYNC_REPLAY_TTL_MS = 2 * 60_000
 // pre-approved code mapped to pre-approved text.
 const CALLBACK_ERROR_COPY = Object.freeze({
   invalid_state: 'This connection could not be completed. It may have expired or already been used.',
+  access_denied: 'This connection could not be completed. The provider reported that authorization was not granted.',
 })
 
 function securityHeaders(contentType = 'application/json; charset=utf-8') {
@@ -210,7 +211,8 @@ async function start(provider, request, response) {
   const result = await adapter.start({ state, redirectUri: redirect.toString(), country, institutionId })
   // Pending, not yet live -- a currently-working connection for this
   // provider (reconnect case) must not be overwritten until the callback
-  // actually verifies. See activateConnection().
+  // route's consumePendingConnectionSetup() + completeCallback() +
+  // finalizeConnection() sequence actually verifies it.
   await store.createPendingConnectionSetup({
     userId: user,
     provider,
@@ -423,10 +425,10 @@ const server = createServer(async (request, response) => {
       // cryptographically verified (state parsed successfully); otherwise fall
       // back to the app origin.
       const provider = String(url.searchParams.get('provider') || '')
-      const redirectWithError = (target) => {
+      const redirectWithError = (target, errorCode = 'invalid_state') => {
         const location = new URL(target)
-        location.searchParams.set('error', 'invalid_state')
-        location.searchParams.set('error_description', CALLBACK_ERROR_COPY.invalid_state)
+        location.searchParams.set('error', errorCode)
+        location.searchParams.set('error_description', CALLBACK_ERROR_COPY[errorCode] || CALLBACK_ERROR_COPY.invalid_state)
         response.writeHead(302, { Location: location.toString(), 'Cache-Control': 'no-store', 'X-Request-ID': id })
         response.end()
       }
@@ -442,18 +444,54 @@ const server = createServer(async (request, response) => {
         redirectWithError(origin)
         return
       }
-      let activated
+      // Two provider-agnostic steps, never one -- see providers.js's
+      // completeCallback() doc comment and the postgres-store.js/
+      // crypto-store.js consumePendingConnectionSetup()/finalizeConnection()
+      // doc comments for the full reasoning. The nonce is consumed first
+      // (single local operation, still atomic and replay-proof); only once
+      // that succeeds AND the provider's own completion step succeeds does
+      // the connection get promoted into the live connector_connections
+      // record. No provider-specific branching lives here -- every provider
+      // implements the same completeCallback() contract (a pass-through for
+      // GoCardless/PayPal, a real code-for-session exchange for Enable
+      // Banking).
+      let pending
       try {
-        activated = await store.activateConnection({ nonce: state.nonce, consentId: state.consentId, userId: state.sub, provider, redirectUri: state.redirectUri, now: Date.now(), connectedAt: new Date().toISOString() })
+        pending = await store.consumePendingConnectionSetup({ nonce: state.nonce, consentId: state.consentId, userId: state.sub, provider, redirectUri: state.redirectUri, now: Date.now() })
       } catch {
-        // A DB error or a corrupted pending_payload must still redirect --
-        // state.redirectUri is already cryptographically verified above, so
-        // this is the same safe fallback as an outright activation failure,
-        // not the raw-JSON path the outer catch would otherwise produce.
         redirectWithError(state.redirectUri)
         return
       }
-      if (!activated) {
+      if (!pending) {
+        redirectWithError(state.redirectUri)
+        return
+      }
+      let completed
+      try {
+        completed = await providerAdapter(provider).completeCallback({ code: url.searchParams.get('code'), pending })
+      } catch (error) {
+        // The nonce is already burned and any existing working connection
+        // (reconnect case) is untouched -- this connection attempt simply
+        // never gets finalized. Distinguish "the user declined at the
+        // provider" (authorization_denied, an honest and distinct message)
+        // from every other failure (network error, malformed response,
+        // rejected code -- the generic copy), but never reflect the raw
+        // provider/error text itself.
+        redirectWithError(state.redirectUri, error?.code === 'authorization_denied' ? 'access_denied' : 'invalid_state')
+        return
+      }
+      try {
+        await store.finalizeConnection({ userId: state.sub, provider, connection: completed, connectedAt: new Date().toISOString() })
+      } catch {
+        // completeCallback() already succeeded -- for a provider like Enable
+        // Banking, a real session/consent now exists at their end with zero
+        // local trace of it. Best-effort ask the provider to revoke what it
+        // just created rather than leaving it permanently orphaned. Never
+        // lets a revoke failure change the error the user sees, and never
+        // throws (disconnect() implementations already never throw; the
+        // wrapper is defense-in-depth against a future adapter breaking
+        // that contract).
+        try { await providerAdapter(provider).disconnect(completed) } catch {}
         redirectWithError(state.redirectUri)
         return
       }

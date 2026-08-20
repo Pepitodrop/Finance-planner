@@ -26,4 +26,26 @@ Fixed with `server/migrations/002_pending_connection_setup.sql` (adds `oauth_non
 
 **Runtime verified** (not just unit-tested): re-ran `server/test/postgres-store.test.js` against a real, freshly-migrated `postgres:17-bookworm` container (not mocked) — confirmed the migration applies cleanly, a previously-set working connection survives `createPendingConnectionSetup`, and `activateConnection` correctly promotes the pending payload. This is local/CI-equivalent runtime evidence for the code path itself, not a production-deployment exercise.
 
-Related: [[Security Index]] · [[OAuth State and Nonce]] · [[Bank Connection Flow]] · [[Provider Status]] · [[Provider Institution Selection Contract]]
+## Fixed 2026-08-20: `activateConnection()` split into `consumePendingConnectionSetup()` + `finalizeConnection()`, plus a `completeCallback()` provider lifecycle step
+
+Adding [[Enable Banking]] required a callback contract PR #138's single-step `activateConnection()` couldn't support: GoCardless/PayPal owner mode have their whole credential known at `start()` time, but Enable Banking's `session_id` is only known after exchanging the callback URL's authorization `code` via `POST /sessions` — a network call. Holding a DB transaction open across that call (which `activateConnection()`'s single atomic nonce-consume-and-promote step would have required) is the wrong shape for a network call to a third party.
+
+Split into two provider-agnostic steps in both `postgres-store.js` and `crypto-store.js`:
+- **`consumePendingConnectionSetup()`** — exactly the old nonce-DELETE-and-validate logic (same WHERE clause, same consentId/redirectUri cross-check, same expiry check), unchanged in substance and still one atomic local operation (no network I/O), so it stays replay-proof and single-use. Stops short of touching `connector_connections`.
+- **`finalizeConnection()`** — the `connector_connections` promotion, now with a small bounded retry (3 attempts, short fixed delay) for a local DB write, because by the time this runs the nonce is already spent *and* the provider callback has already succeeded — for Enable Banking specifically, a real bank session already exists at their end, so a transient failure here is a worse outcome than one step earlier (an orphaned, undisconnectable provider-side session with zero local trace).
+
+`OpenBankingProvider` gained `completeCallback({code, pending})` (default: identity pass-through, so GoCardless/PayPal needed **zero changes**). The server callback route (`server.js`) now always runs `consumePendingConnectionSetup → provider.completeCallback → finalizeConnection`, redirecting on failure at any step, with no provider-specific branching anywhere in the route.
+
+**Why this doesn't weaken this note's guarantees**: nonce consumption is still one atomic local transaction; `finalizeConnection` is only ever reached after both the nonce check *and* the provider's own confirmation succeed, so a working connection is still never touched until that point (reconnect-preservation intact). The one new behavior: if `completeCallback()` fails, the nonce is already spent and the user must restart — inherent to any server-side code-exchange OAuth flow (the code itself is single-use at the provider too), not a regression.
+
+Also added: a distinguishable `authorization_denied` error from `completeCallback()` when the callback carries no `code` at all (the user declined at the provider) — the server maps this to a new `error=access_denied` redirect, distinct from the generic `invalid_state` copy. This wires up `CALLBACK_ERROR_COPY.access_denied`, which PR #138's frontend had already defined but nothing server-side had ever set (GoCardless/PayPal's flows don't have a shape where the callback lands with no code at all; Enable Banking's does).
+
+**Runtime verified** (real Postgres, not mocked): `server/test/postgres-store.test.js` covers a working connection surviving a `completeCallback()`-equivalent failure, the nonce still being single-use even when `finalizeConnection` never runs, and `finalizeConnection`'s bounded retry actually retrying a transient failure before giving up.
+
+## Known gap, not fixed 2026-08-20: the split above widens a pre-existing concurrent-disconnect race
+
+Found during the independent `/code-review` pass on PR #142, auditing callback replay protection and reconnect-preservation specifically. The nonce is burned by `consumePendingConnectionSetup()` *before* `completeCallback()`'s network exchange runs — so a `DELETE /api/connectors/:provider` landing while that exchange is in flight can be silently overwritten when `finalizeConnection()`'s `INSERT ... ON CONFLICT DO UPDATE` completes afterward, resurrecting the connection the user just disconnected. This window already existed under the old single-step `activateConnection()` (one local DB write wide); the split above widens it to a full network round-trip for any provider using `completeCallback()`, in practice only Enable Banking today.
+
+Deliberately not fixed here — needs either an optimistic-concurrency version column on `connector_connections` or a disconnect-tombstone `finalizeConnection()` checks before writing, neither of which this persistence layer has today. See [[Known Issues and Limitations]] and the TODOS.md "Connections" section.
+
+Related: [[Security Index]] · [[OAuth State and Nonce]] · [[Bank Connection Flow]] · [[Provider Status]] · [[Provider Institution Selection Contract]] · [[Enable Banking]] · [[Known Issues and Limitations]]

@@ -30,4 +30,14 @@ describe('institution directory', () => {
     expect(institutionById('paypal')?.provider).toBe('paypal')
     expect(institutionById('missing')).toBeUndefined()
   })
+
+  it('gives every bank a provider-agnostic "ais" identity -- no bank names a specific aggregator', () => {
+    // ING is not GoCardless, DKB is not GoCardless: which concrete AIS
+    // provider backs a connection attempt is resolved at runtime against
+    // live provider directories, never hard-coded on the static catalogue.
+    const banks = commonInstitutions.filter((institution) => institution.kind === 'bank')
+    expect(banks.length).toBeGreaterThan(0)
+    for (const bank of banks) expect(bank.provider).toBe('ais')
+    expect(commonInstitutions.some((institution) => (institution.provider as string) === 'gocardless')).toBe(false)
+  })
 })

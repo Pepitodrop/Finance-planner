@@ -1,7 +1,7 @@
 import { assessBankImportQuality, suggestCategoryFromHistory, type BankImportQuality } from './bankIntelligence'
 import type { Account, AppState, CreditCardDetails, Transaction } from './types'
 
-export type ConnectorProvider = 'gocardless' | 'finapi' | 'paypal'
+export type ConnectorProvider = 'enablebanking' | 'gocardless' | 'finapi' | 'paypal'
 export type ConnectorStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 export type ConnectorAccountType = 'checking' | 'savings' | 'credit-card' | 'investment'
 
@@ -12,7 +12,7 @@ export interface ConnectorStartContext {
 }
 
 export interface ConnectorConnection { id: string; provider: ConnectorProvider; displayName: string; status: ConnectorStatus; lastSyncAt?: string; consentExpiresAt?: string; institutionId?: string; error?: string }
-export interface ProviderInstitution { id: string; name: string; bic?: string; logo?: string }
+export interface ProviderInstitution { id: string; name: string; bic?: string; logo?: string; country?: string }
 export interface ProviderDescriptor { id: ConnectorProvider; displayName: string; kind: string; available: boolean; configured: boolean; mode?: 'owner' | 'partner'; reason?: string }
 export interface ExternalAccount {
   externalId: string

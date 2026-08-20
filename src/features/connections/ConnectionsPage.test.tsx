@@ -8,7 +8,13 @@ import { ConnectionsPage } from './ConnectionsPage'
 // Every provider available and configured by default so tests that don't
 // care about availability aren't blocked by it; tests covering the
 // unavailable-provider contract (defect 5) override this per-test.
+// Enable Banking is deliberately NOT configured by default here -- most
+// deployments won't have it set up on day one, and the existing GoCardless-
+// focused resolution tests below rely on GoCardless being the resolved AIS
+// provider without needing to override anything. Tests covering the
+// Enable-Banking-preferred path override this per-test.
 const DEFAULT_PROVIDER_STATUS: ProviderDescriptor[] = [
+  { id: 'enablebanking', displayName: 'Bank connection', kind: 'psd2-account-information', available: false, configured: false },
   { id: 'gocardless', displayName: 'Bank (GoCardless)', kind: 'psd2-account-information', available: true, configured: true },
   { id: 'paypal', displayName: 'PayPal', kind: 'wallet-account-information', available: true, configured: true, mode: 'owner' },
   { id: 'finapi', displayName: 'Bank (finAPI)', kind: 'unavailable', available: false, configured: false, reason: 'finAPI adapter is not configured.' },
@@ -268,6 +274,95 @@ describe('GoCardless institution resolution (never guesses a real bank)', () => 
   })
 })
 
+describe('AIS provider resolution (Enable Banking preferred, GoCardless fallback, never a silent switch)', () => {
+  it('resolves against Enable Banking, not GoCardless, when Enable Banking is available and configured', async () => {
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:ING-DiBa', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }])
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^ING/ }))
+    await screen.findByRole('heading', { name: /Find your ING branch/ })
+    expect(fetchProviderInstitutions).toHaveBeenCalledWith('enablebanking', 'DE')
+
+    await user.click(await screen.findByRole('button', { name: /ING-DiBa/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+    expect(startConnector).toHaveBeenCalledWith('enablebanking', { institutionId: 'DE:ING-DiBa', institutionName: 'ING-DiBa', accountType: 'checking' })
+  })
+
+  it('falls back to GoCardless transparently, with no extra "choose a provider" screen, when Enable Banking is unconfigured', async () => {
+    // DEFAULT_PROVIDER_STATUS already leaves Enable Banking unconfigured.
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'SPARKASSE_AACHEN_AACSDE33', name: 'Aachener Sparkasse', bic: 'AACSDE33' }])
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Sparkasse$/ }))
+    expect(fetchProviderInstitutions).toHaveBeenCalledWith('gocardless', 'DE')
+    expect(screen.queryByText(/Enable Banking/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: /choose.*provider/i })).not.toBeInTheDocument()
+  })
+
+  it('marks bank institutions unavailable, never guessing a provider, when neither Enable Banking nor GoCardless resolves', async () => {
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (
+      provider.id === 'gocardless' || provider.id === 'enablebanking' ? { ...provider, available: false, configured: false } : provider
+    )))
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    const ingRow = await screen.findByRole('button', { name: /^ING/ })
+    await waitFor(() => expect(ingRow).toBeDisabled())
+    expect(within(ingRow).getByText('Bank connections are not available right now.')).toBeInTheDocument()
+    expect(fetchProviderInstitutions).not.toHaveBeenCalled()
+  })
+
+  it('offers an explicit, user-initiated fallback to GoCardless when the Enable Banking search comes back empty and GoCardless is independently available -- never switches silently', async () => {
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 'SPARKASSE_AACHEN_AACSDE33', name: 'Aachener Sparkasse', bic: 'AACSDE33' }])
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Sparkasse$/ }))
+    await screen.findByText('No bank matches your search. Try a different name or BIC.')
+    expect(fetchProviderInstitutions).toHaveBeenNthCalledWith(1, 'enablebanking', 'DE')
+
+    const fallbackButton = await screen.findByRole('button', { name: 'Try another connection method' })
+    await user.click(fallbackButton)
+
+    expect(fetchProviderInstitutions).toHaveBeenNthCalledWith(2, 'gocardless', 'DE')
+    expect(await screen.findByRole('button', { name: /Aachener Sparkasse/ })).toBeInTheDocument()
+  })
+
+  it('never offers the fallback action when GoCardless itself is not independently available -- there is nothing to fall back to', async () => {
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => {
+      if (provider.id === 'enablebanking') return { ...provider, available: true, configured: true }
+      if (provider.id === 'gocardless') return { ...provider, available: false, configured: false }
+      return provider
+    }))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([])
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Sparkasse$/ }))
+    await screen.findByText('No bank matches your search. Try a different name or BIC.')
+    expect(screen.queryByRole('button', { name: 'Try another connection method' })).not.toBeInTheDocument()
+  })
+
+  it('keeps the provider fixed for the whole attempt once resolution has started -- startConnector always targets the provider chosen at resolution time', async () => {
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:ING-DiBa', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }])
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^ING/ }))
+    await user.click(await screen.findByRole('button', { name: /ING-DiBa/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+    expect(startConnector).toHaveBeenCalledTimes(1)
+    expect(startConnector).toHaveBeenCalledWith('enablebanking', expect.objectContaining({ institutionId: 'DE:ING-DiBa' }))
+  })
+})
+
 describe('redirect confirmation', () => {
   it('requires explicit confirmation before starting a bank connector, with the correct provider and context', async () => {
     const user = userEvent.setup()
@@ -503,14 +598,14 @@ describe('provider status lifecycle (fails closed, never optimistic)', () => {
     expect(screen.getByRole('alert')).toBeInTheDocument()
   })
 
-  it('fails closed for a provider missing from an otherwise-successful response, never defaulting it to available', async () => {
+  it('fails closed for an AIS institution when both Enable Banking and GoCardless are missing from an otherwise-successful response, never defaulting it to available', async () => {
     const user = userEvent.setup()
-    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.filter((provider) => provider.id !== 'gocardless'))
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.filter((provider) => provider.id !== 'gocardless' && provider.id !== 'enablebanking'))
     renderConnections()
     await user.click(screen.getByRole('button', { name: 'Connect an account' }))
     const ingRow = await screen.findByRole('button', { name: /^ING/ })
     await waitFor(() => expect(ingRow).toBeDisabled())
-    expect(within(ingRow).getByText('This provider is not available.')).toBeInTheDocument()
+    expect(within(ingRow).getByText('Bank connections are not available right now.')).toBeInTheDocument()
   })
 })
 

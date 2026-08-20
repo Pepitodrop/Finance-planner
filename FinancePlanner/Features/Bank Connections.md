@@ -6,9 +6,14 @@ Finance Planner is a **read-only account-information application** — it never 
 
 `server/src/providers.js` defines a generic `OpenBankingProvider` contract + `OpenBankingProviderRegistry`. Each adapter declares read-only capabilities and implements setup, callback, sync, disconnect, health and metrics. Currently registered:
 
-- `gocardless` — GoCardless Bank Account Data API (PSD2 AISP), `GoCardlessProvider` class: institution lookup → end-user agreement → requisition creation/link → paginated transaction retrieval.
+- `enablebanking` — **preferred** AIS provider (added 2026-08-20), see [[Enable Banking]]: `EnableBankingProvider` class — ASPSP lookup → `POST /auth` redirect → authorization-code callback → `POST /sessions` exchange → `continuation_key`-paginated transaction retrieval.
+- `gocardless` — **fallback** AIS provider, GoCardless Bank Account Data API (PSD2 AISP), `GoCardlessProvider` class: institution lookup → end-user agreement → requisition creation/link → paginated transaction retrieval.
 - `paypal` — see [[PayPal]].
 - `finapi` — explicit unavailable placeholder, deliberately left for a future real adapter (see [[Rejected Approaches]]).
+
+## Bank identity vs. AIS provider (added 2026-08-20)
+
+A bank in the picker catalogue (`src/institutions.ts`) has no fixed aggregator — `InstitutionProvider` uses a logical `'ais'` tag, not `'gocardless'`. ING is not GoCardless; ING is a bank that Enable Banking or GoCardless might separately be able to reach. Which concrete provider actually backs a given connection attempt is resolved at runtime (`resolveAisProvider()`, `src/features/connections/connectionsModel.ts`), in a fixed preference order (`AIS_PROVIDER_PREFERENCE = ['enablebanking', 'gocardless']`), never hard-coded on the catalogue and never guessed. The resolution happens transparently before any bank-specific network call — no "choose your aggregator" screen — and is fixed for the rest of that connection attempt once it begins (`ConnectionsPage.tsx`'s `resolvingProvider` state; `startConnector()` firing is a full-page navigation, so nothing can retarget an in-flight attempt after that point). If Enable Banking's live search for a specific bank comes back empty and GoCardless is independently available, an explicit, user-initiated "try another connection method" action offers the fallback — never an automatic switch. See [[Connections Page]] for the UI detail and [[Provider Institution Selection Contract]] for how each provider's own directory stays the anti-guessing source of truth.
 
 ## Consent flow / credential boundary
 
@@ -47,4 +52,4 @@ Verification state: **implemented / not runtime or production verified — no ev
 
 [[GoCardless]] (in [[Providers Index]]) holds the atomic verification-status breakdown; [[Bank Connection Flow]], [[Bank Consent Flow]], [[Bank Sync Flow]], [[Bank Disconnect Flow]] (in [[Flows Index]]) hold the step-by-step sequences; [[Banking Core Module]] and its responsibility nodes (in [[COBOL Index]]) hold the deterministic validation detail.
 
-Related: [[PayPal]], [[COBOL Domain Core]], [[Provider Status]], [[Architecture Decisions]], [[Providers Index]], [[Flows Index]], [[Provider Institution Selection Contract]]
+Related: [[Enable Banking]], [[GoCardless]], [[PayPal]], [[COBOL Domain Core]], [[Provider Status]], [[Architecture Decisions]], [[Providers Index]], [[Flows Index]], [[Provider Institution Selection Contract]], [[Connections Page]]

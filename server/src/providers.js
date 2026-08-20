@@ -1,18 +1,22 @@
 import { assessBankConnectionHealth, chooseBankSyncBackoff } from './bank-sync-health.js'
 import { CobolBankingCore } from './cobol-banking-core.js'
 import { normalizeSignedAmount } from './cobol-engine.js'
+import { isEnableBankingConfigured, signEnableBankingJwt } from './enable-banking-jwt.js'
 import { HttpError } from './runtime-security.js'
 
 const GC_BASE = 'https://bankaccountdata.gocardless.com/api/v2'
 const PAYPAL_SANDBOX = 'https://api-m.sandbox.paypal.com'
 const PAYPAL_LIVE = 'https://api-m.paypal.com'
+const EB_BASE = 'https://api.enablebanking.com'
 const DEFAULT_TIMEOUT_MS = 15_000
 const DEFAULT_RETRIES = 2
 const DEFAULT_SYNC_DAYS = 31
 const DEFAULT_OVERLAP_DAYS = 3
 const GOCARDLESS_CONSENT_DAYS = 90
+const ENABLEBANKING_DEFAULT_CONSENT_DAYS = 90
 const CONSENT_EXPIRY_SAFETY_MS = 5 * 60_000
 const MAX_PAYPAL_PAGES = 100
+const MAX_ENABLEBANKING_PAGES = 100
 const MAX_RETRY_DELAY_MS = 30_000
 const INSTITUTIONS_CACHE_TTL_MS = 10 * 60_000
 
@@ -224,6 +228,17 @@ export class OpenBankingProvider {
   async start() { throw new Error(`${this.id} provider start is not implemented.`) }
   async sync() { throw new Error(`${this.id} provider sync is not implemented.`) }
   async institutionDirectory() { throw new HttpError(404, 'institution_directory_unsupported', `${this.id} does not provide an institution directory.`) }
+  // Called by the server callback route AFTER its own state/nonce verification
+  // succeeds, with the already-consumed pending credential and whatever
+  // provider-specific data the callback URL carried (e.g. an authorization
+  // code). Providers whose entire credential is already known at start() time
+  // (GoCardless, PayPal) don't need to do anything here -- this identity
+  // pass-through covers them. Enable Banking overrides this to exchange the
+  // code server-side via POST /sessions before the connection can be
+  // finalized. Never called until the nonce is already consumed; the pending
+  // credential this returns is what gets promoted into connector_connections
+  // by store.finalizeConnection() -- see server.js's callback route.
+  async completeCallback({ pending }) { return pending }
   // Best-effort provider-side revocation on disconnect. Never assumed --
   // callers must not report a connection as provider-revoked unless this
   // resolves { revoked: true }. Base implementation covers providers with no
@@ -284,7 +299,7 @@ export async function gocardlessToken(env) {
 // Builds the address a provider redirects the browser to after consent --
 // always our own /api/connectors/callback route (never the raw client
 // redirectUri), so every provider's return is verified through the same
-// signed-state/nonce-consumption path (verifyState + activateConnection)
+// signed-state/nonce-consumption path (verifyState + consumePendingConnectionSetup)
 // instead of each adapter inventing its own return-detection contract.
 function callbackUrl(redirectUri, provider, state) {
   const callback = new URL('/api/connectors/callback', new URL(redirectUri).origin)
@@ -463,6 +478,273 @@ class GoCardlessProvider extends OpenBankingProvider {
   }
 }
 
+function enableBankingHeaders(env) {
+  return { Authorization: `Bearer ${signEnableBankingJwt(env)}`, 'Content-Type': 'application/json' }
+}
+
+// Enable Banking identifies an ASPSP by the compound {name,country} pair, not
+// a single opaque id -- unlike GoCardless/PayPal, whose institution/provider
+// ids are already single strings. This mints Finance Planner's own opaque id
+// for the picker/institutionId contract, splitting on the FIRST colon only
+// (a bank name could in principle contain one; a country code never does).
+function encodeAspspId(name, country) {
+  return `${country}:${name}`
+}
+function decodeAspspId(id) {
+  const separator = String(id).indexOf(':')
+  if (separator < 0) return null
+  return { country: id.slice(0, separator), name: id.slice(separator + 1) }
+}
+
+function sanitizeEnableBankingAspsp(aspsp) {
+  return {
+    id: encodeAspspId(aspsp.name, aspsp.country),
+    name: String(aspsp.name || ''),
+    country: String(aspsp.country || ''),
+    ...(aspsp.bic ? { bic: String(aspsp.bic) } : {}),
+    ...(aspsp.logo ? { logo: String(aspsp.logo) } : {}),
+  }
+}
+
+// Best-effort EUR balance selection when a session exposes more than one
+// balance type for the same account -- CLBD (closing booked) is the most
+// standard "the balance a user expects to see" reading; CLAV (closing
+// available) is the next best; anything else EUR is a last resort. Mirrors
+// GoCardlessProvider.sync()'s equally permissive '0' fallback when no EUR
+// balance is present at all, rather than treating that as an error.
+function selectEnableBankingBalance(balances) {
+  const eur = (balances || []).filter((item) => item.balance_amount?.currency === 'EUR')
+  const preferred = eur.find((item) => item.balance_type === 'CLBD') || eur.find((item) => item.balance_type === 'CLAV') || eur[0]
+  return preferred?.balance_amount?.amount ?? '0'
+}
+
+class EnableBankingProvider extends OpenBankingProvider {
+  constructor(env, core) {
+    super({ id: 'enablebanking', displayName: 'Bank connection', kind: 'psd2-account-information', env, core })
+    this.institutionsCache = new Map()
+  }
+
+  isConfigured() { return isEnableBankingConfigured(this.env) }
+
+  // Shared by start() (to validate a requested ASPSP) and the institution-
+  // directory endpoint. Cached per country, same bounded-Map/TTL pattern as
+  // GoCardlessProvider.listInstitutions -- a UI search doesn't hit Enable
+  // Banking on every keystroke.
+  async listAspsps(country) {
+    const cached = this.institutionsCache.get(country)
+    const now = Date.now()
+    if (cached && cached.expiresAt > now) return cached.aspsps
+    const policy = providerPolicy(this.env)
+    const response = await jsonFetch(`${EB_BASE}/aspsps?country=${encodeURIComponent(country)}`, { headers: enableBankingHeaders(this.env) }, policy)
+    if (!Array.isArray(response?.aspsps)) throw new Error('Enable Banking ASPSP response is invalid.')
+    this.institutionsCache.set(country, { aspsps: response.aspsps, expiresAt: now + INSTITUTIONS_CACHE_TTL_MS })
+    return response.aspsps
+  }
+
+  async institutionDirectory(country = 'DE') {
+    if (!this.isConfigured()) throw new HttpError(503, 'provider_not_configured', `${this.displayName} is not configured.`)
+    const aspsps = await this.listAspsps(country)
+    return aspsps.map(sanitizeEnableBankingAspsp)
+  }
+
+  async start({ state, redirectUri, country = 'DE', institutionId }) {
+    if (!this.isConfigured()) throw new Error('Enable Banking credentials are not configured.')
+    await this.core.validateReadOnlyScope('accounts,balances,transactions')
+    if (!institutionId) throw new HttpError(400, 'institution_required', 'Select a bank before continuing.')
+    const decoded = decodeAspspId(institutionId)
+    if (!decoded) throw new HttpError(400, 'invalid_institution', 'The selected institution is not currently available from Enable Banking.')
+    // Same bound the sibling /institutions listing route already applies to
+    // its own country param (see server.js) -- decoded.country comes straight
+    // from the client-supplied institutionId, and listAspsps() caches by
+    // country string, so an unvalidated value here would let an attacker grow
+    // institutionsCache with unbounded distinct keys.
+    if (!/^[A-Z]{2}$/.test(decoded.country)) throw new HttpError(400, 'invalid_institution', 'The selected institution is not currently available from Enable Banking.')
+    const aspsps = await this.listAspsps(decoded.country || country)
+    // Never guessed, never a [0] fallback -- the exact same anti-guessing
+    // contract as GoCardlessProvider.start(): the picker's selection must
+    // match a real, currently-offered ASPSP.
+    const match = aspsps.find((aspsp) => aspsp.name === decoded.name && aspsp.country === decoded.country)
+    if (!match) throw new HttpError(400, 'invalid_institution', 'The selected institution is not currently available from Enable Banking.')
+
+    const configuredDays = Number(this.env.ENABLE_BANKING_CONSENT_DAYS || ENABLEBANKING_DEFAULT_CONSENT_DAYS)
+    const requestedDays = Number.isFinite(configuredDays) && configuredDays > 0 ? configuredDays : ENABLEBANKING_DEFAULT_CONSENT_DAYS
+    const maxDays = Number(match.maximum_consent_validity)
+    const consentDays = Number.isFinite(maxDays) && maxDays > 0 ? Math.min(requestedDays, maxDays) : requestedDays
+    const validUntil = new Date(Date.now() + consentDays * 86_400_000).toISOString()
+
+    const policy = providerPolicy(this.env)
+    const response = await jsonFetch(`${EB_BASE}/auth`, {
+      method: 'POST',
+      headers: enableBankingHeaders(this.env),
+      // access is deliberately the only capability requested -- no
+      // `payments` field is ever sent, which is what actually enforces
+      // AIS-only (never directory filtering, which the current docs don't
+      // confirm the shape of).
+      body: JSON.stringify({
+        access: { valid_until: validUntil },
+        aspsp: { name: match.name, country: match.country },
+        state,
+        redirect_url: callbackUrl(redirectUri, 'enablebanking', state).toString(),
+        psu_type: 'personal',
+      }),
+    }, policy)
+    if (!response?.url || !String(response.url).startsWith('https://')) throw new Error('Enable Banking did not return a secure authorization URL.')
+
+    return {
+      redirectUrl: response.url,
+      credential: {
+        // Round-trips through server.js's connection() helper as
+        // stored.institutionId, exactly like GoCardlessProvider's
+        // resolvedInstitutionId -- without this, Reconnect (which resubmits
+        // the stored institutionId) has nothing to resubmit and start()
+        // rejects it with institution_required, making Reconnect
+        // unconditionally broken for every Enable Banking connection.
+        institutionId: encodeAspspId(match.name, match.country),
+        aspspName: match.name,
+        aspspCountry: match.country,
+        authorizationId: response.authorization_id,
+        accessValidUntil: validUntil,
+      },
+    }
+  }
+
+  // Exchanges the authorization code the callback URL carried for a real
+  // session, server-side only -- the code itself is never stored or
+  // returned. Called by server.js's callback route only after its own
+  // state/nonce verification has already succeeded.
+  async completeCallback({ code, pending }) {
+    if (!code) throw new HttpError(400, 'authorization_denied', 'Enable Banking did not return an authorization code -- the user likely declined at the bank.')
+    const policy = providerPolicy(this.env)
+    const response = await jsonFetch(`${EB_BASE}/sessions`, {
+      method: 'POST',
+      headers: enableBankingHeaders(this.env),
+      body: JSON.stringify({ code }),
+    }, policy)
+    if (!response?.session_id || !Array.isArray(response.accounts)) throw new Error('Enable Banking did not return a valid session.')
+    return {
+      ...pending,
+      sessionId: response.session_id,
+      accounts: response.accounts.map((account) => ({
+        uid: account.uid,
+        name: account.name,
+        currency: account.currency,
+        cashAccountType: account.cash_account_type,
+      })),
+      accessValidUntil: response.access?.valid_until || pending.accessValidUntil,
+      authorizedAt: new Date().toISOString(),
+    }
+  }
+
+  async sync(credential) {
+    const completedAt = new Date()
+    const consentExpiresAt = credential.accessValidUntil || null
+    if (consentExpiresAt && Date.parse(consentExpiresAt) <= completedAt.getTime() + CONSENT_EXPIRY_SAFETY_MS) {
+      throw new Error(`Enable Banking consent expired at ${consentExpiresAt}; reconnect the bank account.`)
+    }
+    const policy = providerPolicy(this.env)
+    const session = await jsonFetch(`${EB_BASE}/sessions/${credential.sessionId}`, { headers: enableBankingHeaders(this.env) }, policy)
+    const consentState = await this.core.validateProviderConsent('enablebanking', session?.status)
+    if (consentState === 'expired') throw new Error(`Enable Banking consent expired or was revoked: ${session?.status}`)
+    if (consentState !== 'ready') throw new Error(`Enable Banking consent is not ready: ${session?.status || 'unknown'}`)
+
+    // Refreshed from this same session response (no extra network call --
+    // we already fetched it above for the status check) rather than the
+    // account list/expiry frozen once at completeCallback() time. Without
+    // this, an account added or removed at the bank after initial connection
+    // would never be reflected, and a consent window the provider
+    // extended/shortened would silently drift from the locally cached value.
+    // Falls back to the originally-stored values whenever this response
+    // omits either field, so behavior is unchanged if a given Enable Banking
+    // deployment's GET /sessions/{id} doesn't echo them.
+    const liveAccounts = Array.isArray(session?.accounts) && session.accounts.length > 0
+      ? session.accounts.map((account) => ({ uid: account.uid, name: account.name, currency: account.currency, cashAccountType: account.cash_account_type }))
+      : credential.accounts
+    const liveConsentExpiresAt = session?.access?.valid_until || consentExpiresAt
+
+    const window = syncWindow(credential.lastSyncedAt, completedAt, 90)
+    const accounts = []
+    const transactions = []
+    const seen = new Set()
+    for (const account of liveAccounts ?? []) {
+      const balances = await jsonFetch(`${EB_BASE}/accounts/${account.uid}/balances`, { headers: enableBankingHeaders(this.env) }, policy)
+      if (!Array.isArray(balances?.balances)) throw new Error('Enable Banking balance response is invalid.')
+      const balance = selectEnableBankingBalance(balances.balances)
+      const type = await normalizeProviderAccountType({ cashAccountType: account.cashAccountType }, this.env, this.core)
+      const balanceCents = await this.core.normalizeProviderAmount(balance)
+      accounts.push({ externalId: account.uid, name: account.name || 'Bankkonto', type, balanceCents, currency: 'EUR' })
+
+      // continuation_key pagination: date_from/date_to stay identical across
+      // every page (Enable Banking's documented requirement); bounded to
+      // MAX_ENABLEBANKING_PAGES so a provider-controlled continuation_key
+      // can never drive an unbounded loop. An empty page with a
+      // continuation_key still present must still continue -- only the
+      // key's absence ends the loop.
+      let continuationKey
+      let pageCount = 0
+      do {
+        const txUrl = new URL(`${EB_BASE}/accounts/${account.uid}/transactions`)
+        txUrl.searchParams.set('date_from', window.dateFrom)
+        txUrl.searchParams.set('date_to', window.dateTo)
+        if (continuationKey) txUrl.searchParams.set('continuation_key', continuationKey)
+        const page = await jsonFetch(txUrl, { headers: enableBankingHeaders(this.env) }, policy)
+        if (!Array.isArray(page?.transactions)) throw new Error('Enable Banking transaction response is invalid.')
+        for (const item of page.transactions) {
+          if (item.transaction_amount?.currency !== 'EUR') continue
+          const signedCents = await this.core.normalizeProviderAmount(item.transaction_amount.amount)
+          await normalizeSignedAmount(signedCents, this.env)
+          const externalId = item.transaction_id || `${account.uid}:${item.booking_date || item.value_date}:${item.transaction_amount.amount}:${(item.remittance_information || []).join(' ')}`
+          if (seen.has(externalId)) continue
+          seen.add(externalId)
+          transactions.push({
+            externalId,
+            externalAccountId: account.uid,
+            description: (item.remittance_information || []).join(' ') || 'Banktransaktion',
+            amountCents: signedCents,
+            currency: 'EUR',
+            bookingDate: item.booking_date || item.value_date || item.transaction_date || window.dateTo,
+            pending: item.status === 'PEND',
+          })
+        }
+        continuationKey = page.continuation_key
+        pageCount += 1
+        if (continuationKey && pageCount >= MAX_ENABLEBANKING_PAGES) throw new Error(`Enable Banking transaction pagination exceeds safety limit: ${pageCount}`)
+      } while (continuationKey)
+    }
+
+    const reconciliation = { accountCount: accounts.length, transactionCount: transactions.length, dateFrom: window.dateFrom, dateTo: window.dateTo, syncedAt: completedAt.toISOString() }
+    await validateProviderReconciliationWithCore(this.core, { accounts, transactions, reconciliation })
+    const health = completedHealth({ completedAt, consentExpiresAt: liveConsentExpiresAt, accounts, transactions })
+    return {
+      accounts,
+      transactions,
+      // Persists the refreshed account list and expiry, not the stale ones
+      // this credential was loaded with, so the next sync() call starts from
+      // what this call just observed rather than re-reading a frozen snapshot.
+      credential: { ...credential, accounts: liveAccounts, lastSyncedAt: completedAt.toISOString(), consentExpiresAt: liveConsentExpiresAt, health },
+      reconciliation: { ...reconciliation, health },
+      consentExpiresAt: liveConsentExpiresAt,
+      health,
+    }
+  }
+
+  // Asks Enable Banking to end the session so a Finance Planner disconnect
+  // also withdraws the provider-side consent, not just the local row. Never
+  // throws: a failed/unreachable revoke must not block the user's local
+  // disconnect, and must never be reported as confirmed when it wasn't --
+  // same contract as GoCardlessProvider.disconnect().
+  async disconnect(credential) {
+    const sessionId = credential?.sessionId
+    if (!sessionId) return { revoked: false, reason: 'not_applicable' }
+    try {
+      await jsonFetch(`${EB_BASE}/sessions/${sessionId}`, { method: 'DELETE', headers: enableBankingHeaders(this.env) }, providerPolicy(this.env))
+      return { revoked: true }
+    } catch (error) {
+      if (error?.status === 404) return { revoked: true }
+      return { revoked: false, reason: 'provider_error' }
+    }
+  }
+}
+
 async function paypalAccessToken(env) {
   const base = env.PAYPAL_ENV === 'live' ? PAYPAL_LIVE : PAYPAL_SANDBOX
   const auth = Buffer.from(`${env.PAYPAL_CLIENT_ID}:${env.PAYPAL_CLIENT_SECRET}`).toString('base64')
@@ -620,6 +902,7 @@ class UnavailableProvider extends OpenBankingProvider {
 export function createOpenBankingProviderRegistry(env = {}, suppliedCore, additionalProviders = []) {
   const core = suppliedCore || createBankingCore(env)
   return new OpenBankingProviderRegistry([
+    new EnableBankingProvider(env, core),
     new GoCardlessProvider(env, core),
     new PayPalProvider(env, core),
     new UnavailableProvider('finapi', 'Bank (finAPI)', env, core, 'finAPI adapter is not configured.'),

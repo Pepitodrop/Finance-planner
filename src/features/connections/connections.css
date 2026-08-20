@@ -177,6 +177,7 @@
 .connections-destructive-button:hover:not(:disabled) { background: var(--fp-color-expense-muted); }
 .connections-text-button { border: 0; background: transparent; color: var(--fp-color-accent); justify-self: center; }
 .connections-retry-button { display: inline; min-height: 0; margin-inline-start: var(--fp-space-2); padding: 0; font-weight: var(--fp-font-weight-semibold); text-decoration: underline; }
+.connections-fallback-message { color: var(--fp-color-text-secondary); background: var(--fp-color-surface); border: var(--fp-border); }
 
 /* Manual account form */
 .connections-manual-handle { justify-self: center; width: 2.75rem; height: .25rem; border-radius: 999px; background: var(--fp-color-border-strong); }
