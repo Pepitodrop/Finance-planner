@@ -6,6 +6,17 @@ status: implemented
 
 # Bank Disconnect Flow
 
-[[Connections Page]] → disconnect requested → [[providers.js]] adapter's `disconnect()` invalidates the provider-side consent/requisition where the provider API supports it, and the connector deletes the corresponding row from [[connector_connections (table)]] (`DELETE FROM connector_connections WHERE user_id=$1 AND provider=$2`, [[postgres-store.js]]).
+[[Connections Page]] → disconnect requested → `DELETE /api/connectors/:provider` (`server/src/server.js`) fetches the stored credential, calls the adapter's `disconnect(credential)`, then unconditionally deletes the corresponding row from [[connector_connections (table)]] (`DELETE FROM connector_connections WHERE user_id=$1 AND provider=$2`, [[postgres-store.js]]) regardless of what the provider call returned.
 
-Related: [[Bank Connections]] · [[Connections Page]] · [[postgres-store.js]]
+## Provider-side revocation is best-effort and honestly reported (fixed 2026-08-18)
+
+Until this fix, no adapter in [[providers.js]] implemented `disconnect()` at all -- the endpoint only ever deleted the local row, so a GoCardless requisition stayed live at the provider indefinitely after a Finance Planner "disconnect." This note previously (incorrectly) described the intended architecture as already implemented; corrected to match code, per [[Memory System]]'s "code is authoritative over the vault" rule.
+
+- `OpenBankingProvider.disconnect()` (base) returns `{ revoked: false, reason: 'not_supported' }` -- the safe default for any adapter that doesn't override it.
+- `GoCardlessProvider.disconnect(credential)` calls `DELETE {GC_BASE}/requisitions/{id}/` (refreshing the token first if stale, same as `sync()`). A 2xx or 404 (already gone) resolves `{ revoked: true }`; any other failure resolves `{ revoked: false, reason: 'provider_error' }` -- it never throws, so a provider outage can never block the user's local disconnect.
+- `PayPalProvider.disconnect()` resolves `{ revoked: false, reason: 'not_applicable' }` in both modes: owner mode is the deployment's own app-level client-credential access (not a per-user grant), and partner mode in this codebase syncs through the same client-credential flow rather than a stored per-merchant user token -- there is no PayPal-side, per-connection consent for either mode to revoke.
+- The endpoint response (`{ disconnected: true, providerRevoked, providerRevokeReason }`) derives `providerRevoked` only from what the adapter actually confirmed -- it is never hardcoded true. `ConnectionsPage.tsx` shows a distinct, honest message when `providerRevokeReason === 'provider_error'` ("...we couldn't confirm the provider revoked access on their side") instead of the normal disconnect copy, so local and provider state diverging is surfaced, not hidden.
+
+Verification: `server/test/provider-disconnect.test.js` (GoCardless success/404-idempotent/failure/token-refresh/no-requisition, PayPal owner+partner, base-provider default), `server/test/open-banking-server-boundary.test.js` (credential lookup precedes the revoke attempt, local removal is never inside the revoke `try` block, `providerRevoked` is derived not hardcoded), `src/features/connections/ConnectionsPage.test.tsx` (honest-failure-message case). Still unverified against a real GoCardless sandbox -- see [[Provider Status]].
+
+Related: [[Bank Connections]] · [[Connections Page]] · [[postgres-store.js]] · [[Provider Institution Selection Contract]] · [[Provider Status]]

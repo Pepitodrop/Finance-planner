@@ -11,7 +11,9 @@ export interface ConnectorStartContext {
   accountType?: ConnectorAccountType
 }
 
-export interface ConnectorConnection { id: string; provider: ConnectorProvider; displayName: string; status: ConnectorStatus; lastSyncAt?: string; consentExpiresAt?: string; error?: string }
+export interface ConnectorConnection { id: string; provider: ConnectorProvider; displayName: string; status: ConnectorStatus; lastSyncAt?: string; consentExpiresAt?: string; institutionId?: string; error?: string }
+export interface ProviderInstitution { id: string; name: string; bic?: string; logo?: string }
+export interface ProviderDescriptor { id: ConnectorProvider; displayName: string; kind: string; available: boolean; configured: boolean; mode?: 'owner' | 'partner'; reason?: string }
 export interface ExternalAccount {
   externalId: string
   name: string
@@ -142,6 +144,16 @@ async function requestJson<T>(url: string, init: RequestInit, options: { retry?:
 }
 
 export function connectorReturnUrl(): string { const url = new URL(window.location.href); for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'institution']) url.searchParams.delete(key); url.hash = ''; return url.toString() }
+export async function fetchProviderStatus(): Promise<ProviderDescriptor[]> {
+  const result = await requestJson<{ providers?: ProviderDescriptor[] }>('/api/connectors', { method: 'GET' }, { retry: true })
+  if (!Array.isArray(result.providers)) throw new Error('The provider status response was invalid.')
+  return result.providers
+}
+export async function fetchProviderInstitutions(provider: ConnectorProvider, country = 'DE'): Promise<ProviderInstitution[]> {
+  const result = await requestJson<{ institutions?: ProviderInstitution[] }>(`/api/connectors/${provider}/institutions?country=${encodeURIComponent(country)}`, { method: 'GET' }, { retry: true })
+  if (!Array.isArray(result.institutions)) throw new Error('The bank directory response was invalid.')
+  return result.institutions
+}
 export async function startConnector(provider: ConnectorProvider, context: ConnectorStartContext = {}): Promise<void> {
   const result = await requestJson<{ redirectUrl?: string }>(`/api/connectors/${provider}/start`, {
     method: 'POST',
@@ -152,5 +164,6 @@ export async function startConnector(provider: ConnectorProvider, context: Conne
   window.location.assign(result.redirectUrl)
 }
 export async function synchronizeConnections(): Promise<SyncPayload[]> { if (activeSynchronization) return activeSynchronization; const operation = (async () => { const result = await requestJson<{ connections?: SyncPayload[] }>('/api/connectors/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } }, { retry: true, idempotent: true }); if (!Array.isArray(result.connections)) throw new Error('The sync service returned an invalid result.'); return result.connections })(); activeSynchronization = operation; try { return await operation } finally { if (activeSynchronization === operation) activeSynchronization = null } }
-export async function disconnectConnector(provider: ConnectorProvider): Promise<void> { await requestJson<{ disconnected: boolean }>(`/api/connectors/${provider}`, { method: 'DELETE' }, { idempotent: true }) }
+export type DisconnectResult = { disconnected: boolean; providerRevoked: boolean; providerRevokeReason: 'confirmed' | 'not_applicable' | 'not_supported' | 'provider_error' }
+export async function disconnectConnector(provider: ConnectorProvider): Promise<DisconnectResult> { return requestJson<DisconnectResult>(`/api/connectors/${provider}`, { method: 'DELETE' }, { idempotent: true }) }
 export function consentDaysRemaining(connection: ConnectorConnection, now = Date.now()): number | null { if (!connection.consentExpiresAt) return null; const expiresAt = Date.parse(connection.consentExpiresAt); if (!Number.isFinite(expiresAt)) return null; return Math.ceil((expiresAt - now) / 86_400_000) }

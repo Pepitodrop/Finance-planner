@@ -39,6 +39,10 @@ This cluster should stay connected to provider and deployment knowledge because 
 
 [[Bank Connections]] and [[PayPal]] → production requirements flow into → [[Deployment]] and [[Security]]
 
+[[Provider Institution Selection Contract]] → enforces server-side trust boundary for → [[Bank Connections]], validated against the live directory instead of the picker in [[Connections Page]]
+
+[[Connections Page]] → surfaces provider-start failures and availability from → [[Provider Institution Selection Contract]] and [[Provider Status]]
+
 ## AI and deterministic-finance cluster
 
 [[AI System]] → constrained by → [[Security Decisions]]

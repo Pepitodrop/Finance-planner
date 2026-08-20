@@ -85,31 +85,35 @@ test('oauth nonce consumption rejects consent mismatches without consuming the v
   }
 })
 
-test('connection setup and nonce registration persist as one transition', async () => {
+test('pending connection setup and nonce registration persist as one transition, and a currently-working connection is untouched until activation', async () => {
   const { directory, path, store } = await fixture()
   try {
     const input = setupInput()
-    await store.createConnectionSetup(input)
+    // A previously-working connection for this same user/provider (the
+    // reconnect case) must survive an in-flight, not-yet-activated setup.
+    await store.set(input.userId, input.provider, { requisitionId: 'req-previously-working', connectedAt: '2026-07-01T00:00:00.000Z' })
+    await store.createPendingConnectionSetup(input)
     const restarted = new EncryptedStore(path, secret)
     await restarted.load()
-    assert.equal(restarted.get(input.userId, input.provider).requisitionId, 'req-atomic')
+    assert.equal(restarted.get(input.userId, input.provider).requisitionId, 'req-previously-working', 'the working connection must not be overwritten before activation')
     assert.equal(await restarted.activateConnection({
       ...input,
       now: Date.now(),
       connectedAt: '2026-07-27T12:00:00.000Z',
     }), true)
+    assert.equal(restarted.get(input.userId, input.provider).requisitionId, 'req-atomic', 'activation replaces the working connection with the newly-verified one')
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
 })
 
-test('failed setup persistence rolls back both connection and nonce', async () => {
+test('failed pending setup persistence rolls back both the pending credential and nonce', async () => {
   const { directory, store } = await fixture()
   try {
     const input = setupInput()
     const originalSave = store.save.bind(store)
     store.save = async () => { throw new Error('disk unavailable') }
-    await assert.rejects(() => store.createConnectionSetup(input), /disk unavailable/)
+    await assert.rejects(() => store.createPendingConnectionSetup(input), /disk unavailable/)
     store.save = originalSave
     assert.equal(store.get(input.userId, input.provider), null)
     assert.equal(await store.activateConnection({
@@ -122,11 +126,12 @@ test('failed setup persistence rolls back both connection and nonce', async () =
   }
 })
 
-test('failed callback persistence leaves nonce and connection retryable', async () => {
+test('failed callback persistence leaves the pending nonce/credential retryable, and does not touch any existing working connection until it succeeds', async () => {
   const { directory, path, store } = await fixture()
   try {
     const input = setupInput()
-    await store.createConnectionSetup(input)
+    await store.set(input.userId, input.provider, { requisitionId: 'req-previously-working', connectedAt: '2026-07-01T00:00:00.000Z' })
+    await store.createPendingConnectionSetup(input)
     const originalSave = store.save.bind(store)
     store.save = async () => { throw new Error('disk unavailable') }
     await assert.rejects(() => store.activateConnection({
@@ -135,7 +140,7 @@ test('failed callback persistence leaves nonce and connection retryable', async 
       connectedAt: '2026-07-27T12:00:00.000Z',
     }), /disk unavailable/)
     store.save = originalSave
-    assert.equal(store.get(input.userId, input.provider).connectedAt, undefined)
+    assert.equal(store.get(input.userId, input.provider).requisitionId, 'req-previously-working', 'a failed activation attempt must not have touched the still-working connection')
     assert.equal(await store.activateConnection({
       ...input,
       now: Date.now(),

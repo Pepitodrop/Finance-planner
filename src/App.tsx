@@ -22,11 +22,11 @@ import { addTransactionToState, deleteTransactionFromState, updateTransactionInS
 import type { AppState, Transaction, TransactionType } from './types'
 import { validateTransactionInput } from './validation'
 import { ApplicationShell } from './app/ApplicationShell'
-import type { DestinationId } from './app/navigation'
+import { initialTabFromSearch, type DestinationId } from './app/navigation'
 
 interface AppProps { userId: string; userName?: string; user: AuthUser; onLockVault?: () => void; onLogout: () => Promise<void> }
 
-const CONNECTIONS_ACCEPTANCE_MODES: ConnectionsAcceptanceMode[] = ['empty', 'populated', 'institution-selector', 'institution-search', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'checking', 'sync-selection', 'attention', 'manual', 'statement-preview']
+const CONNECTIONS_ACCEPTANCE_MODES: ConnectionsAcceptanceMode[] = ['empty', 'populated', 'institution-selector', 'institution-search', 'provider-unavailable', 'paypal-unconfigured', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'checking', 'sync-selection', 'attention', 'manual', 'statement-preview']
 const AI_ACCEPTANCE_MODES: AiPanelAcceptanceMode[] = ['ready', 'progress', 'results', 'anomaly', 'applied', 'error', 'empty']
 const ASSISTANT_ACCEPTANCE_MODES: AssistantAcceptanceMode[] = ['hosted-consent', 'hosted-running', 'success', 'hosted-fallback', 'local-selected', 'local-running']
 const RECEIPT_ACCEPTANCE_MODES: ReceiptAcceptanceMode[] = ['selected', 'running', 'sufficient', 'insufficient', 'receipt-error']
@@ -36,7 +36,7 @@ const SUBSCRIPTIONS_ACCEPTANCE_MODES: SubscriptionsAcceptanceMode[] = ['intro', 
 function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
   const [state, setState] = useState<AppState>(() => loadState())
   const [tab, setTab] = useState<DestinationId>(() =>
-    typeof window !== 'undefined' && window.location.search.includes('provider=google-subscriptions') ? 'subscriptions' : 'dashboard')
+    typeof window !== 'undefined' ? initialTabFromSearch(window.location.search) : 'dashboard')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<Transaction | null>(null)
   const [transactionType, setTransactionType] = useState<TransactionType>('expense')

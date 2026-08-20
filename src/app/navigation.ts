@@ -88,3 +88,12 @@ export interface MoreDestinationGroup {
 export const MORE_DESTINATION_GROUPS: readonly MoreDestinationGroup[] = MORE_GROUP_ORDER
   .map((id) => ({ id, label: MORE_GROUP_LABELS[id], destinations: MORE_DESTINATIONS.filter((destination) => destination.moreGroup === id) }))
   .filter((group) => group.destinations.length > 0)
+
+// A returning gocardless/paypal connector hit or a failed callback (see
+// /api/connectors/callback) must land on the Connections tab, or
+// ConnectionsPage's own return-detection effect never mounts to see it.
+export function initialTabFromSearch(search: string): DestinationId {
+  if (search.includes('provider=google-subscriptions')) return 'subscriptions'
+  if (search.includes('provider=gocardless') || search.includes('provider=paypal') || search.includes('error=invalid_state')) return 'connections'
+  return 'dashboard'
+}

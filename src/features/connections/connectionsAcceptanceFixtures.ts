@@ -1,4 +1,4 @@
-import type { ConnectorConnection, SyncPreview } from '../../connectors'
+import type { ConnectorConnection, ProviderDescriptor, SyncPreview } from '../../connectors'
 import type { StatementPreview } from '../../statementImport'
 
 /**
@@ -19,11 +19,25 @@ export type ConnectionsAcceptanceMode =
   | 'attention'
   | 'manual'
   | 'statement-preview'
+  | 'provider-unavailable'
+  | 'paypal-unconfigured'
 
 export const ACCEPTANCE_CONNECTIONS: ConnectorConnection[] = [
-  { id: 'accept-sparkasse', provider: 'gocardless', displayName: 'Sparkasse', status: 'connected', lastSyncAt: '2026-08-05T09:15:00.000Z' },
+  { id: 'accept-sparkasse', provider: 'gocardless', displayName: 'Sparkasse', status: 'connected', lastSyncAt: '2026-08-05T09:15:00.000Z', institutionId: 'SPARKASSE_AACHEN_AACSDE33' },
   { id: 'accept-paypal', provider: 'paypal', displayName: 'PayPal', status: 'connected', consentExpiresAt: '2026-12-10T00:00:00.000Z' },
-  { id: 'accept-deutsche-bank', provider: 'finapi', displayName: 'Deutsche Bank', status: 'error', error: 'Reauthorization required' },
+  { id: 'accept-deutsche-bank', provider: 'finapi', displayName: 'Deutsche Bank', status: 'error', error: 'Reauthorization required', institutionId: 'DEUTSCHE_BANK_DEUTDEFF' },
+]
+
+export const ACCEPTANCE_PROVIDER_STATUS_UNAVAILABLE: ProviderDescriptor[] = [
+  { id: 'gocardless', displayName: 'Bank (GoCardless)', kind: 'psd2-account-information', available: true, configured: true },
+  { id: 'paypal', displayName: 'PayPal', kind: 'wallet-account-information', available: true, configured: true, mode: 'owner' },
+  { id: 'finapi', displayName: 'Bank (finAPI)', kind: 'unavailable', available: false, configured: false, reason: 'finAPI adapter is not configured.' },
+]
+
+export const ACCEPTANCE_PROVIDER_STATUS_PAYPAL_UNCONFIGURED: ProviderDescriptor[] = [
+  { id: 'gocardless', displayName: 'Bank (GoCardless)', kind: 'psd2-account-information', available: true, configured: true },
+  { id: 'paypal', displayName: 'PayPal', kind: 'wallet-account-information', available: false, configured: false, mode: 'owner', reason: 'PayPal credentials are not configured.' },
+  { id: 'finapi', displayName: 'Bank (finAPI)', kind: 'unavailable', available: false, configured: false, reason: 'finAPI adapter is not configured.' },
 ]
 
 export const ACCEPTANCE_SYNC_PREVIEWS: SyncPreview[] = [{

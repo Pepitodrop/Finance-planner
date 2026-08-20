@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -30,14 +30,20 @@ import {
   buildSyncPreview,
   consentDaysRemaining,
   disconnectConnector,
+  fetchProviderInstitutions,
+  fetchProviderStatus,
   selectSyncPreviewAccounts,
   startConnector,
   synchronizeConnections,
   type ConnectorAccountType,
   type ConnectorConnection,
   type ConnectorProvider,
+  type ConnectorStartContext,
+  type ProviderDescriptor,
+  type ProviderInstitution,
   type SyncPreview,
 } from '../../connectors'
+import { institutionLettermark, institutionLogoUrl } from '../../institution-logos'
 import { normalizeManualCreditCard } from '../../manualCreditCard'
 import { applyStatementImport, buildStatementPreview, parseStatement, type StatementPreview } from '../../statementImport'
 import type { Account, AppState } from '../../types'
@@ -51,30 +57,59 @@ import {
   connectionNeedsAttention,
   defaultAccountTypeForInstitution,
   filterInstitutions,
+  institutionAvailability,
   institutionById,
   institutionIcon,
   nextSetupStepAfterInstitution,
   previousSetupStepFromConfirmation,
+  providerDescriptorFor,
   summarizeAccountSelection,
   validateManualAccount,
   type InstitutionCategory,
+  type ProviderStatus,
   type SetupStep,
 } from './connectionsModel'
-import { ACCEPTANCE_CONNECTIONS, ACCEPTANCE_STATEMENT_PREVIEW, ACCEPTANCE_SYNC_PREVIEWS, type ConnectionsAcceptanceMode } from './connectionsAcceptanceFixtures'
+import type { Institution } from '../../institutions'
+import { ACCEPTANCE_CONNECTIONS, ACCEPTANCE_PROVIDER_STATUS_PAYPAL_UNCONFIGURED, ACCEPTANCE_PROVIDER_STATUS_UNAVAILABLE, ACCEPTANCE_STATEMENT_PREVIEW, ACCEPTANCE_SYNC_PREVIEWS, type ConnectionsAcceptanceMode } from './connectionsAcceptanceFixtures'
 
 interface ConnectionsPageProps { state: AppState; onApply: (state: AppState) => void; acceptanceMode?: ConnectionsAcceptanceMode }
 type Screen = 'overview' | 'checking' | 'sync-selection' | 'attention' | 'statement-preview'
+
+// Acceptance modes that inject their own deterministic providerStatus (see
+// the acceptanceMode effect below) instead of relying on the real fetch.
+const PROVIDER_STATUS_FIXTURE_MODES = new Set<ConnectionsAcceptanceMode | undefined>(['paypal-confirmation', 'provider-unavailable', 'paypal-unconfigured'])
+
+// Fixed, application-owned copy for a provider-return `?error=` code. Never
+// render the free-text `error_description` query param verbatim -- see the
+// callback-handling effect below.
+const CALLBACK_ERROR_COPY: Record<string, string> = {
+  invalid_state: 'It may have expired or already been used.',
+  access_denied: 'The provider reported that authorization was not granted.',
+}
 
 function formatEuro(cents: number): string {
   return new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' }).format(cents / 100)
 }
 
-function InstitutionIcon({ institution, size = 20 }: { institution: { kind: string }; size?: number }) {
+function InstitutionMark({ id, name, size = 20 }: { id: string; name: string; size?: number }) {
+  const [imageFailed, setImageFailed] = useState(false)
+  const logoUrl = institutionLogoUrl(id)
+  if (logoUrl && !imageFailed) {
+    return <span className="connections-mark connections-mark--logo">
+      <img src={logoUrl} alt="" width={size} height={size} loading="lazy" onError={() => setImageFailed(true)}/>
+    </span>
+  }
+  const { letters, color } = institutionLettermark(id, name)
+  return <span className="connections-mark connections-mark--lettermark" style={{ '--connections-mark-color': color } as CSSProperties} aria-hidden="true">{letters}</span>
+}
+
+function InstitutionIcon({ institution, size = 20 }: { institution: { id?: string; name?: string; kind: string }; size?: number }) {
   const kind = institutionIcon(institution as Parameters<typeof institutionIcon>[0])
-  if (kind === 'wallet') return <Wallet size={size}/>
-  if (kind === 'broker') return <TrendingUp size={size}/>
   if (kind === 'card') return <CreditCard size={size}/>
   if (kind === 'manual') return <Pencil size={size}/>
+  if (institution.id && institution.name) return <InstitutionMark id={institution.id} name={institution.name} size={size}/>
+  if (kind === 'wallet') return <Wallet size={size}/>
+  if (kind === 'broker') return <TrendingUp size={size}/>
   return <Landmark size={size}/>
 }
 
@@ -92,10 +127,19 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
 
   const [setupOpen, setSetupOpen] = useState(false)
   const [setupStep, setSetupStep] = useState<SetupStep>(1)
+  const [setupError, setSetupError] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [category, setCategory] = useState<InstitutionCategory>('popular')
   const [selectedInstitutionId, setSelectedInstitutionId] = useState<string | null>(null)
   const [accountType, setAccountType] = useState<ConnectorAccountType>('checking')
+  const [providerStatus, setProviderStatus] = useState<ProviderStatus>({ status: 'loading' })
+
+  const [resolvingInstitution, setResolvingInstitution] = useState<Institution | null>(null)
+  const [resolvedProviderInstitution, setResolvedProviderInstitution] = useState<ProviderInstitution | null>(null)
+  const [liveInstitutionQuery, setLiveInstitutionQuery] = useState('')
+  const [liveInstitutions, setLiveInstitutions] = useState<ProviderInstitution[] | null>(null)
+  const [liveInstitutionsLoading, setLiveInstitutionsLoading] = useState(false)
+  const [liveInstitutionsError, setLiveInstitutionsError] = useState('')
 
   const [manualOpen, setManualOpen] = useState(false)
   const [manualName, setManualName] = useState('')
@@ -105,6 +149,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   const [manualError, setManualError] = useState('')
 
   const [attentionProvider, setAttentionProvider] = useState<ConnectorProvider | null>(null)
+  const [attentionError, setAttentionError] = useState('')
   const [disconnectConfirming, setDisconnectConfirming] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -116,8 +161,8 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     if (acceptanceMode === 'institution-selector') { setConnections(ACCEPTANCE_CONNECTIONS); setSetupStep(1); setCategory('popular'); setSearchTerm(''); setSetupOpen(true); return }
     if (acceptanceMode === 'institution-search') { setConnections(ACCEPTANCE_CONNECTIONS); setSetupStep(1); setCategory('popular'); setSearchTerm('bank'); setSetupOpen(true); return }
     if (acceptanceMode === 'account-type') { setSelectedInstitutionId('ing'); setAccountType('checking'); setSetupStep(2); setSetupOpen(true); return }
-    if (acceptanceMode === 'bank-confirmation') { setSelectedInstitutionId('ing'); setSetupStep(3); setSetupOpen(true); return }
-    if (acceptanceMode === 'paypal-confirmation') { setSelectedInstitutionId('paypal'); setSetupStep(3); setSetupOpen(true); return }
+    if (acceptanceMode === 'bank-confirmation') { setSelectedInstitutionId('ing'); setResolvedProviderInstitution({ id: 'INGDDEFF_INGDDEFFXXX', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }); setSetupStep(3); setSetupOpen(true); return }
+    if (acceptanceMode === 'paypal-confirmation') { setSelectedInstitutionId('paypal'); setProviderStatus({ status: 'ready', providers: [{ id: 'paypal', displayName: 'PayPal', kind: 'wallet-account-information', available: true, configured: true, mode: 'owner' }] }); setSetupStep(3); setSetupOpen(true); return }
     if (acceptanceMode === 'checking') { setScreen('checking'); return }
     if (acceptanceMode === 'sync-selection') {
       setPreviews(ACCEPTANCE_SYNC_PREVIEWS)
@@ -127,8 +172,68 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     }
     if (acceptanceMode === 'attention') { setConnections(ACCEPTANCE_CONNECTIONS); setAttentionProvider('finapi'); setScreen('attention'); return }
     if (acceptanceMode === 'manual') { setManualOpen(true); return }
-    if (acceptanceMode === 'statement-preview') { setStatementFileName('finance_statement_march.csv'); setStatementPreview(ACCEPTANCE_STATEMENT_PREVIEW); setScreen('statement-preview') }
+    if (acceptanceMode === 'statement-preview') { setStatementFileName('finance_statement_march.csv'); setStatementPreview(ACCEPTANCE_STATEMENT_PREVIEW); setScreen('statement-preview'); return }
+    if (acceptanceMode === 'provider-unavailable') { setConnections(ACCEPTANCE_CONNECTIONS); setProviderStatus({ status: 'ready', providers: ACCEPTANCE_PROVIDER_STATUS_UNAVAILABLE }); setSetupStep(1); setCategory('popular'); setSearchTerm(''); setSetupOpen(true); return }
+    if (acceptanceMode === 'paypal-unconfigured') { setSelectedInstitutionId('paypal'); setProviderStatus({ status: 'ready', providers: ACCEPTANCE_PROVIDER_STATUS_PAYPAL_UNCONFIGURED }); setSetupStep(3); setSetupOpen(true) }
   }, [acceptanceMode])
+
+  // Provider status gates whether an external (gocardless/paypal/finapi)
+  // institution can be selected at all -- it is load-bearing, not advisory,
+  // so it fails closed: 'loading' and 'error' both make every external
+  // provider non-selectable (see institutionAvailability()). Exposed so the
+  // "Retry" action in the setup dialog can call it again after a failure.
+  // Generation counter: only the most recently issued call may commit state,
+  // regardless of settlement order. Closes the "stale response arrives after
+  // a newer response" race (a slow mount-time fetch resolving after a faster
+  // Retry, or vice versa) independent of any UI-level mitigation -- the
+  // Retry button already can't be double-clicked in practice (it only
+  // renders while status === 'error', so clicking it flips to 'loading' and
+  // the button itself unmounts before a second click could ever land), but
+  // the counter is the actual correctness guarantee, not the button.
+  const providerStatusGeneration = useRef(0)
+  const loadProviderStatus = useCallback(() => {
+    const generation = (providerStatusGeneration.current += 1)
+    setProviderStatus({ status: 'loading' })
+    let cancelled = false
+    void (async () => {
+      try {
+        const providers = await fetchProviderStatus()
+        if (!cancelled && providerStatusGeneration.current === generation) setProviderStatus({ status: 'ready', providers })
+      } catch {
+        if (!cancelled && providerStatusGeneration.current === generation) setProviderStatus({ status: 'error' })
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    // A couple of acceptance fixtures (paypal-confirmation, provider-unavailable)
+    // set their own deterministic providerStatus above; the real fetch below
+    // would otherwise race it and overwrite it once the network call resolves.
+    if (import.meta.env.VITE_ACCEPTANCE_FIXTURES === 'true' && PROVIDER_STATUS_FIXTURE_MODES.has(acceptanceMode)) return
+    return loadProviderStatus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per mount; a fresh acceptanceMode always gets a fresh mount (see the `key` prop where ConnectionsPage is used)
+  }, [])
+
+  const loadLiveInstitutions = useCallback(async () => {
+    if (liveInstitutions || liveInstitutionsLoading) return
+    setLiveInstitutionsLoading(true)
+    try {
+      const institutions = await fetchProviderInstitutions('gocardless', 'DE')
+      setLiveInstitutions(institutions)
+    } catch (reason) {
+      setLiveInstitutionsError(reason instanceof Error ? reason.message : 'The bank directory could not be loaded.')
+    } finally {
+      setLiveInstitutionsLoading(false)
+    }
+  }, [liveInstitutions, liveInstitutionsLoading])
+
+  const filteredLiveInstitutions = useMemo(() => {
+    if (!liveInstitutions) return []
+    const query = liveInstitutionQuery.trim().toLocaleLowerCase('de-DE')
+    if (!query) return liveInstitutions
+    return liveInstitutions.filter((institution) => institution.name.toLocaleLowerCase('de-DE').includes(query) || institution.bic?.toLocaleLowerCase('de-DE').includes(query))
+  }, [liveInstitutions, liveInstitutionQuery])
 
   const selectedInstitution = selectedInstitutionId ? institutionById(selectedInstitutionId) : undefined
   const filteredInstitutions = useMemo(() => filterInstitutions(searchTerm, category), [searchTerm, category])
@@ -178,16 +283,22 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const providerParam = params.get('provider')
-    const callbackError = params.get('error_description') || params.get('error')
+    const errorCode = params.get('error')
     const callbackCompleted = params.has('code') || params.has('state')
-    if (!providerParam && !callbackError && !callbackCompleted) return
+    if (!providerParam && !errorCode && !callbackCompleted) return
 
     const cleanUrl = new URL(window.location.href)
     for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'institution']) cleanUrl.searchParams.delete(key)
     window.history.replaceState({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`)
 
-    if (callbackError) {
-      setError(`The connection was not completed: ${callbackError}`)
+    if (errorCode) {
+      // Fixed, application-owned copy keyed by error code only -- never
+      // render the free-text error_description query param verbatim. It
+      // comes straight from the current URL, so an attacker-crafted link to
+      // this app's own origin could otherwise make the trusted error banner
+      // display arbitrary text (phishing-adjacent), even though React
+      // escapes it (no XSS, just misleading UI content).
+      setError(`The connection was not completed: ${CALLBACK_ERROR_COPY[errorCode] ?? 'Please try again.'}`)
       return
     }
 
@@ -196,31 +307,47 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once for the initial callback URL only
   }, [])
 
-  const connect = async (provider: ConnectorProvider) => {
+  // Reports failures to the caller's own error channel: the setup modal and
+  // the attention (reconnect) screen each surface their own provider-start
+  // errors in place, rather than sharing a single banner that a modal can
+  // visually hide (see connections-setup-modal error handling below).
+  const startProvider = async (provider: ConnectorProvider, context: ConnectorStartContext, onError: (message: string) => void) => {
     setBusy(true)
-    setError('')
+    onError('')
     try {
-      await startConnector(provider, selectedInstitution ? { institutionId: selectedInstitution.id, institutionName: selectedInstitution.name, accountType } : {})
+      await startConnector(provider, context)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'The connection could not be started.')
+      onError(reason instanceof Error ? reason.message : 'The connection could not be started.')
       setBusy(false)
     }
+  }
+
+  const connectorContext = (): ConnectorStartContext => {
+    if (!selectedInstitution) return {}
+    if (selectedInstitution.provider === 'gocardless') {
+      return { institutionId: resolvedProviderInstitution?.id, institutionName: resolvedProviderInstitution?.name, accountType }
+    }
+    return { institutionId: selectedInstitution.id, institutionName: selectedInstitution.name, accountType }
   }
 
   const refreshAll = () => void synchronize(false)
 
   const disconnect = async (provider: ConnectorProvider) => {
     setBusy(true)
-    setError('')
+    setAttentionError('')
     try {
-      await disconnectConnector(provider)
+      const result = await disconnectConnector(provider)
       setConnections((current) => current.filter((connection) => connection.provider !== provider))
-      setMessage('The connection was disconnected. Transactions already imported remain in Finance Planner.')
+      setMessage(
+        result.providerRevokeReason === 'provider_error'
+          ? "The connection was removed from Finance Planner, but we couldn't confirm the provider revoked access on their side. Transactions already imported remain in Finance Planner."
+          : 'The connection was disconnected. Transactions already imported remain in Finance Planner.',
+      )
       setDisconnectConfirming(false)
       setAttentionProvider(null)
       setScreen('overview')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'The connection could not be disconnected.')
+      setAttentionError(reason instanceof Error ? reason.message : 'The connection could not be disconnected.')
     } finally {
       setBusy(false)
     }
@@ -232,10 +359,12 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setCategory('popular')
     setSelectedInstitutionId(null)
     setAccountType('checking')
-    setError('')
+    setResolvingInstitution(null)
+    setResolvedProviderInstitution(null)
+    setSetupError('')
     setSetupOpen(true)
   }
-  const closeSetup = useCallback(() => { if (!busy) setSetupOpen(false) }, [busy])
+  const closeSetup = useCallback(() => { if (!busy) { setSetupOpen(false); setSetupError('') } }, [busy])
 
   const openManualAccount = (hintedType: ConnectorAccountType = 'checking', hintedName = '') => {
     setManualName(hintedName)
@@ -248,15 +377,50 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   }
   const closeManualAccount = useCallback(() => { if (!busy) setManualOpen(false) }, [busy])
 
+  const cancelInstitutionResolution = () => {
+    setResolvingInstitution(null)
+    setSelectedInstitutionId(null)
+    setResolvedProviderInstitution(null)
+  }
+
+  const finalizeInstitutionResolution = (match: ProviderInstitution) => {
+    if (!resolvingInstitution) return
+    setResolvedProviderInstitution(match)
+    setSetupStep(nextSetupStepAfterInstitution(resolvingInstitution))
+    setResolvingInstitution(null)
+  }
+
   const chooseInstitution = (id: string) => {
     const institution = institutionById(id)
     if (!institution) return
+    if (institutionAvailability(institution, providerStatus).unavailable) return
+    setSetupError('')
     if (institution.provider === 'manual') {
       openManualAccount(defaultAccountTypeForInstitution(institution), institution.name === 'Virtuelles / manuelles Konto' ? '' : institution.name)
       return
     }
     setSelectedInstitutionId(id)
     setAccountType(defaultAccountTypeForInstitution(institution))
+    // Always clear a previous GoCardless resolution here, not just when
+    // re-entering the gocardless branch below -- otherwise picking a
+    // GoCardless bank, resolving it, going back, and choosing a different
+    // (non-gocardless) institution left the old resolved name in state and
+    // it rendered as a stale, unrelated subtitle on the new institution's
+    // account-type/confirmation steps.
+    setResolvedProviderInstitution(null)
+    if (institution.provider === 'gocardless') {
+      // GoCardless's real institution catalogue -- not our static picker
+      // entries -- is the only thing that can be validated server-side, and
+      // a generic entry like "Sparkasse" or "Volksbank / Raiffeisenbank"
+      // cannot be mapped to one unique bank without guessing. Every
+      // GoCardless institution is resolved against the live directory here,
+      // prefilled with this tile's name so the common case is a single tap.
+      setResolvingInstitution(institution)
+      setLiveInstitutionQuery(institution.name)
+      setLiveInstitutionsError('')
+      void loadLiveInstitutions()
+      return
+    }
     setSetupStep(nextSetupStepAfterInstitution(institution))
   }
 
@@ -341,8 +505,8 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   const cancelStatement = () => { setStatementPreview(null); setScreen('overview') }
   const rollback = () => { if (!rollbackState) return; onApply(rollbackState); setRollbackState(null); setMessage('The last import was fully reversed.') }
 
-  const openAttention = (provider: ConnectorProvider) => { setAttentionProvider(provider); setDisconnectConfirming(false); setScreen('attention') }
-  const closeAttention = () => { setAttentionProvider(null); setDisconnectConfirming(false); setScreen('overview') }
+  const openAttention = (provider: ConnectorProvider) => { setAttentionProvider(provider); setDisconnectConfirming(false); setAttentionError(''); setScreen('attention') }
+  const closeAttention = () => { setAttentionProvider(null); setDisconnectConfirming(false); setAttentionError(''); setScreen('overview') }
 
   const setupDialogRef = useDialog<HTMLDivElement>({ open: setupOpen, onClose: closeSetup })
   const manualDialogRef = useDialog<HTMLDivElement>({ open: manualOpen, onClose: closeManualAccount })
@@ -379,8 +543,9 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
       reason={attentionReason}
       busy={busy}
       confirming={disconnectConfirming}
+      error={attentionError}
       onBack={closeAttention}
-      onReconnect={() => void connect(attentionConnection.provider)}
+      onReconnect={() => void startProvider(attentionConnection.provider, { institutionId: attentionConnection.institutionId }, setAttentionError)}
       onDisconnectRequest={() => setDisconnectConfirming(true)}
       onDisconnectCancel={() => setDisconnectConfirming(false)}
       onDisconnectConfirm={() => void disconnect(attentionConnection.provider)}
@@ -409,31 +574,52 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
             instead of racing against native autoFocus, which fires during commit, before the
             dialog's own effect can capture "focus before open" for later restoration. */}
         <div className="connections-setup-content">
-          {setupStep === 1 && <InstitutionStep
-            searchTerm={searchTerm}
-            onSearch={setSearchTerm}
-            category={category}
-            onCategory={setCategory}
-            institutions={filteredInstitutions}
-            onChoose={chooseInstitution}
-          />}
+          {setupStep === 1 && (resolvingInstitution
+            ? <InstitutionResolutionStep
+                institution={resolvingInstitution}
+                query={liveInstitutionQuery}
+                onQuery={setLiveInstitutionQuery}
+                results={filteredLiveInstitutions}
+                loading={liveInstitutionsLoading}
+                error={liveInstitutionsError}
+                onBack={cancelInstitutionResolution}
+                onChoose={finalizeInstitutionResolution}
+              />
+            : <InstitutionStep
+                searchTerm={searchTerm}
+                onSearch={setSearchTerm}
+                category={category}
+                onCategory={setCategory}
+                institutions={filteredInstitutions}
+                providerStatus={providerStatus}
+                onRetryProviderStatus={loadProviderStatus}
+                onChoose={chooseInstitution}
+              />)}
 
           {setupStep === 2 && selectedInstitution && <AccountTypeStep
             institution={selectedInstitution}
+            resolvedInstitutionName={resolvedProviderInstitution?.name}
             accountType={accountType}
             onChoose={(next) => { setAccountType(next); setSetupStep(3) }}
           />}
 
           {setupStep === 3 && selectedInstitution && <RedirectConfirmationStep
             institution={selectedInstitution}
+            resolvedInstitutionName={resolvedProviderInstitution?.name}
             busy={busy}
+            error={setupError}
+            providerDescriptor={providerDescriptorFor(selectedInstitution.provider as ConnectorProvider, providerStatus)}
             onCancel={closeSetup}
-            onConfirm={() => void connect(selectedInstitution.provider as ConnectorProvider)}
+            onConfirm={() => void startProvider(selectedInstitution.provider as ConnectorProvider, connectorContext(), setSetupError)}
           />}
         </div>
 
         <div className="connections-setup-header">
-          <button type="button" className="connections-icon-button" aria-label="Back" disabled={setupStep === 1 || busy} onClick={() => setSetupStep(setupStep === 3 ? previousSetupStepFromConfirmation(selectedInstitution) : 1)}><ArrowLeft size={18}/></button>
+          <button type="button" className="connections-icon-button" aria-label="Back" disabled={(setupStep === 1 && !resolvingInstitution) || busy} onClick={() => {
+            setSetupError('')
+            if (setupStep === 1 && resolvingInstitution) { cancelInstitutionResolution(); return }
+            setSetupStep(setupStep === 3 ? previousSetupStepFromConfirmation(selectedInstitution) : 1)
+          }}><ArrowLeft size={18}/></button>
           <p className="connections-step-label">Step {setupStep} of 3</p>
           <button type="button" className="connections-icon-button" aria-label="Close" disabled={busy} onClick={closeSetup}><X size={18}/></button>
         </div>
@@ -525,9 +711,11 @@ function OverviewScreen({ connections, busy, onConnect, onRefresh, onOpenAttenti
           <span className={needsAttention ? 'connections-badge connections-badge--attention' : 'connections-badge connections-badge--ok'} aria-hidden="true">{needsAttention ? <AlertTriangle size={16}/> : <CheckCircle2 size={16}/>}</span>
           {needsAttention && <ChevronRight size={18} aria-hidden="true"/>}
         </>
-        return needsAttention
-          ? <button type="button" key={connection.id} className="connections-row connections-row--attention" onClick={() => onOpenAttention(connection.provider)}>{rowContent}</button>
-          : <div key={connection.id} className="connections-row">{rowContent}</div>
+        // Every connection opens the manage/attention screen -- a healthy
+        // connection needs a way to reach Disconnect too, not just a broken
+        // one (previously only needsAttention rows were clickable, so a
+        // working connection had no Disconnect path anywhere in the UI).
+        return <button type="button" key={connection.id} className={needsAttention ? 'connections-row connections-row--attention' : 'connections-row'} onClick={() => onOpenAttention(connection.provider)}>{rowContent}{!needsAttention && <ChevronRight size={18} aria-hidden="true"/>}</button>
       })}
     </div>
     <p className="connections-section-label">Other options</p>
@@ -550,37 +738,83 @@ interface InstitutionStepProps {
   category: InstitutionCategory
   onCategory: (category: InstitutionCategory) => void
   institutions: ReturnType<typeof filterInstitutions>
+  providerStatus: ProviderStatus
+  onRetryProviderStatus: () => void
   onChoose: (id: string) => void
 }
 
-function InstitutionStep({ searchTerm, onSearch, category, onCategory, institutions, onChoose }: InstitutionStepProps) {
+function InstitutionStep({ searchTerm, onSearch, category, onCategory, institutions, providerStatus, onRetryProviderStatus, onChoose }: InstitutionStepProps) {
   return <>
     <h2 id="connections-setup-title" className="connections-setup-title">Choose your institution</h2>
+    {providerStatus.status === 'error' && <p className="status-message error-message" role="alert">
+      We couldn&apos;t check which providers are available right now. Manual accounts are unaffected.
+      <button type="button" className="connections-text-button connections-retry-button" onClick={onRetryProviderStatus}>Retry</button>
+    </p>}
     <label className="connections-search"><Search size={18}/><input value={searchTerm} onChange={(event) => onSearch(event.target.value)} placeholder="Search institutions"/>{searchTerm && <button type="button" aria-label="Clear search" onClick={() => onSearch('')}><X size={16}/></button>}</label>
     <div className="connections-categories" role="tablist" aria-label="Institution category">
       {CATEGORY_OPTIONS.map((option) => <button type="button" role="tab" aria-selected={category === option.id} key={option.id} className={category === option.id ? 'active' : ''} onClick={() => onCategory(option.id)}>{option.label}</button>)}
     </div>
     <div className="connections-institution-list">
-      {institutions.map((institution) => <button type="button" key={institution.id} className="connections-institution-row" onClick={() => onChoose(institution.id)}>
-        <span className="connections-row-icon"><InstitutionIcon institution={institution}/></span>
-        <span className="connections-institution-name">{institution.name}</span>
-        <ChevronRight size={18}/>
-      </button>)}
+      {institutions.map((institution) => {
+        const availability = institutionAvailability(institution, providerStatus)
+        return <button type="button" key={institution.id} className="connections-institution-row" disabled={availability.unavailable} aria-disabled={availability.unavailable} onClick={() => onChoose(institution.id)}>
+          <span className="connections-row-icon"><InstitutionIcon institution={institution}/></span>
+          <span className="connections-institution-name">
+            {institution.name}
+            {availability.unavailable && <small className="connections-unavailable-badge">{availability.reason}</small>}
+          </span>
+          {!availability.unavailable && <ChevronRight size={18}/>}
+        </button>
+      })}
       {institutions.length === 0 && <p className="connections-empty-copy">No institution matches your search. Try a different name, BIC or bank code, or use a manual account.</p>}
     </div>
     <p className="connections-footnote"><Info size={15}/> Provider availability depends on your institution and region.</p>
   </>
 }
 
+interface InstitutionResolutionStepProps {
+  institution: Institution
+  query: string
+  onQuery: (value: string) => void
+  results: ProviderInstitution[]
+  loading: boolean
+  error: string
+  onBack: () => void
+  onChoose: (match: ProviderInstitution) => void
+}
+
+function InstitutionResolutionStep({ institution, query, onQuery, results, loading, error, onBack, onChoose }: InstitutionResolutionStepProps) {
+  return <>
+    <button type="button" className="connections-back connections-live-search-back" onClick={onBack}><ArrowLeft size={18}/> All institutions</button>
+    <h2 id="connections-setup-title" className="connections-setup-title">Find your {institution.name} branch</h2>
+    <p className="connections-setup-subtitle">Finance Planner connects to the exact bank on file with GoCardless — never a guess. Search and select it below.</p>
+    <label className="connections-search connections-live-search"><Search size={18}/><input autoFocus value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search by bank name or BIC"/>{query && <button type="button" aria-label="Clear search" onClick={() => onQuery('')}><X size={16}/></button>}</label>
+    <div className="connections-institution-list" aria-live="polite">
+      {loading && <p className="connections-empty-copy">Loading banks…</p>}
+      {!loading && error && <p className="status-message error-message" role="alert">{error}</p>}
+      {!loading && !error && results.map((match) => <button type="button" key={match.id} className="connections-institution-row" onClick={() => onChoose(match)}>
+        <span className="connections-row-icon"><InstitutionMark id={match.id} name={match.name} size={20}/></span>
+        <span className="connections-institution-name">{match.name}{match.bic && <small className="connections-institution-bic">{match.bic}</small>}</span>
+        <ChevronRight size={18}/>
+      </button>)}
+      {!loading && !error && results.length === 0 && <p className="connections-empty-copy">No bank matches your search. Try a different name or BIC.</p>}
+    </div>
+  </>
+}
+
 interface AccountTypeStepProps {
-  institution: { name: string; kind: string }
+  institution: { id: string; name: string; kind: string }
+  resolvedInstitutionName?: string
   accountType: ConnectorAccountType
   onChoose: (accountType: ConnectorAccountType) => void
 }
 
-function AccountTypeStep({ institution, accountType, onChoose }: AccountTypeStepProps) {
+function AccountTypeStep({ institution, resolvedInstitutionName, accountType, onChoose }: AccountTypeStepProps) {
   return <>
-    <div className="connections-institution-banner"><span className="connections-row-icon"><InstitutionIcon institution={institution}/></span><strong>{institution.name}</strong></div>
+    <div className="connections-institution-banner">
+      <span className="connections-row-icon"><InstitutionIcon institution={institution}/></span>
+      <span className="connections-row-body"><strong>{institution.name}</strong>{resolvedInstitutionName && resolvedInstitutionName !== institution.name && <small>{resolvedInstitutionName}</small>}</span>
+    </div>
     <h2 id="connections-setup-title" className="connections-setup-title">What would you like to connect?</h2>
     <p className="connections-setup-subtitle">Choose the type of account you want to add from this institution.</p>
     <div className="connections-account-type-list" role="radiogroup" aria-label="Account type">
@@ -599,37 +833,67 @@ function AccountTypeStep({ institution, accountType, onChoose }: AccountTypeStep
 }
 
 interface RedirectConfirmationStepProps {
-  institution: { name: string; provider: string; kind: string }
+  institution: { id: string; name: string; provider: string; kind: string }
+  resolvedInstitutionName?: string
   busy: boolean
+  error: string
+  providerDescriptor?: ProviderDescriptor
   onCancel: () => void
   onConfirm: () => void
 }
 
-function RedirectConfirmationStep({ institution, busy, onCancel, onConfirm }: RedirectConfirmationStepProps) {
-  if (institution.provider === 'paypal') return <div className="connections-confirmation connections-confirmation--paypal">
-    <div className="connections-confirmation-avatar"><Wallet size={30}/></div>
-    <p className="connections-confirmation-provider-name">PayPal</p>
-    <h2 id="connections-setup-title" className="connections-setup-title">Continue to PayPal</h2>
-    <p className="connections-setup-subtitle">You&apos;ll be redirected to PayPal&apos;s official site to authenticate and securely connect your account.</p>
-    <ul className="connections-confirmation-list">
-      <li><ShieldCheck size={19}/><span>Authentication happens on PayPal&apos;s site. Finance Planner does not receive your PayPal password.</span></li>
-      <li><Undo2 size={19}/><span>After you authorize, you&apos;ll return here automatically.</span></li>
-      <li><Info size={19}/><span>The data we can access depends on what PayPal supports and what you consent to.</span></li>
-    </ul>
-    <div className="connections-scope-box">
-      <p className="connections-scope-title">Scope</p>
-      <div className="connections-scope-row"><CreditCard size={17}/><span>Account information</span><span className="connections-scope-status"><BadgeCheck size={16}/> As supported</span></div>
-      <div className="connections-scope-row"><Banknote size={17}/><span>Transactions</span><span className="connections-scope-status"><BadgeCheck size={16}/> As supported</span></div>
+function RedirectConfirmationStep({ institution, resolvedInstitutionName, busy, error, providerDescriptor, onCancel, onConfirm }: RedirectConfirmationStepProps) {
+  if (institution.provider === 'paypal') {
+    const mode = providerDescriptor?.mode
+    const unavailable = providerDescriptor ? !providerDescriptor.available || !providerDescriptor.configured : false
+    if (unavailable) return <div className="connections-confirmation connections-confirmation--paypal">
+      <div className="connections-confirmation-avatar"><InstitutionMark id="paypal" name="PayPal" size={34}/></div>
+      <p className="connections-confirmation-provider-name">PayPal</p>
+      <h2 id="connections-setup-title" className="connections-setup-title">PayPal isn&apos;t available right now</h2>
+      <p className="connections-setup-subtitle">{providerDescriptor?.reason || 'This deployment has not configured PayPal yet.'}</p>
+      <div className="connections-modal-actions"><button type="button" className="secondary" onClick={onCancel}>Close</button></div>
     </div>
-    <div className="connections-modal-actions">
-      <button type="button" className="primary" disabled={busy} onClick={onConfirm}>{busy ? 'Preparing redirect…' : 'Continue to PayPal'}</button>
-      <button type="button" className="secondary" disabled={busy} onClick={onCancel}>Cancel</button>
+
+    // Owner mode uses the deployment owner's own configured PayPal reporting
+    // credentials -- there is no third-party PayPal login here, so the copy
+    // must say that plainly instead of the generic "redirected to PayPal to
+    // authenticate" claim, which would misrepresent what actually happens.
+    const ownerMode = mode === 'owner'
+    return <div className="connections-confirmation connections-confirmation--paypal">
+      <div className="connections-confirmation-avatar"><InstitutionMark id="paypal" name="PayPal" size={34}/></div>
+      <p className="connections-confirmation-provider-name">PayPal{ownerMode ? ' · Owner connection' : ''}</p>
+      <h2 id="connections-setup-title" className="connections-setup-title">{ownerMode ? 'Continue with the owner PayPal connection' : 'Continue to PayPal'}</h2>
+      <p className="connections-setup-subtitle">{ownerMode
+        ? 'This uses the deployment owner’s configured PayPal reporting connection. Only an authorized Finance Planner owner user can access it — it does not open a PayPal login for your own account.'
+        : 'You’ll be redirected to PayPal’s hosted onboarding to authorize your own PayPal account.'}</p>
+      <ul className="connections-confirmation-list">
+        {ownerMode ? <>
+          <li><ShieldCheck size={19}/><span>No PayPal login happens in this flow; access is scoped to the deployment&apos;s configured owner account.</span></li>
+          <li><Info size={19}/><span>The data we can access depends on what PayPal&apos;s reporting API supports.</span></li>
+        </> : <>
+          <li><ShieldCheck size={19}/><span>Authentication happens on PayPal&apos;s site. Finance Planner does not receive your PayPal password.</span></li>
+          <li><Undo2 size={19}/><span>After you authorize, you&apos;ll return here automatically.</span></li>
+        </>}
+      </ul>
+      <div className="connections-scope-box">
+        <p className="connections-scope-title">Scope</p>
+        <div className="connections-scope-row"><CreditCard size={17}/><span>Account information</span><span className="connections-scope-status"><BadgeCheck size={16}/> As supported</span></div>
+        <div className="connections-scope-row"><Banknote size={17}/><span>Transactions</span><span className="connections-scope-status"><BadgeCheck size={16}/> As supported</span></div>
+      </div>
+      {error && <p className="status-message error-message" role="alert">{error}</p>}
+      <div className="connections-modal-actions">
+        <button type="button" className="primary" disabled={busy} onClick={onConfirm}>{busy ? 'Preparing redirect…' : ownerMode ? 'Continue with owner connection' : 'Continue to PayPal'}</button>
+        <button type="button" className="secondary" disabled={busy} onClick={onCancel}>Cancel</button>
+      </div>
+      <p className="connections-footnote">Provider availability and supported data types may change without notice and are subject to each provider&apos;s terms.</p>
     </div>
-    <p className="connections-footnote">Provider availability and supported data types may change without notice and are subject to each provider&apos;s terms.</p>
-  </div>
+  }
 
   return <div className="connections-confirmation">
-    <div className="connections-institution-banner"><span className="connections-row-icon"><InstitutionIcon institution={institution}/></span><strong>{institution.name}</strong></div>
+    <div className="connections-institution-banner">
+      <span className="connections-row-icon"><InstitutionIcon institution={institution}/></span>
+      <span className="connections-row-body"><strong>{institution.name}</strong>{resolvedInstitutionName && resolvedInstitutionName !== institution.name && <small>{resolvedInstitutionName}</small>}</span>
+    </div>
     <h2 id="connections-setup-title" className="connections-setup-title">Continue to your provider</h2>
     <ul className="connections-confirmation-list">
       <li><ShieldCheck size={19}/><span>Authentication will take place on your provider&apos;s official site.<br/><span className="connections-muted">Finance Planner does not receive your online-banking password.</span></span></li>
@@ -642,6 +906,7 @@ function RedirectConfirmationStep({ institution, busy, onCancel, onConfirm }: Re
       <div className="connections-scope-row"><FileText size={17}/><span>Transactions</span></div>
       <p className="connections-scope-footnote">Only as supported and consented.</p>
     </div>
+    {error && <p className="status-message error-message" role="alert">{error}</p>}
     <div className="connections-modal-actions">
       <button type="button" className="primary" disabled={busy} onClick={onConfirm}>{busy ? 'Preparing redirect…' : 'Continue securely'}</button>
       <button type="button" className="secondary" disabled={busy} onClick={onCancel}>Cancel</button>
@@ -699,6 +964,7 @@ interface AttentionScreenProps {
   reason: ReturnType<typeof connectionAttentionReason>
   busy: boolean
   confirming: boolean
+  error: string
   onBack: () => void
   onReconnect: () => void
   onDisconnectRequest: () => void
@@ -706,13 +972,21 @@ interface AttentionScreenProps {
   onDisconnectConfirm: () => void
 }
 
-function AttentionScreen({ connection, reason, busy, confirming, onBack, onReconnect, onDisconnectRequest, onDisconnectCancel, onDisconnectConfirm }: AttentionScreenProps) {
+function AttentionScreen({ connection, reason, busy, confirming, error, onBack, onReconnect, onDisconnectRequest, onDisconnectCancel, onDisconnectConfirm }: AttentionScreenProps) {
   const copy = reason ? ATTENTION_REASON_COPY[reason] : null
   return <div className="connections-attention-screen">
     <header className="connections-subpage-header"><button type="button" className="connections-back" onClick={onBack}><ArrowLeft size={18}/> Back</button><h2>Connections</h2></header>
-    <div className="connections-attention-icon"><AlertTriangle size={28}/></div>
-    <h2 className="connections-attention-title">Connection needs attention</h2>
-    <p className="connections-setup-subtitle connections-center">We&apos;re having trouble maintaining this connection. Please reconnect to keep your data up to date.</p>
+    {reason
+      ? <>
+        <div className="connections-attention-icon"><AlertTriangle size={28}/></div>
+        <h2 className="connections-attention-title">Connection needs attention</h2>
+        <p className="connections-setup-subtitle connections-center">We&apos;re having trouble maintaining this connection. Please reconnect to keep your data up to date.</p>
+      </>
+      : <>
+        <div className="connections-attention-icon"><CheckCircle2 size={28}/></div>
+        <h2 className="connections-attention-title">Manage connection</h2>
+        <p className="connections-setup-subtitle connections-center">This connection is working normally. You can reconnect it or disconnect it below.</p>
+      </>}
     <div className="connections-row connections-row--static"><span className="connections-row-icon">{connection.provider === 'paypal' ? <Wallet size={19}/> : <Landmark size={19}/>}</span><span className="connections-row-body"><strong>{connection.displayName}</strong></span></div>
 
     {copy && <section className="connections-reason-section" aria-labelledby="connections-reason-title">
@@ -720,6 +994,7 @@ function AttentionScreen({ connection, reason, busy, confirming, onBack, onRecon
       <div className="connections-reason-card"><RefreshCw size={19}/><div><strong>{copy.title}</strong><span>{copy.description}</span></div></div>
     </section>}
     <p className="connections-setup-subtitle">Your previously imported transactions will remain in Finance Planner unless you explicitly remove this account through a supported workflow.</p>
+    {error && <p className="status-message error-message" role="alert">{error}</p>}
 
     {!confirming ? <div className="connections-modal-actions connections-modal-actions--page">
       <button type="button" className="primary" disabled={busy} onClick={onReconnect}><RefreshCw size={17}/> Reconnect</button>
