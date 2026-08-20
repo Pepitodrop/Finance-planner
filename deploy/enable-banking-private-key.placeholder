@@ -1,0 +1,17 @@
+Enable Banking is not configured for this deployment.
+
+This file is committed to git and contains no key material -- it exists
+only so compose.yaml's read-only bind mount always has a valid host-side
+source, which lets `docker compose up` succeed for deployments that
+intentionally leave Enable Banking unconfigured (its RSA private key
+resolver already fails closed on anything that doesn't parse as a real
+PEM, so this placeholder can never be mistaken for a working key even if
+somehow read).
+
+To enable Enable Banking, set both of the following in your .env (never in
+this file, never in compose.yaml, never committed to git):
+
+  ENABLE_BANKING_APPLICATION_ID=<your application id>
+  ENABLE_BANKING_PRIVATE_KEY_HOST_FILE=/absolute/path/to/your/real-key.pem
+
+See .env.example for the full explanation.

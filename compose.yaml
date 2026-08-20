@@ -150,10 +150,36 @@ services:
       # and map it into the runtime name here.
       PAYPAL_ENV: ${PAYPAL_ENVIRONMENT:-sandbox}
       PAYPAL_ENVIRONMENT: ${PAYPAL_ENVIRONMENT:-sandbox}
+      # Enable Banking is optional, like GoCardless/PayPal above. Empty by
+      # default -- isEnableBankingConfigured() (server/src/enable-banking-jwt.js)
+      # checks this first and short-circuits false when it's unset, so the
+      # fixed key-file path below is never actually read unless an operator
+      # also sets ENABLE_BANKING_APPLICATION_ID. See .env.example.
+      ENABLE_BANKING_APPLICATION_ID: ${ENABLE_BANKING_APPLICATION_ID:-}
+      # Always the same fixed in-container path -- what determines whether
+      # Enable Banking is actually usable is the application id above and
+      # whatever the read-only mount below actually contains, not this path.
+      ENABLE_BANKING_PRIVATE_KEY_FILE: /run/secrets/enable-banking-private-key.pem
     ports:
       - "127.0.0.1:${CONNECTOR_PORT:-8787}:8787"
     volumes:
       - connector-data:/app/data
+      # Read-only bind mount of the Enable Banking RSA private key. Defaults
+      # to a committed, non-secret placeholder (deploy/enable-banking-private-key.placeholder
+      # -- not a real key, and the app never reads it unless
+      # ENABLE_BANKING_APPLICATION_ID is also set) so this mount always has a
+      # valid host-side source and `docker compose up` never fails for a
+      # deployment that leaves Enable Banking unconfigured. Set
+      # ENABLE_BANKING_PRIVATE_KEY_HOST_FILE in .env to a real PEM path to
+      # enable it -- see .env.example. Long-form with create_host_path:false
+      # so a mistyped host path fails loudly instead of Compose's default
+      # behavior of silently mounting an empty directory in its place.
+      - type: bind
+        source: ${ENABLE_BANKING_PRIVATE_KEY_HOST_FILE:-./deploy/enable-banking-private-key.placeholder}
+        target: /run/secrets/enable-banking-private-key.pem
+        read_only: true
+        bind:
+          create_host_path: false
     tmpfs:
       - /tmp:size=64m,mode=1777
     security_opt:
