@@ -647,11 +647,25 @@ class EnableBankingProvider extends OpenBankingProvider {
     if (consentState === 'expired') throw new Error(`Enable Banking consent expired or was revoked: ${session?.status}`)
     if (consentState !== 'ready') throw new Error(`Enable Banking consent is not ready: ${session?.status || 'unknown'}`)
 
+    // Refreshed from this same session response (no extra network call --
+    // we already fetched it above for the status check) rather than the
+    // account list/expiry frozen once at completeCallback() time. Without
+    // this, an account added or removed at the bank after initial connection
+    // would never be reflected, and a consent window the provider
+    // extended/shortened would silently drift from the locally cached value.
+    // Falls back to the originally-stored values whenever this response
+    // omits either field, so behavior is unchanged if a given Enable Banking
+    // deployment's GET /sessions/{id} doesn't echo them.
+    const liveAccounts = Array.isArray(session?.accounts) && session.accounts.length > 0
+      ? session.accounts.map((account) => ({ uid: account.uid, name: account.name, currency: account.currency, cashAccountType: account.cash_account_type }))
+      : credential.accounts
+    const liveConsentExpiresAt = session?.access?.valid_until || consentExpiresAt
+
     const window = syncWindow(credential.lastSyncedAt, completedAt, 90)
     const accounts = []
     const transactions = []
     const seen = new Set()
-    for (const account of credential.accounts ?? []) {
+    for (const account of liveAccounts ?? []) {
       const balances = await jsonFetch(`${EB_BASE}/accounts/${account.uid}/balances`, { headers: enableBankingHeaders(this.env) }, policy)
       if (!Array.isArray(balances?.balances)) throw new Error('Enable Banking balance response is invalid.')
       const balance = selectEnableBankingBalance(balances.balances)
@@ -699,13 +713,16 @@ class EnableBankingProvider extends OpenBankingProvider {
 
     const reconciliation = { accountCount: accounts.length, transactionCount: transactions.length, dateFrom: window.dateFrom, dateTo: window.dateTo, syncedAt: completedAt.toISOString() }
     await validateProviderReconciliationWithCore(this.core, { accounts, transactions, reconciliation })
-    const health = completedHealth({ completedAt, consentExpiresAt, accounts, transactions })
+    const health = completedHealth({ completedAt, consentExpiresAt: liveConsentExpiresAt, accounts, transactions })
     return {
       accounts,
       transactions,
-      credential: { ...credential, lastSyncedAt: completedAt.toISOString(), consentExpiresAt, health },
+      // Persists the refreshed account list and expiry, not the stale ones
+      // this credential was loaded with, so the next sync() call starts from
+      // what this call just observed rather than re-reading a frozen snapshot.
+      credential: { ...credential, accounts: liveAccounts, lastSyncedAt: completedAt.toISOString(), consentExpiresAt: liveConsentExpiresAt, health },
       reconciliation: { ...reconciliation, health },
-      consentExpiresAt,
+      consentExpiresAt: liveConsentExpiresAt,
       health,
     }
   }

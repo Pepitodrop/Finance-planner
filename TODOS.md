@@ -99,6 +99,18 @@ to wire up one secret/URL.
 **Priority:** P3
 **Depends on:** None
 
+### A very long ASPSP name could exceed the shared institutionId truncation and be spuriously rejected
+
+**What:** `server/src/server.js`'s connector-start route truncates `institutionId` to 128 characters (`input.institutionId.trim().slice(0, 128)`) before it reaches any provider adapter. GoCardless's institutionId is a short opaque provider-issued code, always well under this limit. Enable Banking's institutionId (`encodeAspspId(name, country)`, `server/src/providers.js`) instead embeds the full ASPSP display name, so a bank whose `country:name` string exceeds 128 characters would have its name silently truncated in transit; `EnableBankingProvider.start()`'s exact-match lookup against the live `/aspsps` directory then fails to find it and rejects with `invalid_institution`, incorrectly treating a real, currently-offered bank as unavailable.
+
+**Why:** Failure mode is safe (an honest rejection, not data corruption or misrouting to the wrong bank), and real-world Enable Banking ASPSP display names are, in practice, well under 100 characters — this was flagged and accepted as a low-probability boundary case during the original architecture review (`/plan-eng-review`, 2026-08-20) and re-surfaced independently by two automated `/code-review` passes on PR #142. Not fixed: raising the shared 128-char cap without real data on the actual distribution of ASPSP name lengths across Enable Banking's live directory would be a guess, not a verified fix, and this codebase's own convention (see other TODOS entries) is to avoid blind fixes for cases that can't be verified against real provider data.
+
+**Context:** No sandbox Enable Banking credentials exist in this environment to pull the real directory and check actual name-length distribution. If this is ever hit in practice, the fix is either raising the shared cap (verify it doesn't weaken the cache-growth guard on GoCardless's own `country`/`institutionId` handling first) or switching Enable Banking's institutionId encoding to an opaque hash/index instead of embedding the display name directly.
+
+**Effort:** S (once real ASPSP name-length data is available)
+**Priority:** P3
+**Depends on:** Enable Banking sandbox credentials, to check real ASPSP name lengths
+
 ### Implement real per-merchant OAuth token exchange for PayPal partner mode
 
 **What:** `PayPalProvider.sync()` (`server/src/providers.js`) has no per-merchant PayPal token to read for partner-mode connections — it currently fails closed with an explicit error rather than the previous behavior of silently returning the deployment owner's own PayPal data to whichever user had a partner-mode connection stored. Partner mode's `start()` does send the user through PayPal's real Partner Referrals onboarding page, but nothing captures the resulting merchant-specific authorization grant afterward.

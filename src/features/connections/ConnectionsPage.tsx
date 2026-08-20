@@ -52,6 +52,7 @@ import {
   ACCOUNT_TYPE_OPTIONS,
   ATTENTION_REASON_COPY,
   CATEGORY_OPTIONS,
+  AIS_PROVIDER_PREFERENCE,
   MAX_STATEMENT_FILE_BYTES,
   connectionAttentionReason,
   connectionNeedsAttention,
@@ -247,6 +248,12 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     }
   }, [liveInstitutions, liveInstitutionsLoading])
 
+  // Derived from AIS_PROVIDER_PREFERENCE (the single source of truth for
+  // provider order) rather than hardcoded literals, so both the fallback
+  // trigger below and its availability gate stay correct if that list's
+  // order or membership ever changes.
+  const [aisPrimaryProvider, aisFallbackProvider] = AIS_PROVIDER_PREFERENCE
+
   // User-initiated only, never automatic: switches the current resolution
   // attempt from the preferred provider to the explicit fallback and
   // re-searches with the same query. Only offered when a real fallback
@@ -255,10 +262,11 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   // fires the page navigates away, so there is no code path that could
   // change the provider mid-consent.
   const useGoCardlessFallback = () => {
-    setResolvingProvider('gocardless')
+    if (!aisFallbackProvider) return
+    setResolvingProvider(aisFallbackProvider)
     setLiveInstitutions(null)
     setLiveInstitutionsError('')
-    void loadLiveInstitutions('gocardless', { force: true })
+    void loadLiveInstitutions(aisFallbackProvider, { force: true })
   }
 
   const filteredLiveInstitutions = useMemo(() => {
@@ -268,11 +276,11 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     return liveInstitutions.filter((institution) => institution.name.toLocaleLowerCase('de-DE').includes(query) || institution.bic?.toLocaleLowerCase('de-DE').includes(query))
   }, [liveInstitutions, liveInstitutionQuery])
 
-  // A real, independently-available fallback exists only when GoCardless
-  // itself reports available+configured -- offering the fallback button
-  // when there is nothing to fall back to would be a dead end. Only
+  // A real, independently-available fallback exists only when the fallback
+  // provider itself reports available+configured -- offering the fallback
+  // button when there is nothing to fall back to would be a dead end. Only
   // relevant while actively resolving through the preferred provider.
-  const gocardlessFallbackAvailable = resolvingProvider === 'enablebanking' && Boolean(providerDescriptorFor('gocardless', providerStatus)?.available && providerDescriptorFor('gocardless', providerStatus)?.configured)
+  const gocardlessFallbackAvailable = resolvingProvider === aisPrimaryProvider && Boolean(aisFallbackProvider) && Boolean(providerDescriptorFor(aisFallbackProvider, providerStatus)?.available && providerDescriptorFor(aisFallbackProvider, providerStatus)?.configured)
 
   const selectedInstitution = selectedInstitutionId ? institutionById(selectedInstitutionId) : undefined
   const filteredInstitutions = useMemo(() => filterInstitutions(searchTerm, category), [searchTerm, category])
@@ -678,7 +686,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
             resolvedInstitutionName={resolvedProviderInstitution?.name}
             busy={busy}
             error={setupError}
-            providerDescriptor={providerDescriptorFor(effectiveProvider() ?? 'gocardless', providerStatus)}
+            providerDescriptor={(() => { const provider = effectiveProvider(); return provider ? providerDescriptorFor(provider, providerStatus) : undefined })()}
             onCancel={closeSetup}
             onConfirm={() => { const provider = effectiveProvider(); if (provider) void startProvider(provider, connectorContext(), setSetupError) }}
           />}

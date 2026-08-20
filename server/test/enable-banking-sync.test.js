@@ -108,6 +108,48 @@ test('syncs balances and transactions for multiple accounts', () => withRestored
   assert.deepEqual(result.accounts.map((a) => a.balanceCents), [10_000, 50_000])
 }))
 
+test('refreshes the account list and consent expiry from the live session response, not the frozen credential', () => withRestoredFetch(async () => {
+  const staleCredential = { ...CREDENTIAL, accounts: [{ uid: 'stale-acct', name: 'Stale', currency: 'EUR', cashAccountType: 'CACC' }] }
+  const freshValidUntil = new Date(Date.now() + 60 * 86_400_000).toISOString()
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({
+      status: 'AUTHORIZED',
+      accounts: [{ uid: 'fresh-acct', name: 'Fresh Account', currency: 'EUR', cash_account_type: 'CACC' }],
+      access: { valid_until: freshValidUntil },
+    }), { status: 200 })
+    if (url.includes('fresh-acct/balances')) return new Response(JSON.stringify(balancesResponse('42.00')), { status: 200 })
+    if (url.includes('fresh-acct/transactions')) return new Response(JSON.stringify({ transactions: [] }), { status: 200 })
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  const result = await adapter.sync(staleCredential)
+
+  assert.equal(result.accounts.length, 1)
+  assert.equal(result.accounts[0].externalId, 'fresh-acct')
+  assert.equal(result.consentExpiresAt, freshValidUntil)
+  assert.equal(result.credential.accounts[0].uid, 'fresh-acct')
+  assert.equal(result.credential.consentExpiresAt, freshValidUntil)
+}))
+
+test('falls back to the credential\'s stored accounts and expiry when the live session response omits them', () => withRestoredFetch(async () => {
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({ status: 'AUTHORIZED' }), { status: 200 })
+    if (url.includes('acct-1/balances')) return new Response(JSON.stringify(balancesResponse('10.00')), { status: 200 })
+    if (url.includes('acct-1/transactions')) return new Response(JSON.stringify({ transactions: [] }), { status: 200 })
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  const result = await adapter.sync(CREDENTIAL)
+
+  assert.equal(result.accounts.length, 1)
+  assert.equal(result.accounts[0].externalId, 'acct-1')
+  assert.equal(result.consentExpiresAt, CREDENTIAL.accessValidUntil)
+}))
+
 test('prefers CLBD over CLAV over any other EUR balance type when multiple are present', () => withRestoredFetch(async () => {
   globalThis.fetch = async (input) => {
     const url = String(input)
