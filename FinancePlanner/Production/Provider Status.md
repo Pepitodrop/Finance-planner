@@ -15,8 +15,8 @@ For first-party internal flows with no external provider (for example Finance Pl
 Implementation: **implemented** (real Enable Banking API client, `server/src/providers.js` `EnableBankingProvider`, `server/src/enable-banking-jwt.js`)
 Configuration: **optional** (requires `ENABLE_BANKING_APPLICATION_ID` + `ENABLE_BANKING_PRIVATE_KEY_FILE` or `ENABLE_BANKING_PRIVATE_KEY`)
 Provider-dependent: yes
-Runtime verified: **partial — see live verification matrix (2026-08-21)**. Institution discovery is genuinely live-verified; consent/sync/disconnect are not.
-Production verified: **no evidence found** for the consent/sync/disconnect path. Institution discovery WAS exercised against a temporary production deployment (`finance.luisbenedikt.de`) of PR #144, against the real configured Enable Banking sandbox application — see matrix below. This is the first actual live-traffic evidence this provider has ever had.
+Runtime verified: **partial — see live verification matrix (2026-08-21, second pass)**. Institution discovery and logos are genuinely live-verified; `/auth` request-reaches-provider is live-verified; `/auth` acceptance, consent, callback, sync, and disconnect are not. The redirect_uri and rate-limit fixes that unblocked this pass are code-complete and locally verified only, not yet redeployed.
+Production verified: **no evidence found** for the consent/sync/disconnect path. Institution discovery, logos, and `/auth` reaching the provider WERE exercised against two sequential temporary production deployments (`finance.luisbenedikt.de`) of PR #144, against the real configured Enable Banking sandbox application — see matrix below. This is the first actual live-traffic evidence this provider has ever had.
 
 ### Live verification matrix (PR #144, two sequential temporary deployments against finance.luisbenedikt.de, 2026-08-21)
 
@@ -40,6 +40,27 @@ Production verified: **no evidence found** for the consent/sync/disconnect path.
 **First live pass** failed with a generic "Internal server error" pressing "Continue securely" for Volksbank Köln Bonn. Root-caused (not confirmed via production logs on that pass — none were available — but confirmed against current official Enable Banking API docs and unit-tested): `EnableBankingProvider.start()` treated `match.maximum_consent_validity` (documented as **seconds**) as if it were already **days**, so the per-ASPSP consent-duration clamp never actually fired. Fixed (seconds→ms conversion) plus `access.balances`/`transactions: true` added, plus improved server-side (never client-facing) provider-error logging.
 
 **Second live pass** (after redeploying the fix above, and after separately fixing a rate-limiter interaction where ordinary logo traffic could exhaust the sensitive bucket and starve `/start` — see [[Rate Limiting]]): the request now reached Enable Banking and received a **real, structured provider response** — `providerStatus: 400`, `providerCode: REDIRECT_URI_NOT_ALLOWED`, `providerMessage: "Redirect URI not allowed"` (request `d7eabbcb-e605-447c-920e-a6c1c6a1932f`). Root cause (confirmed from the real provider error, not guessed): `redirect_url` was built by appending `?provider=enablebanking&state=...` on top of the origin, which Enable Banking's Control Panel does not accept — its two registered redirect URLs (`https://finance.luisbenedikt.de/api/connectors/callback`, `http://localhost:5173/api/connectors/callback`) are validated as exact, bare strings. Fixed by deriving `redirect_url` independently from trusted server config (`canonicalCallbackUrl()`) instead of the browser-supplied return destination, and deriving the callback route's provider identity from the verified `state` payload instead of a client-supplied `?provider=` query parameter — full detail in [[Provider Callback Binding]]'s 2026-08-21 entry.
+
+Both the redirect_uri fix and the rate-limit tier fix are **IMPLEMENTED / LOCALLY VERIFIED only** (full server+frontend test suites, `tsc -b --noEmit`, `eslint .`, `npm run build`, `git diff --check` clean; two independent gstack review subagents — security and correctness — found zero exploitable issues) **until we redeploy and repeat the real sandbox test.** Current exact matrix as of this pass:
+
+```
+Enable Banking configuration: LIVE VERIFIED = YES
+/aspsps: LIVE VERIFIED = YES
+Bank family discovery: LIVE VERIFIED = YES
+Search: LIVE VERIFIED = YES
+Exact bank selection: LIVE VERIFIED = YES
+Real bank logos: LIVE VERIFIED = YES
+Logo proxy: LIVE VERIFIED = YES
+POST /auth request reaches Enable Banking: LIVE VERIFIED = YES
+POST /auth accepted: NO
+Current real provider blocker: REDIRECT_URI_NOT_ALLOWED
+Consent: NO
+Callback: NO
+POST /sessions: NO
+Balances: NO
+Transactions: NO
+Disconnect: NO
+```
 
 Current limitations: same class of gap as GoCardless below — no completed end-to-end consent→sync→disconnect cycle evidenced against a live sandbox, and the redirect_uri fix above is **not yet re-verified live**. Do not mark the consent-duration fix LIVE VERIFIED either — the provider currently rejects on redirect_uri first, so another contract problem could still surface once that's corrected. Control Panel setup itself is confirmed already correct (discovery/JWT auth succeed live; both required redirect URLs are registered). See [[Enable Banking]], [[Bank Family Directory Resolution]], [[Institution Logo Proxy]], and [[Provider Callback Binding]].
 Architecture note (2026-08-20): implementing Enable Banking required generalizing PR #138's callback contract — `OpenBankingProvider` gained a `completeCallback()` lifecycle step (a no-op pass-through for GoCardless/PayPal) because Enable Banking's session isn't known until after a server-side code exchange that happens *after* the callback lands, and `activateConnection()` was split into `consumePendingConnectionSetup()` + `finalizeConnection()` so that exchange's network call never happens inside an open DB transaction. This is a structural change to the callback path all three bank/wallet providers now share; see [[Provider Callback Binding]] for why none of its existing guarantees (atomic single-use nonce, working-connection-preserved-until-verified) were weakened by the split.
