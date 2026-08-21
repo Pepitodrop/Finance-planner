@@ -299,6 +299,24 @@ describe('bank-family resolution (institutions.ts directoryTerms, never the lite
     expect(screen.queryByText(/No bank matches your search/)).not.toBeInTheDocument()
   })
 
+  it('renders each live branch row with the same-origin logo proxy, never a direct link to a provider-controlled host, and falls back to the lettermark on image error', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:Volksbank Demmin', name: 'Volksbank Demmin' }])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+
+    const row = await screen.findByRole('button', { name: /Volksbank Demmin/ })
+    const image = row.querySelector('img')
+    expect(image).toBeTruthy()
+    expect(image).toHaveAttribute('src', '/api/connectors/enablebanking/logo?institutionId=DE%3AVolksbank%20Demmin')
+
+    fireEvent.error(image!)
+    expect(row.querySelector('img')).not.toBeInTheDocument()
+    expect(row.querySelector('.connections-mark--lettermark')).toBeInTheDocument()
+  })
+
   it('narrows to real cooperative-network branches via Enable Banking group.name, filtering out an unrelated bank in the same directory', async () => {
     const user = userEvent.setup()
     vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
@@ -524,6 +542,47 @@ describe('redirect confirmation', () => {
     expect(startConnector).not.toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: 'Continue securely' }))
     expect(startConnector).toHaveBeenCalledWith('finapi', { institutionId: 'trade-republic', institutionName: 'Trade Republic', accountType: 'investment' })
+  })
+
+  it('shows the resolved live bank\'s own logo (via the same-origin proxy) on the Step 3 confirmation header, not the family tile\'s generic icon', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:Volksbank Köln Bonn', name: 'Volksbank Köln Bonn' }])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    await user.click(await screen.findByRole('button', { name: /Volksbank Köln Bonn/ }))
+    await screen.findByRole('heading', { name: 'Continue to your provider' })
+
+    const image = document.querySelector('.connections-institution-banner img')
+    expect(image).toHaveAttribute('src', '/api/connectors/enablebanking/logo?institutionId=DE%3AVolksbank%20K%C3%B6ln%20Bonn')
+  })
+
+  it('shows the newly resolved bank\'s own logo on the confirmation header after backing out and resolving a different bank, never the previous bank\'s (failed) image', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    // One directory fetch covering both banks -- the live-directory cache
+    // persists for the rest of the setup session by design, so a second
+    // resolution of the same family tile reuses it rather than refetching.
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([
+      { id: 'DE:Volksbank Köln Bonn', name: 'Volksbank Köln Bonn' },
+      { id: 'DE:Volksbank Demmin', name: 'Volksbank Demmin' },
+    ])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    await user.click(await screen.findByRole('button', { name: /Volksbank Köln Bonn/ }))
+    await screen.findByRole('heading', { name: 'Continue to your provider' })
+    fireEvent.error(document.querySelector('.connections-institution-banner img')!)
+    expect(document.querySelector('.connections-institution-banner img')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    await user.click(await screen.findByRole('button', { name: /Volksbank Demmin/ }))
+    await screen.findByRole('heading', { name: 'Continue to your provider' })
+
+    const secondImage = document.querySelector('.connections-institution-banner img')
+    expect(secondImage).toHaveAttribute('src', '/api/connectors/enablebanking/logo?institutionId=DE%3AVolksbank%20Demmin')
   })
 
   it('uses owner-mode PayPal confirmation copy and starts the paypal provider', async () => {

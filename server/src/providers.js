@@ -19,6 +19,20 @@ const MAX_PAYPAL_PAGES = 100
 const MAX_ENABLEBANKING_PAGES = 100
 const MAX_RETRY_DELAY_MS = 30_000
 const INSTITUTIONS_CACHE_TTL_MS = 10 * 60_000
+const LOGO_CACHE_TTL_MS = 24 * 60 * 60_000
+const LOGO_CACHE_MAX_ENTRIES = 500
+const LOGO_FETCH_TIMEOUT_MS = 5_000
+const LOGO_MAX_REDIRECTS = 3
+const LOGO_MAX_BYTES = 2 * 1024 * 1024
+// Raster formats only -- no `image/svg+xml`. An SVG served with this exact
+// content-type executes embedded <script>/event-handler markup if a browser
+// is ever navigated to the logo URL directly as a top-level document (a
+// real, well-known behavior distinct from the safe, script-disabled
+// rendering an <img> tag gets); sanitizing SVG correctly is its own
+// nontrivial project. Excluding the format entirely is the safe-by-default
+// choice here -- a bank whose only logo is SVG-only just falls through to
+// the lettermark, never to a rejected/broken image.
+const LOGO_CONTENT_TYPE_ALLOWLIST = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 
 const READ_ONLY_CAPABILITIES = Object.freeze({
   accountInformation: true,
@@ -150,6 +164,18 @@ export async function jsonFetch(url, options = {}, policy = {}) {
 
       const error = new Error(`Provider request failed with HTTP ${response.status}.`)
       error.status = response.status
+      // Safe to attach: this is the provider's OWN returned error payload,
+      // never anything Finance Planner sent (JWTs/private keys are outgoing
+      // auth headers, never echoed back in a response body). Only consumed
+      // by server.js's structured request-error log (never returned to the
+      // client -- classifyError() keeps the generic client-facing message)
+      // so a provider-contract rejection (e.g. an invalid POST /auth body)
+      // is diagnosable from logs instead of surfacing as a bare, silent
+      // "Internal server error" with no actionable detail.
+      const providerCode = typeof body?.error === 'string' ? body.error : (typeof body?.code === 'string' ? body.code : undefined)
+      const providerMessage = typeof body?.message === 'string' ? body.message : (typeof body?.error_description === 'string' ? body.error_description : undefined)
+      if (providerCode) error.providerCode = providerCode
+      if (providerMessage) error.providerMessage = String(providerMessage).slice(0, 300)
       const retryable = response.status === 429 || response.status >= 500
       if (!retryable || attempt === retries) throw error
 
@@ -172,6 +198,115 @@ export async function jsonFetch(url, options = {}, policy = {}) {
 
   if (lastError?.name === 'AbortError') throw new Error(`Provider request timed out after ${timeoutMs}ms`)
   throw lastError ?? new Error('Provider request failed')
+}
+
+// Fetches a bank/group logo image from a provider-supplied URL, bounded and
+// re-validated at every hop -- the "browser -> same-origin logo endpoint ->
+// server re-validates institution -> server obtains the logo URL from that
+// trusted provider response -> validate -> bounded fetch -> serve from
+// Finance Planner's own origin" architecture (see server.js's logo route).
+// `initialUrl` must already have been produced by a provider-specific
+// validator (HTTPS + exact allowed hostname) BEFORE this is ever called --
+// this function re-validates every redirect target the same way, but is not
+// itself the source of truth for which hostnames are allowed. Never forwards
+// cookies/credentials/auth headers upstream, never follows a redirect off
+// the allowed hostname, never returns more than LOGO_MAX_BYTES, and only
+// returns a raster image whose Content-Type is on the fixed allowlist.
+// Races a promise against a hard deadline without relying on the promise's
+// own cancellation semantics -- used for both the initial fetch() and every
+// reader.read() call below. Deliberately NOT just an AbortController signal
+// passed to fetch(): that only reliably bounds the time until response
+// headers arrive. Whether aborting it ALSO unblocks an in-flight
+// `reader.read()` on the response body is an implementation detail of the
+// fetch runtime rather than something this code should depend on for its
+// own timeout guarantee (found by an independent security review pass,
+// 2026-08-21: the original code cleared its timer as soon as fetch()
+// resolved, leaving the body-read loop with no deadline at all -- a server
+// that returns 200 + valid headers, sends a few bytes, then stalls the
+// connection without closing it hung this function, and the request thread
+// serving it, indefinitely). This race is the actual, explicit bound;
+// `signal` is still passed to fetch() as a real, additional layer that lets
+// a well-behaved runtime tear down the underlying connection promptly, but
+// nothing here depends on it doing so.
+function withDeadline(promise, deadlineAt, onTimeout) {
+  const remaining = deadlineAt - Date.now()
+  if (remaining <= 0) return Promise.reject(new Error('Deadline already passed.'))
+  let timer
+  const timeout = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => { onTimeout?.(); reject(new Error('Operation timed out.')) }, remaining)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
+export async function fetchBoundedImage(initialUrl, { allowedHostnames, timeoutMs = LOGO_FETCH_TIMEOUT_MS, maxBytes = LOGO_MAX_BYTES, maxRedirects = LOGO_MAX_REDIRECTS } = {}) {
+  // One deadline for the WHOLE call, not reset per redirect hop -- a chain
+  // of otherwise-individually-fast redirects must not add up to
+  // maxRedirects * timeoutMs of total latency (found by the same review
+  // pass as the read-loop timeout above).
+  const deadline = Date.now() + timeoutMs
+  let currentUrl = initialUrl
+  for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
+    let parsed
+    try { parsed = new URL(currentUrl) } catch { return null }
+    if (parsed.protocol !== 'https:' || !allowedHostnames.has(parsed.hostname)) return null
+
+    const controller = new AbortController()
+    let response
+    try {
+      response = await withDeadline(
+        fetch(currentUrl, { signal: controller.signal, redirect: 'manual', credentials: 'omit', headers: { Accept: 'image/*' } }),
+        deadline,
+        () => controller.abort(),
+      )
+    } catch {
+      return null
+    }
+
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get('location')
+      if (!location) return null
+      try { currentUrl = new URL(location, currentUrl).toString() } catch { return null }
+      continue // loop re-validates protocol/hostname on the new URL before ever fetching it
+    }
+    if (!response.ok) return null
+
+    const contentType = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase()
+    if (!LOGO_CONTENT_TYPE_ALLOWLIST.has(contentType)) return null
+    const declaredLength = Number(response.headers.get('content-length'))
+    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) return null
+
+    const reader = response.body?.getReader()
+    if (!reader) return null
+    const chunks = []
+    let total = 0
+    try {
+      for (;;) {
+        // Deliberately no onTimeout callback here (unlike the fetch() call
+        // below): ReadableStreamDefaultReader.cancel() *resolves* a pending
+        // read() (as {done: true}) rather than rejecting it, so calling it
+        // from inside the timeout race would compete with the timeout's own
+        // rejection for which one Promise.race observes first -- a genuine,
+        // order-of-microtasks-dependent race that isn't worth the fragility.
+        // The reader is cancelled unconditionally in the catch block below
+        // once the deadline has already won cleanly, which is enough to
+        // stop the stream and avoid leaving its underlying resource pinned.
+        const { done, value } = await withDeadline(reader.read(), deadline)
+        if (done) break
+        total += value.byteLength
+        // Defense in depth against a Content-Length that under-reports (or
+        // is absent) -- the actual byte stream is bounded regardless of
+        // what the provider claims, and regardless of whether it was
+        // transparently decompressed by the fetch implementation.
+        if (total > maxBytes) { await reader.cancel().catch(() => {}); return null }
+        chunks.push(value)
+      }
+    } catch {
+      await reader.cancel().catch(() => {}) // covers the read loop hitting the deadline too
+      return null
+    }
+    return { contentType, body: Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))) }
+  }
+  return null // exceeded maxRedirects without landing on a usable response
 }
 
 function providerPolicy(env) {
@@ -228,6 +363,14 @@ export class OpenBankingProvider {
   async start() { throw new Error(`${this.id} provider start is not implemented.`) }
   async sync() { throw new Error(`${this.id} provider sync is not implemented.`) }
   async institutionDirectory() { throw new HttpError(404, 'institution_directory_unsupported', `${this.id} does not provide an institution directory.`) }
+  // Fetches a bounded, validated logo image for a given institutionId
+  // (re-derived from the live directory server-side, never trusting a
+  // client-supplied URL) and returns { contentType, body } or null when no
+  // logo is available -- never a hard error, since "no logo" is the normal
+  // case for most providers/institutions and the frontend already has a
+  // lettermark fallback. See server.js's logo route and
+  // EnableBankingProvider's override for the concrete implementation.
+  async fetchInstitutionLogo() { return null }
   // Called by the server callback route AFTER its own state/nonce verification
   // succeeds, with the already-consumed pending credential and whatever
   // provider-specific data the callback URL carried (e.g. an authorization
@@ -508,6 +651,33 @@ function sanitizeEnableBankingGroup(group) {
   return { name: String(group.name), ...(group.logo ? { logo: String(group.logo) } : {}) }
 }
 
+// Confirmed against the current official API reference (2026-08-21): every
+// documented ASPSP.logo/group.logo example is hosted on enablebanking.com
+// itself (e.g. "https://enablebanking.com/brands/FI/Nordea/"), a
+// Uploadcare-backed CDN under their own domain. Strict allowlist of exactly
+// that hostname -- not a general "any HTTPS URL the provider claims" policy.
+// If Enable Banking ever serves logos from a different domain, this must be
+// updated deliberately, not silently widened.
+const ENABLE_BANKING_LOGO_HOSTNAMES = new Set(['enablebanking.com'])
+
+// Re-validates a logo URL the live /aspsps response itself returned --
+// HTTPS only, exact hostname allowlist. Returns null (never throws) for
+// anything that doesn't pass, so a malformed or off-allowlist value from
+// upstream just falls through to the next fallback in the chain rather than
+// failing the whole request.
+function validateEnableBankingLogoUrl(candidate) {
+  if (!candidate || typeof candidate !== 'string') return null
+  let parsed
+  try { parsed = new URL(candidate) } catch { return null }
+  if (parsed.protocol !== 'https:' || !ENABLE_BANKING_LOGO_HOSTNAMES.has(parsed.hostname)) return null
+  // Reject embedded userinfo (https://user:pass@host/...) outright rather
+  // than stripping it -- a legitimate CDN logo URL never has a reason to
+  // carry one, and some HTTP clients have historically mishandled userinfo
+  // in ways that leak it as request headers.
+  if (parsed.username || parsed.password) return null
+  return parsed.toString()
+}
+
 function sanitizeEnableBankingAspsp(aspsp) {
   const group = sanitizeEnableBankingGroup(aspsp.group)
   return {
@@ -536,6 +706,12 @@ class EnableBankingProvider extends OpenBankingProvider {
   constructor(env, core) {
     super({ id: 'enablebanking', displayName: 'Bank connection', kind: 'psd2-account-information', env, core })
     this.institutionsCache = new Map()
+    // Keyed by the validated logo URL itself (not institutionId), bounded to
+    // LOGO_CACHE_MAX_ENTRIES -- an ASPSP's own logo and its cooperative
+    // group's logo are both real, shared URLs across many institutions
+    // (every Volksbank/Raiffeisenbank branch shares one group logo), so
+    // caching by URL naturally dedupes that sharing too.
+    this.logoCache = new Map()
   }
 
   isConfigured() { return isEnableBankingConfigured(this.env) }
@@ -561,41 +737,121 @@ class EnableBankingProvider extends OpenBankingProvider {
     return aspsps.map(sanitizeEnableBankingAspsp)
   }
 
+  // Shared by start() and institutionLogoUrl(): decodes the institutionId,
+  // validates its 2-letter country, and finds the matching ASPSP in the
+  // live directory. Never guesses, never a [0] fallback -- returns null
+  // only for a malformed/unmatched institutionId. A listAspsps() failure
+  // (e.g. Enable Banking's /aspsps being down) deliberately propagates as a
+  // real exception here rather than being folded into null, so it can
+  // never be silently reinterpreted downstream as "no such institution"
+  // when the real problem is an upstream outage -- start() lets it
+  // propagate uncaught exactly as it always has; institutionLogoUrl() below
+  // is the one caller that catches it, matching its own "never throws"
+  // contract.
+  async resolveAspsp(institutionId) {
+    const decoded = decodeAspspId(institutionId)
+    if (!decoded || !/^[A-Z]{2}$/.test(decoded.country)) return null
+    const aspsps = await this.listAspsps(decoded.country)
+    return aspsps.find((aspsp) => aspsp.name === decoded.name && aspsp.country === decoded.country) || null
+  }
+
+  // Re-derives the institution from the live directory (same anti-guessing
+  // contract as start()) rather than trusting any URL the client might send
+  // -- the browser never gets to name a logo URL directly, only an
+  // institutionId. Prefers the bank's own exact logo; falls back to its
+  // cooperative-network group logo (e.g. every Volksbank/Raiffeisenbank
+  // shares one) when the bank itself doesn't have one. Returns null (never
+  // throws) for anything unresolvable -- the frontend's lettermark is
+  // always a safe fallback.
+  async institutionLogoUrl(institutionId) {
+    if (!this.isConfigured()) return null
+    let match
+    try { match = await this.resolveAspsp(institutionId) } catch { return null }
+    if (!match) return null
+    return validateEnableBankingLogoUrl(match.logo) || validateEnableBankingLogoUrl(match.group?.logo) || null
+  }
+
+  // Bounded, TTL'd, in-memory cache in front of fetchBoundedImage() so the
+  // same shared logo (very common for group logos, and for any bank several
+  // concurrent users are looking at) isn't re-fetched from Enable Banking's
+  // CDN on every request. Keyed by the already-validated logo URL.
+  async fetchLogo(validatedUrl) {
+    const cached = this.logoCache.get(validatedUrl)
+    const now = Date.now()
+    if (cached && cached.expiresAt > now) return cached.image
+    const image = await fetchBoundedImage(validatedUrl, { allowedHostnames: ENABLE_BANKING_LOGO_HOSTNAMES })
+    if (!image) return null
+    if (this.logoCache.size >= LOGO_CACHE_MAX_ENTRIES) this.logoCache.delete(this.logoCache.keys().next().value)
+    this.logoCache.set(validatedUrl, { image, expiresAt: now + LOGO_CACHE_TTL_MS })
+    return image
+  }
+
+  // What server.js's logo route actually calls: resolve the validated URL,
+  // then fetch it (cached, bounded). Split into institutionLogoUrl() +
+  // fetchLogo() above so each half is independently unit-testable (URL
+  // resolution/validation vs. the bounded-fetch mechanics).
+  async fetchInstitutionLogo(institutionId) {
+    const url = await this.institutionLogoUrl(institutionId)
+    if (!url) return null
+    return this.fetchLogo(url)
+  }
+
   async start({ state, redirectUri, country = 'DE', institutionId }) {
     if (!this.isConfigured()) throw new Error('Enable Banking credentials are not configured.')
     await this.core.validateReadOnlyScope('accounts,balances,transactions')
     if (!institutionId) throw new HttpError(400, 'institution_required', 'Select a bank before continuing.')
-    const decoded = decodeAspspId(institutionId)
-    if (!decoded) throw new HttpError(400, 'invalid_institution', 'The selected institution is not currently available from Enable Banking.')
-    // Same bound the sibling /institutions listing route already applies to
-    // its own country param (see server.js) -- decoded.country comes straight
-    // from the client-supplied institutionId, and listAspsps() caches by
-    // country string, so an unvalidated value here would let an attacker grow
-    // institutionsCache with unbounded distinct keys.
-    if (!/^[A-Z]{2}$/.test(decoded.country)) throw new HttpError(400, 'invalid_institution', 'The selected institution is not currently available from Enable Banking.')
-    const aspsps = await this.listAspsps(decoded.country || country)
-    // Never guessed, never a [0] fallback -- the exact same anti-guessing
+    // resolveAspsp() validates the country the same way the sibling
+    // /institutions listing route already does (server.js) -- it comes
+    // straight from the client-supplied institutionId, and listAspsps()
+    // caches by country string, so an unvalidated value would let an
+    // attacker grow institutionsCache with unbounded distinct keys. Never
+    // guessed, never a [0] fallback -- the exact same anti-guessing
     // contract as GoCardlessProvider.start(): the picker's selection must
-    // match a real, currently-offered ASPSP.
-    const match = aspsps.find((aspsp) => aspsp.name === decoded.name && aspsp.country === decoded.country)
+    // match a real, currently-offered ASPSP. A listAspsps() failure (e.g.
+    // Enable Banking being down) propagates uncaught here, not folded into
+    // invalid_institution.
+    const match = await this.resolveAspsp(institutionId)
     if (!match) throw new HttpError(400, 'invalid_institution', 'The selected institution is not currently available from Enable Banking.')
 
     const configuredDays = Number(this.env.ENABLE_BANKING_CONSENT_DAYS || ENABLEBANKING_DEFAULT_CONSENT_DAYS)
     const requestedDays = Number.isFinite(configuredDays) && configuredDays > 0 ? configuredDays : ENABLEBANKING_DEFAULT_CONSENT_DAYS
-    const maxDays = Number(match.maximum_consent_validity)
-    const consentDays = Number.isFinite(maxDays) && maxDays > 0 ? Math.min(requestedDays, maxDays) : requestedDays
-    const validUntil = new Date(Date.now() + consentDays * 86_400_000).toISOString()
+    const requestedMs = requestedDays * 86_400_000
+    // Fixed 2026-08-21 (found investigating a live "Internal server error" on
+    // POST /auth for a real ASPSP): `maximum_consent_validity` is documented
+    // in the current official ASPSPData schema as "Maximum consent validity
+    // which bank supports **in seconds**", but this was being compared
+    // directly against `requestedDays` (a day count) with no unit
+    // conversion. A seconds value is numerically far larger than any
+    // realistic day count, so `Math.min(requestedDays, maxDays)` never
+    // actually clamped anything -- every request silently asked for the
+    // full `ENABLE_BANKING_CONSENT_DAYS` (default 90-day) window regardless
+    // of what the selected bank's sandbox/production ASPSP actually
+    // supports. Enable Banking rejects `access.valid_until` once it exceeds
+    // `now + maximum_consent_validity` (their documented constraint on the
+    // Access schema) -- for any bank whose real cap is under the default,
+    // this surfaced as a bare provider 4xx that server.js's generic error
+    // classifier turns into an undiagnosable "Internal server error" (see
+    // jsonFetch() above for the accompanying provider-error-detail fix).
+    // Kept in milliseconds throughout instead of rounding to whole days so
+    // a clamp lands exactly on the ASPSP's own limit, never a day over it.
+    const maxValiditySeconds = Number(match.maximum_consent_validity)
+    const maxValidityMs = Number.isFinite(maxValiditySeconds) && maxValiditySeconds > 0 ? maxValiditySeconds * 1000 : null
+    const consentMs = maxValidityMs !== null ? Math.min(requestedMs, maxValidityMs) : requestedMs
+    const validUntil = new Date(Date.now() + consentMs).toISOString()
 
     const policy = providerPolicy(this.env)
     const response = await jsonFetch(`${EB_BASE}/auth`, {
       method: 'POST',
       headers: enableBankingHeaders(this.env),
-      // access is deliberately the only capability requested -- no
-      // `payments` field is ever sent, which is what actually enforces
-      // AIS-only (never directory filtering, which the current docs don't
-      // confirm the shape of).
+      // access.balances/transactions requested explicitly (2026-08-21) so
+      // the actual consent scope matches what the Connections UI already
+      // tells the user they're granting (account information, balances,
+      // transactions) -- previously only the implicit accounts-list access
+      // was requested. Still deliberately no `payments` field, which is
+      // what actually enforces AIS-only (never directory filtering, which
+      // the current docs don't confirm the shape of).
       body: JSON.stringify({
-        access: { valid_until: validUntil },
+        access: { valid_until: validUntil, balances: true, transactions: true },
         aspsp: { name: match.name, country: match.country },
         state,
         redirect_url: callbackUrl(redirectUri, 'enablebanking', state).toString(),

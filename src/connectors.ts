@@ -150,6 +150,14 @@ async function requestJson<T>(url: string, init: RequestInit, options: { retry?:
 }
 
 export function connectorReturnUrl(): string { const url = new URL(window.location.href); for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'institution']) url.searchParams.delete(key); url.hash = ''; return url.toString() }
+// Same-origin logo proxy, never a direct link to a provider-controlled URL:
+// the server re-resolves institutionId against its own live directory and
+// re-validates the logo URL it finds there before ever fetching it (see
+// server.js's /logo route and EnableBankingProvider.fetchInstitutionLogo()).
+// The browser never learns, and never needs, the provider's real logo host.
+export function providerInstitutionLogoUrl(provider: ConnectorProvider, institutionId: string): string {
+  return `/api/connectors/${provider}/logo?institutionId=${encodeURIComponent(institutionId)}`
+}
 export async function fetchProviderStatus(): Promise<ProviderDescriptor[]> {
   const result = await requestJson<{ providers?: ProviderDescriptor[] }>('/api/connectors', { method: 'GET' }, { retry: true })
   if (!Array.isArray(result.providers)) throw new Error('The provider status response was invalid.')

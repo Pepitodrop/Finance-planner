@@ -32,6 +32,7 @@ import {
   disconnectConnector,
   fetchProviderInstitutions,
   fetchProviderStatus,
+  providerInstitutionLogoUrl,
   selectSyncPreviewAccounts,
   startConnector,
   synchronizeConnections,
@@ -96,23 +97,40 @@ function formatEuro(cents: number): string {
   return new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' }).format(cents / 100)
 }
 
-function InstitutionMark({ id, name, size = 20 }: { id: string; name: string; size?: number }) {
-  const [imageFailed, setImageFailed] = useState(false)
-  const logoUrl = institutionLogoUrl(id)
-  if (logoUrl && !imageFailed) {
+// Fallback order (never a broken-image icon, each stage caught by the
+// previous image's onError): 1. the real bank's own logo, or its
+// cooperative-network group logo, served through Finance Planner's
+// same-origin logo proxy (providerLogoUrl -- see connectors.ts's
+// providerInstitutionLogoUrl(), never a direct provider-controlled URL);
+// 2. Finance Planner's existing reviewed/static institution logo (a small,
+// hand-reviewed Simple Icons allowlist); 3. an original Finance Planner
+// lettermark. `providerLogoUrl` is only ever passed for a concrete live
+// bank the resolution step or confirmation step actually resolved -- never
+// for a static picker tile, which has no live directory entry to derive one
+// from.
+type InstitutionMarkStage = 'provider' | 'static' | 'lettermark'
+function InstitutionMark({ id, name, size = 20, providerLogoUrl }: { id: string; name: string; size?: number; providerLogoUrl?: string }) {
+  const [stage, setStage] = useState<InstitutionMarkStage>(providerLogoUrl ? 'provider' : 'static')
+  if (stage === 'provider' && providerLogoUrl) {
     return <span className="connections-mark connections-mark--logo">
-      <img src={logoUrl} alt="" width={size} height={size} loading="lazy" onError={() => setImageFailed(true)}/>
+      <img src={providerLogoUrl} alt="" width={size} height={size} loading="lazy" onError={() => setStage('static')}/>
+    </span>
+  }
+  const staticLogoUrl = stage !== 'lettermark' ? institutionLogoUrl(id) : null
+  if (staticLogoUrl) {
+    return <span className="connections-mark connections-mark--logo">
+      <img src={staticLogoUrl} alt="" width={size} height={size} loading="lazy" onError={() => setStage('lettermark')}/>
     </span>
   }
   const { letters, color } = institutionLettermark(id, name)
   return <span className="connections-mark connections-mark--lettermark" style={{ '--connections-mark-color': color } as CSSProperties} aria-hidden="true">{letters}</span>
 }
 
-function InstitutionIcon({ institution, size = 20 }: { institution: { id?: string; name?: string; kind: string }; size?: number }) {
+function InstitutionIcon({ institution, size = 20, providerLogoUrl }: { institution: { id?: string; name?: string; kind: string }; size?: number; providerLogoUrl?: string }) {
   const kind = institutionIcon(institution as Parameters<typeof institutionIcon>[0])
   if (kind === 'card') return <CreditCard size={size}/>
   if (kind === 'manual') return <Pencil size={size}/>
-  if (institution.id && institution.name) return <InstitutionMark id={institution.id} name={institution.name} size={size}/>
+  if (institution.id && institution.name) return <InstitutionMark id={institution.id} name={institution.name} size={size} providerLogoUrl={providerLogoUrl}/>
   if (kind === 'wallet') return <Wallet size={size}/>
   if (kind === 'broker') return <TrendingUp size={size}/>
   return <Landmark size={size}/>
@@ -766,6 +784,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
                 unnarrowed={familyDirectoryUnnarrowed}
                 gocardlessFallbackAvailable={gocardlessFallbackAvailable}
                 onUseGoCardlessFallback={useGoCardlessFallback}
+                provider={resolvingProvider ?? undefined}
               />
             : <InstitutionStep
                 searchTerm={searchTerm}
@@ -789,6 +808,8 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
           {setupStep === 3 && selectedInstitution && <RedirectConfirmationStep
             institution={selectedInstitution}
             resolvedInstitutionName={resolvedProviderInstitution?.name}
+            resolvedInstitutionId={resolvedProviderInstitution?.id}
+            resolvedProvider={effectiveProvider()}
             busy={busy}
             error={setupError}
             providerDescriptor={(() => { const provider = effectiveProvider(); return provider ? providerDescriptorFor(provider, providerStatus) : undefined })()}
@@ -979,9 +1000,15 @@ interface InstitutionResolutionStepProps {
   unnarrowed: boolean
   gocardlessFallbackAvailable: boolean
   onUseGoCardlessFallback: () => void
+  // The AIS provider this resolution attempt is actually searching against
+  // -- needed to build each row's same-origin logo-proxy URL (see
+  // providerInstitutionLogoUrl()). Undefined only in the acceptance-fixture
+  // path that never really resolves a provider; rows just show a lettermark
+  // in that case.
+  provider?: ConnectorProvider
 }
 
-function InstitutionResolutionStep({ institution, query, onQuery, results, loading, error, onBack, onChoose, onRetry, onManualAccount, unnarrowed, gocardlessFallbackAvailable, onUseGoCardlessFallback }: InstitutionResolutionStepProps) {
+function InstitutionResolutionStep({ institution, query, onQuery, results, loading, error, onBack, onChoose, onRetry, onManualAccount, unnarrowed, gocardlessFallbackAvailable, onUseGoCardlessFallback, provider }: InstitutionResolutionStepProps) {
   // Never names the aggregator to the user -- bank-centric copy throughout,
   // matching how the rest of the picker never says "GoCardless"/"Enable
   // Banking" either. The fallback affordance below is the one place a
@@ -1016,7 +1043,7 @@ function InstitutionResolutionStep({ institution, query, onQuery, results, loadi
       </p>}
       {!loading && !error && results.length > 0 && <p className="connections-live-search-meta">{results.length} bank{results.length === 1 ? '' : 's'}</p>}
       {!loading && !error && results.map((match) => <button type="button" key={match.id} className="connections-institution-row" onClick={() => onChoose(match)}>
-        <span className="connections-row-icon"><InstitutionMark id={match.id} name={match.name} size={20}/></span>
+        <span className="connections-row-icon"><InstitutionMark id={match.id} name={match.name} size={20} providerLogoUrl={provider ? providerInstitutionLogoUrl(provider, match.id) : undefined}/></span>
         <span className="connections-institution-name">{match.name}{match.bic && <small className="connections-institution-bic">{match.bic}</small>}</span>
         <ChevronRight size={18}/>
       </button>)}
@@ -1067,6 +1094,12 @@ function AccountTypeStep({ institution, resolvedInstitutionName, accountType, on
 interface RedirectConfirmationStepProps {
   institution: { id: string; name: string; provider: string; kind: string }
   resolvedInstitutionName?: string
+  // The exact live-directory id/provider actually resolved for this attempt
+  // (see resolvedProviderInstitution/effectiveProvider in ConnectionsPage) --
+  // used only to build the same-origin logo-proxy URL for the confirmation
+  // header, never for anything submitted to the server.
+  resolvedInstitutionId?: string
+  resolvedProvider?: ConnectorProvider
   busy: boolean
   error: string
   providerDescriptor?: ProviderDescriptor
@@ -1074,7 +1107,7 @@ interface RedirectConfirmationStepProps {
   onConfirm: () => void
 }
 
-function RedirectConfirmationStep({ institution, resolvedInstitutionName, busy, error, providerDescriptor, onCancel, onConfirm }: RedirectConfirmationStepProps) {
+function RedirectConfirmationStep({ institution, resolvedInstitutionName, resolvedInstitutionId, resolvedProvider, busy, error, providerDescriptor, onCancel, onConfirm }: RedirectConfirmationStepProps) {
   if (institution.provider === 'paypal') {
     const mode = providerDescriptor?.mode
     const unavailable = providerDescriptor ? !providerDescriptor.available || !providerDescriptor.configured : false
@@ -1123,7 +1156,17 @@ function RedirectConfirmationStep({ institution, resolvedInstitutionName, busy, 
 
   return <div className="connections-confirmation">
     <div className="connections-institution-banner">
-      <span className="connections-row-icon"><InstitutionIcon institution={institution}/></span>
+      {/* Keyed on the resolved bank (falling back to the tile id): this step
+          only ever renders via `setupStep === 3 && ... && <RedirectConfirmationStep/>`,
+          which already unmounts/remounts the whole subtree on any step
+          change, so InstitutionMark's fallback-stage state can't currently
+          go stale across a re-resolution -- but keying explicitly on
+          identity here is the correct, resilient pattern regardless (a
+          prior bank's failed-image state must never silently apply to a
+          newly resolved bank), and stops a future refactor that keeps this
+          step mounted across a re-pick from silently reintroducing exactly
+          that bug. */}
+      <span className="connections-row-icon"><InstitutionIcon key={resolvedInstitutionId ?? institution.id} institution={institution} providerLogoUrl={resolvedInstitutionId && resolvedProvider ? providerInstitutionLogoUrl(resolvedProvider, resolvedInstitutionId) : undefined}/></span>
       <span className="connections-row-body"><strong>{institution.name}</strong>{resolvedInstitutionName && resolvedInstitutionName !== institution.name && <small>{resolvedInstitutionName}</small>}</span>
     </div>
     <h2 id="connections-setup-title" className="connections-setup-title">Continue to your provider</h2>

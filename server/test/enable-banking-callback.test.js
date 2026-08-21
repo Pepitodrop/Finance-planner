@@ -44,6 +44,11 @@ test('validates a user-selected ASPSP against the live directory and requests re
   assert.equal(authRequest.body.psu_type, 'personal')
   assert.ok(!('payments' in authRequest.body), 'must never request payment/PIS scope')
   assert.ok(authRequest.body.access?.valid_until, 'must send an access.valid_until')
+  // The Connections UI tells the user they're granting account information,
+  // balances and transactions -- the actual request must match that, not
+  // just the implicit accounts-list access Enable Banking grants by default.
+  assert.equal(authRequest.body.access.balances, true)
+  assert.equal(authRequest.body.access.transactions, true)
   assert.equal(result.redirectUrl, 'https://enablebanking.com/auth/xyz')
   assert.equal(result.credential.aspspName, 'ING-DiBa')
   assert.equal(result.credential.aspspCountry, 'DE')
@@ -113,14 +118,69 @@ test('rejects a missing institutionId with institution_required, never falling t
   assert.ok(!requests.some((request) => request.url.endsWith('/auth')))
 }))
 
-test('caps the requested consent duration at the matched ASPSP\'s maximum_consent_validity when it is lower than the configured default', () => withRestoredFetch(async () => {
+// maximum_consent_validity is documented (current official ASPSPData
+// schema) as an integer number of SECONDS, not days -- a real production
+// defect (found investigating a live "Internal server error" on a real
+// bank's POST /auth) previously compared it directly against a day count,
+// so the clamp below never actually fired for any realistic value (a
+// seconds figure is always numerically far larger than a day count) and
+// every request silently asked for the full default window regardless of
+// what the bank's own sandbox/production ASPSP supports.
+test('caps the requested consent duration at the matched ASPSP\'s maximum_consent_validity (seconds) when it is lower than the configured default', () => withRestoredFetch(async () => {
   globalThis.fetch = async (input, init = {}) => {
     const url = String(input)
-    if (url.endsWith('/aspsps?country=DE')) return new Response(JSON.stringify({ aspsps: [{ name: 'ING-DiBa', country: 'DE', maximum_consent_validity: 30 }] }), { status: 200 })
+    if (url.endsWith('/aspsps?country=DE')) return new Response(JSON.stringify({ aspsps: [{ name: 'ING-DiBa', country: 'DE', maximum_consent_validity: 30 * 86_400 }] }), { status: 200 })
     if (url.endsWith('/auth')) {
       const body = JSON.parse(init.body)
       const days = (Date.parse(body.access.valid_until) - Date.now()) / 86_400_000
       assert.ok(days <= 30.01 && days > 29, `expected ~30 days, got ${days}`)
+      return new Response(JSON.stringify({ url: 'https://enablebanking.com/auth/xyz', authorization_id: 'a' }), { status: 200 })
+    }
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv({ ENABLE_BANKING_CONSENT_DAYS: '90' }), fakeBankingCore()).get('enablebanking')
+
+  await adapter.start({ state: 's', redirectUri: 'https://finance.example.com/connections', country: 'DE', institutionId: 'DE:ING-DiBa' })
+}))
+
+// The literal shape of the production regression: a seconds value (here
+// 7,776,000s = 90 days, the standard PSD2 SCA-RTS consent window) that is
+// numerically far larger than the requested day count (90). Before the
+// fix, this always would have looked "not clamping needed" regardless of
+// whether it was correctly 90 days or -- if a bank genuinely reports a
+// smaller seconds figure -- silently requested far more than the bank
+// allows. Pins the exact real-world default so a future change can't
+// silently reintroduce the units confusion for the single most common
+// case (a full 90-day EU consent window).
+test('a 90-day maximum_consent_validity expressed in seconds is honored as exactly 90 days, not misread as 90 seconds or left unclamped', () => withRestoredFetch(async () => {
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input)
+    if (url.endsWith('/aspsps?country=DE')) return new Response(JSON.stringify({ aspsps: [{ name: 'ING-DiBa', country: 'DE', maximum_consent_validity: 7_776_000 }] }), { status: 200 })
+    if (url.endsWith('/auth')) {
+      const body = JSON.parse(init.body)
+      const days = (Date.parse(body.access.valid_until) - Date.now()) / 86_400_000
+      assert.ok(days <= 90.01 && days > 89.9, `expected ~90 days, got ${days}`)
+      return new Response(JSON.stringify({ url: 'https://enablebanking.com/auth/xyz', authorization_id: 'a' }), { status: 200 })
+    }
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv({ ENABLE_BANKING_CONSENT_DAYS: '90' }), fakeBankingCore()).get('enablebanking')
+
+  await adapter.start({ state: 's', redirectUri: 'https://finance.example.com/connections', country: 'DE', institutionId: 'DE:ING-DiBa' })
+}))
+
+// A bank whose real cap is shorter than any plausible day count once
+// correctly read as seconds (here: 1 hour) must clamp precisely, proving
+// the fix converts units rather than merely widening the comparison.
+test('clamps to a sub-day maximum_consent_validity precisely, in milliseconds, never rounding up past the ASPSP\'s real limit', () => withRestoredFetch(async () => {
+  const requestedAt = Date.now()
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input)
+    if (url.endsWith('/aspsps?country=DE')) return new Response(JSON.stringify({ aspsps: [{ name: 'ING-DiBa', country: 'DE', maximum_consent_validity: 3_600 }] }), { status: 200 })
+    if (url.endsWith('/auth')) {
+      const body = JSON.parse(init.body)
+      const ms = Date.parse(body.access.valid_until) - requestedAt
+      assert.ok(ms <= 3_600_000 + 2_000 && ms > 3_600_000 - 2_000, `expected ~3,600,000ms (1 hour), got ${ms}`)
       return new Response(JSON.stringify({ url: 'https://enablebanking.com/auth/xyz', authorization_id: 'a' }), { status: 200 })
     }
     throw new Error(`Unexpected URL: ${url}`)

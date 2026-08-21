@@ -87,6 +87,41 @@ test('provider errors do not expose upstream response bodies', async () => {
   }
 })
 
+// Complements the test above: a field the *client* never sees (classifyError
+// always returns the fixed generic message) may still be attached to the
+// thrown Error for server-side logging, so a genuine provider-contract
+// rejection is diagnosable instead of indistinguishable from an internal
+// crash -- found and fixed 2026-08-21 investigating a live "Internal server
+// error" on Enable Banking's POST /auth. Only known, string-typed,
+// length-capped fields are ever pulled from the provider body -- an
+// unrecognized field shape (`detail` in the test above) attaches nothing.
+test('captures a safe, bounded provider error code/message on the thrown error for server-side diagnostics only', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'invalid_request', message: 'access.valid_until exceeds maximum_consent_validity' }), { status: 400 })
+  try {
+    await assert.rejects(
+      jsonFetch('https://provider.invalid/test', {}, { retries: 0, timeoutMs: 1_000 }),
+      (error) => error.status === 400 && error.providerCode === 'invalid_request' && error.providerMessage === 'access.valid_until exceeds maximum_consent_validity',
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('truncates an oversized provider error message before attaching it, and never attaches a non-string field', async () => {
+  const originalFetch = globalThis.fetch
+  const longMessage = 'x'.repeat(1_000)
+  globalThis.fetch = async () => new Response(JSON.stringify({ code: { nested: 'not a string' }, message: longMessage }), { status: 400 })
+  try {
+    await assert.rejects(
+      jsonFetch('https://provider.invalid/test', {}, { retries: 0, timeoutMs: 1_000 }),
+      (error) => error.providerCode === undefined && error.providerMessage.length === 300,
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('rejects expired or revoked GoCardless consent through COBOL policy before account synchronization', async () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = async () => new Response(JSON.stringify({ status: 'EX', accounts: ['account-1'] }), { status: 200 })

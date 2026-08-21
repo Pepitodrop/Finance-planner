@@ -54,4 +54,8 @@ Verification: `server/test/enable-banking-directory.test.js`, `server/test/enabl
 
 A real, reported UX defect — the "Volksbank / Raiffeisenbank" and "Sparkasse" picker tiles prefilled the live branch-search box with that literal umbrella label, which never matches a real ASPSP name — was fixed on `feat/bank-discovery-ux`. This contract's guarantee was never at risk: the prefilled/typed search text only ever affects which live directory rows are *displayed*; the `institutionId` actually submitted to `start()` still always comes from an explicit tap on a real, server-fetched directory entry (`resolvedProviderInstitution`), never from search text or a picker-tile label. Independently re-verified during that work's own adversarial review pass. See [[Bank Family Directory Resolution]] for the full mechanism.
 
-Related: [[Enable Banking]] · [[GoCardless]] · [[Bank Connections]] · [[Bank Connection Flow]] · [[Bank Disconnect Flow]] · [[Connections Page]] · [[Provider Callback Binding]] · [[Provider Status]] · [[PayPal]] · [[Bank Family Directory Resolution]]
+## Follow-up (2026-08-21): the institution-logo proxy reuses this same anti-guessing lookup
+
+[[Institution Logo Proxy]]'s `GET /api/connectors/:provider/logo` route resolves the requested `institutionId` through the identical live-directory lookup this contract already requires (`EnableBankingProvider.resolveAspsp()`, shared with `start()`) before ever fetching an image — a client can select which real, live institution's logo to request, never an arbitrary URL, and never an institution the live directory doesn't currently offer.
+
+Related: [[Enable Banking]] · [[GoCardless]] · [[Bank Connections]] · [[Bank Connection Flow]] · [[Bank Disconnect Flow]] · [[Connections Page]] · [[Provider Callback Binding]] · [[Provider Status]] · [[PayPal]] · [[Bank Family Directory Resolution]] · [[Institution Logo Proxy]]

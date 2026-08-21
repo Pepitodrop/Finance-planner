@@ -388,6 +388,26 @@ const server = createServer(async (request, response) => {
       const institutions = await adapter.institutionDirectory(country)
       return send(response, 200, { institutions })
     }
+    // Same-origin institution-logo proxy: the browser never names a logo
+    // URL directly, only an institutionId, which the adapter re-resolves
+    // against its own live directory before ever fetching anything (see
+    // EnableBankingProvider.institutionLogoUrl()/fetchInstitutionLogo() --
+    // HTTPS-only, exact provider hostname allowlist, bounded size/timeout/
+    // redirects, raster-image-only Content-Type allowlist). Lets the
+    // frontend render real bank logos without ever needing `img-src` to
+    // allow an arbitrary provider-controlled host.
+    const logoMatch = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})\/logo$/)
+    if (request.method === 'GET' && logoMatch) {
+      const user = userId(request)
+      const adapter = providerAdapter(logoMatch[1])
+      authorizeProviderUser(adapter, user, env)
+      const institutionId = typeof url.searchParams.get('institutionId') === 'string' ? url.searchParams.get('institutionId').trim().slice(0, 128) : ''
+      if (!institutionId) throw new HttpError(400, 'institution_required', 'Select a bank before requesting its logo.')
+      const image = await adapter.fetchInstitutionLogo(institutionId)
+      if (!image) throw new HttpError(404, 'logo_unavailable', 'No logo is available for this institution.')
+      response.writeHead(200, { ...securityHeaders(image.contentType), 'Cache-Control': 'public, max-age=86400, immutable' })
+      return response.end(image.body)
+    }
     const match = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})\/start$/)
     if (request.method === 'POST' && match) return await start(match[1], request, response)
     if (request.method === 'POST' && url.pathname === '/api/connectors/sync') return await sync(request, response)
@@ -503,7 +523,23 @@ const server = createServer(async (request, response) => {
     send(response, 404, { error: { code: 'not_found', message: 'Not found.' }, requestId: id })
   } catch (error) {
     const failure = classifyError(error)
-    if (failure.status >= 500) console.error(JSON.stringify({ level: 'error', requestId: id, error: error instanceof Error ? error.stack : String(error) }))
+    if (failure.status >= 500) {
+      // providerStatus/providerCode/providerMessage (see jsonFetch() in
+      // providers.js) are the upstream provider's own returned HTTP status
+      // and error payload -- never anything Finance Planner sent, so safe
+      // to log even though the client only ever sees the generic message
+      // above. This is what makes a provider-contract rejection (e.g. an
+      // invalid POST /auth body) diagnosable from logs instead of
+      // indistinguishable from an actual internal crash.
+      console.error(JSON.stringify({
+        level: 'error',
+        requestId: id,
+        error: error instanceof Error ? error.stack : String(error),
+        ...(typeof error?.status === 'number' ? { providerStatus: error.status } : {}),
+        ...(error?.providerCode ? { providerCode: error.providerCode } : {}),
+        ...(error?.providerMessage ? { providerMessage: error.providerMessage } : {}),
+      }))
+    }
     send(response, failure.status, { error: { code: failure.code, message: failure.message }, requestId: id })
   } finally {
     const durationMs = Date.now() - startedAt

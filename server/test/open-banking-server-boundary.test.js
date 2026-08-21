@@ -208,6 +208,23 @@ test('the institution directory endpoint applies the same owner-mode authorizati
   assert.ok(authentication < authorization && authorization < directoryCall, 'must authenticate, then authorize (owner-mode gate), then disclose institutions -- in that order')
 })
 
+test('the institution logo endpoint authenticates and authorizes before ever resolving/fetching a logo', () => {
+  const logoHandler = serverSource.slice(
+    serverSource.indexOf("const logoMatch = url.pathname.match(/^\\/api\\/connectors\\/([a-z0-9][a-z0-9-]{1,39})\\/logo$/)"),
+    serverSource.indexOf("const match = url.pathname.match(/^\\/api\\/connectors\\/([a-z0-9][a-z0-9-]{1,39})\\/start$/)"),
+  )
+  const authentication = logoHandler.indexOf('const user = userId(request)')
+  const authorization = logoHandler.indexOf('authorizeProviderUser(adapter, user, env)')
+  const logoCall = logoHandler.indexOf('adapter.fetchInstitutionLogo(')
+  assert.ok(authentication >= 0 && authorization >= 0 && logoCall >= 0)
+  assert.ok(authentication < authorization && authorization < logoCall, 'must authenticate, then authorize (owner-mode gate), then resolve/fetch a logo -- in that order, same as the institution directory endpoint')
+  // The client only ever supplies an institutionId (bounded, trimmed) --
+  // never a URL. There is no code path here that could take an
+  // arbitrary/attacker-supplied URL as input.
+  assert.match(logoHandler, /searchParams\.get\('institutionId'\)\.trim\(\)\.slice\(0, 128\)/)
+  assert.doesNotMatch(logoHandler, /searchParams\.get\('url'\)|searchParams\.get\('logo'\)/)
+})
+
 test('connector start validates the country code the same way the institution directory endpoint already does', () => {
   const startFunction = serverSource.slice(
     serverSource.indexOf('async function start(provider, request, response)'),

@@ -13,7 +13,7 @@ Hub for atomic security controls. [[Security Decisions]] (Decisions/) remains th
 [[Password Hashing]] · [[Timing-Safe Password Verification]] · [[User-Enumeration Mitigation]] · [[Session Cookie]] · [[Session Revocation]] · [[Logout]]
 
 ## Request/transport
-[[CSRF Protection]] · [[OAuth State and Nonce]] · [[Origin Validation]] · [[Provider Callback Binding]] · [[Provider Institution Selection Contract]]
+[[CSRF Protection]] · [[OAuth State and Nonce]] · [[Origin Validation]] · [[Provider Callback Binding]] · [[Provider Institution Selection Contract]] · [[Institution Logo Proxy]]
 
 ## Data
 [[Cross-User Isolation]] · [[Secret Management]] · [[Encryption at Rest]] · [[Vault Encryption]] · [[PBKDF2 Configuration]]
