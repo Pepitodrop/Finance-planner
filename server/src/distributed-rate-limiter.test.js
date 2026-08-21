@@ -27,3 +27,36 @@ test('public production requires a distributed store', () => {
     /require CONNECTOR_STORE_DRIVER=postgres/,
   )
 })
+
+// Regression coverage for a live production defect (2026-08-21): the
+// institution-logo proxy shared the same "sensitive" namespace/bucket as
+// POST /start, sync and disconnect, so ordinary logo traffic could exhaust
+// it and starve those genuinely security-sensitive operations. `assets`
+// must be a fully independent namespace (same underlying table, no schema
+// change -- `namespace` is a free-text partition key).
+test('createRateLimiters provisions an independent assets limiter alongside general/sensitive, in its own namespace', async () => {
+  const queries = []
+  const pool = {
+    async query(sql, params) {
+      queries.push({ sql, namespace: params?.[0] })
+      if (sql.startsWith('DELETE')) return { rows: [] }
+      return { rows: [{ request_count: 1 }] }
+    },
+  }
+  const limiters = createRateLimiters({ persistence: { pool }, generalLimit: 120, sensitiveLimit: 20, assetLimit: 240 })
+  assert.ok(limiters.assets, 'an assets limiter must be provisioned')
+  assert.equal(limiters.assets.namespace, 'assets')
+  assert.equal(limiters.assets.limit, 240)
+  assert.notEqual(limiters.assets, limiters.sensitive)
+  assert.notEqual(limiters.assets, limiters.general)
+
+  await limiters.assets.consume('client-a')
+  await limiters.sensitive.consume('client-a')
+  assert.deepEqual(queries.map((query) => query.namespace).filter((namespace) => namespace !== undefined), ['assets', 'sensitive'])
+})
+
+test('an assets limiter defaults to the documented 240/min limit when not explicitly configured', () => {
+  const pool = { async query() { return { rows: [{ request_count: 1 }] } } }
+  const limiters = createRateLimiters({ persistence: { pool } })
+  assert.equal(limiters.assets.limit, 240)
+})

@@ -451,6 +451,41 @@ function callbackUrl(redirectUri, provider, state) {
   return callback
 }
 
+// The PROVIDER CALLBACK URI, as distinct from the application-return
+// destination the browser separately supplies (`redirectUri` -- what the
+// two-argument callbackUrl() above is built from, and what ends up as
+// `state.redirectUri`, used only AFTER a successful callback to send the
+// user back to their own Finance Planner page). Fixed 2026-08-21 after a
+// live REDIRECT_URI_NOT_ALLOWED rejection from Enable Banking's real
+// sandbox: their Control Panel validates the submitted `redirect_url` as
+// an exact, bare string against its registered allow-list -- appending
+// `?provider=...&state=...` (which callbackUrl() above does, and which
+// Enable Banking's application has NOT registered with those extra query
+// parameters) made every request fail before consent could ever start.
+// This helper derives the callback URI from trusted SERVER configuration
+// (`appOrigin`, i.e. `env.APP_ORIGIN`) rather than from the browser-supplied
+// `redirectUri` at all -- the two happen to share an origin today (server.js
+// already enforces that equality for the application-return destination),
+// but deriving this one independently is what makes it genuinely
+// server-owned rather than incidentally correct. The `state` (and
+// therefore which provider/consent this belongs to) still reaches the
+// callback route -- Enable Banking echoes the exact `state` value we send
+// as a separate top-level field in the POST /auth body back as a `?state=`
+// query parameter on its own redirect (standard OAuth2-style behavior,
+// confirmed against the current official API reference), and the callback
+// route now derives `provider` from that verified state's own payload
+// (see server.js's callback route and security.js's verifyState()) rather
+// than from any query parameter this function would otherwise have to bake
+// in. GoCardless and PayPal are deliberately NOT changed to use this --
+// unlike Enable Banking, neither has been proven to reject (or shown to
+// need) the query-stringed form, and GoCardless in particular is known to
+// redirect back to its configured URI verbatim with no echo of its own, so
+// embedding state directly in the URL is how its round trip actually works
+// today. See FinancePlanner/Security/Provider Callback Binding.md.
+function canonicalCallbackUrl(appOrigin) {
+  return new URL('/api/connectors/callback', appOrigin)
+}
+
 function sanitizeGocardlessInstitution(institution) {
   return {
     id: String(institution.id),
@@ -796,7 +831,13 @@ class EnableBankingProvider extends OpenBankingProvider {
     return this.fetchLogo(url)
   }
 
-  async start({ state, redirectUri, country = 'DE', institutionId }) {
+  // `redirectUri` (the browser's application-return destination) is kept in
+  // the destructured signature for interface consistency with every other
+  // adapter's start() -- server.js calls all of them uniformly -- but is
+  // deliberately unused in the body below. Enable Banking's own
+  // redirect_url is derived independently from server config; see
+  // canonicalCallbackUrl()'s doc comment.
+  async start({ state, redirectUri: _redirectUri, country = 'DE', institutionId }) {
     if (!this.isConfigured()) throw new Error('Enable Banking credentials are not configured.')
     await this.core.validateReadOnlyScope('accounts,balances,transactions')
     if (!institutionId) throw new HttpError(400, 'institution_required', 'Select a bank before continuing.')
@@ -854,7 +895,14 @@ class EnableBankingProvider extends OpenBankingProvider {
         access: { valid_until: validUntil, balances: true, transactions: true },
         aspsp: { name: match.name, country: match.country },
         state,
-        redirect_url: callbackUrl(redirectUri, 'enablebanking', state).toString(),
+        // The canonical, server-derived provider callback URI -- see
+        // canonicalCallbackUrl()'s doc comment for the full redirect_uri
+        // architecture and why this must be the bare, exact URL Enable
+        // Banking's Control Panel has registered, never the browser-
+        // supplied application-return destination with query parameters
+        // appended on top (the literal cause of a live
+        // REDIRECT_URI_NOT_ALLOWED rejection, fixed 2026-08-21).
+        redirect_url: canonicalCallbackUrl(this.env.APP_ORIGIN || 'http://localhost:5173').toString(),
         psu_type: 'personal',
       }),
     }, policy)

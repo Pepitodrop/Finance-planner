@@ -71,19 +71,32 @@ test('Reconnect round-trip: the institutionId returned from the first start() ca
   assert.equal(reconnect.credential.aspspName, 'ING-DiBa')
 }))
 
-test('sends our own callback route as redirect_url, never the raw client page URL, carrying the correct provider and state', () => withRestoredFetch(async () => {
+// Regression coverage for a live REDIRECT_URI_NOT_ALLOWED rejection from
+// the real Enable Banking sandbox (2026-08-21): their Control Panel
+// validates the submitted redirect_url as an exact, bare string with no
+// extra query parameters -- see providers.js's canonicalCallbackUrl().
+test('sends the canonical, server-derived callback URI as redirect_url -- bare, no query parameters, never the browser-supplied return destination', () => withRestoredFetch(async () => {
   const requests = mockAuthFetch()
-  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv({ APP_ORIGIN: 'https://finance.luisbenedikt.de' }), fakeBankingCore()).get('enablebanking')
 
-  await adapter.start({ state: 'single-use-state', redirectUri: 'https://finance.example.com/connections', country: 'DE', institutionId: 'DE:ING-DiBa' })
+  // The browser's own application-return destination (a totally different
+  // origin/path here, on purpose) must have zero influence on what gets
+  // sent to Enable Banking as redirect_url.
+  await adapter.start({ state: 'single-use-state', redirectUri: 'https://attacker-controlled-or-just-different.example/wherever', country: 'DE', institutionId: 'DE:ING-DiBa' })
 
   const authRequest = requests.find((request) => request.url.endsWith('/auth'))
-  const redirect = new URL(authRequest.body.redirect_url)
-  assert.equal(redirect.origin, 'https://finance.example.com')
-  assert.equal(redirect.pathname, '/api/connectors/callback')
-  assert.equal(redirect.searchParams.get('provider'), 'enablebanking')
-  assert.equal(redirect.searchParams.get('state'), 'single-use-state')
-  assert.equal(authRequest.body.state, 'single-use-state')
+  assert.equal(authRequest.body.redirect_url, 'https://finance.luisbenedikt.de/api/connectors/callback')
+  assert.equal(authRequest.body.state, 'single-use-state', 'state is still sent as its own top-level field, separate from redirect_url')
+}))
+
+test('derives the callback origin from ENABLE_BANKING\'s configured APP_ORIGIN, falling back to the local-dev default when unset', () => withRestoredFetch(async () => {
+  const requests = mockAuthFetch()
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking') // no APP_ORIGIN set
+
+  await adapter.start({ state: 's', redirectUri: 'https://finance.example.com/connections', country: 'DE', institutionId: 'DE:ING-DiBa' })
+
+  const authRequest = requests.find((request) => request.url.endsWith('/auth'))
+  assert.equal(authRequest.body.redirect_url, 'http://localhost:5173/api/connectors/callback')
 }))
 
 test('rejects an institutionId whose ASPSP is not in the live directory, and never calls POST /auth', () => withRestoredFetch(async () => {

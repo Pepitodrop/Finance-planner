@@ -32,11 +32,17 @@ export class PostgresSlidingWindowRateLimiter {
   }
 }
 
-export function createRateLimiters({ persistence, generalLimit = 120, sensitiveLimit = 20, windowMs = 60_000, requireDistributed = false }) {
+export function createRateLimiters({ persistence, generalLimit = 120, sensitiveLimit = 20, assetLimit = 240, windowMs = 60_000, requireDistributed = false }) {
   if (persistence.pool) {
     return {
       general: new PostgresSlidingWindowRateLimiter(persistence.pool, { limit: generalLimit, windowMs, namespace: 'general' }),
       sensitive: new PostgresSlidingWindowRateLimiter(persistence.pool, { limit: sensitiveLimit, windowMs, namespace: 'sensitive' }),
+      // Own namespace/bucket, same table (no schema change -- `namespace` is
+      // a free-text partition key, not a constrained enum) -- decorative
+      // asset traffic (the institution-logo proxy) must never be able to
+      // consume the sensitive quota that POST /start, sync and disconnect
+      // depend on. See server.js's rateLimitTier().
+      assets: new PostgresSlidingWindowRateLimiter(persistence.pool, { limit: assetLimit, windowMs, namespace: 'assets' }),
       distributed: true,
     }
   }

@@ -14,7 +14,7 @@ import { createGoogleSubscriptionsRouter } from './google-subscriptions-router.j
 import { OperationalMetrics } from './operational-metrics.js'
 import { authorizeProviderUser, describeProviderForUser } from './provider-access.js'
 import { createOpenBankingProviderRegistry } from './providers.js'
-import { HttpError, SlidingWindowRateLimiter, classifyError, clientIp, requestId, validateProductionConfig } from './runtime-security.js'
+import { HttpError, SlidingWindowRateLimiter, classifyError, clientIp, rateLimitTier, requestId, validateProductionConfig } from './runtime-security.js'
 import { bearerToken, createSession, issueState, verifySessionClaims, verifyState } from './security.js'
 import { SessionRevocationRegistry } from './session-revocation.js'
 import { PostgresUserStateStore } from './user-state-store.js'
@@ -50,15 +50,28 @@ let ready = true
 let shuttingDown = false
 const generalLimit = Number(env.RATE_LIMIT_PER_MINUTE || 120)
 const sensitiveLimit = Number(env.SENSITIVE_RATE_LIMIT_PER_MINUTE || 20)
+// Dedicated tier for the institution-logo proxy (found live 2026-08-21):
+// every route under /api/connectors/ -- including this decorative,
+// non-sensitive image endpoint -- was sharing the *sensitive* bucket with
+// POST /start, sync and disconnect. The production sensitive limit (20/min)
+// is sized for those genuinely security-relevant operations; a normal user
+// scrolling a real bank directory can trigger dozens of logo fetches well
+// within a minute and starve /start for everyone sharing that client key,
+// exactly as observed. A generous but still real limit -- high enough that
+// ordinary browsing never trips it, low enough to still bound abuse/DoS
+// amplification against Enable Banking's own CDN through this proxy.
+const assetLimit = Number(env.ASSET_RATE_LIMIT_PER_MINUTE || 240)
 const distributedLimiters = createRateLimiters({
   persistence,
   generalLimit,
   sensitiveLimit,
+  assetLimit,
   windowMs: 60_000,
   requireDistributed: env.NODE_ENV === 'production' && env.PUBLIC_DEPLOYMENT === 'true',
 })
 const generalLimiter = distributedLimiters?.general || new SlidingWindowRateLimiter({ limit: generalLimit, windowMs: 60_000 })
 const sensitiveLimiter = distributedLimiters?.sensitive || new SlidingWindowRateLimiter({ limit: sensitiveLimit, windowMs: 60_000 })
+const assetLimiter = distributedLimiters?.assets || new SlidingWindowRateLimiter({ limit: assetLimit, windowMs: 60_000 })
 const activeSyncs = new Map()
 const syncReplayCache = new Map()
 const SYNC_REPLAY_TTL_MS = 2 * 60_000
@@ -153,9 +166,9 @@ function cors(request, response) {
 
 async function rateLimit(request, response, pathname) {
   const remote = env.TRUST_PROXY === 'true' ? clientIp(request) : request.socket?.remoteAddress || 'unknown'
-  const sensitive = /^\/api\/(auth|session|connectors|subscriptions|finance|ai)/.test(pathname)
-  const limiter = sensitive ? sensitiveLimiter : generalLimiter
-  const result = await limiter.consume(`${remote}:${sensitive ? 'sensitive' : 'general'}`)
+  const tier = rateLimitTier(pathname)
+  const limiter = tier === 'asset' ? assetLimiter : tier === 'sensitive' ? sensitiveLimiter : generalLimiter
+  const result = await limiter.consume(`${remote}:${tier}`)
   response.setHeader('RateLimit-Limit', limiter.limit)
   response.setHeader('RateLimit-Remaining', result.remaining)
   response.setHeader('RateLimit-Reset', Math.ceil(result.resetAt / 1000))
@@ -207,7 +220,11 @@ async function start(provider, request, response) {
   if (!/^[A-Z]{2}$/.test(country)) throw new HttpError(400, 'invalid_country', 'Invalid country code.')
   const consentId = randomUUID()
   const state = issueState(user, provider, sessionSecret, { consentId, redirectUri: redirect.toString() })
-  const claims = verifyState(state, provider, sessionSecret)
+  // Self-check that what was just issued round-trips and is bound to this
+  // exact provider -- verifyState() itself no longer takes an expected
+  // provider (see security.js), so the binding is asserted explicitly here.
+  const claims = verifyState(state, sessionSecret)
+  if (claims.provider !== provider) throw new Error('Issued consent state is not bound to the requested provider.')
   const result = await adapter.start({ state, redirectUri: redirect.toString(), country, institutionId })
   // Pending, not yet live -- a currently-working connection for this
   // provider (reconnect case) must not be overwritten until the callback
@@ -444,7 +461,17 @@ const server = createServer(async (request, response) => {
       // can show it. Redirect to state.redirectUri when it's known and
       // cryptographically verified (state parsed successfully); otherwise fall
       // back to the app origin.
-      const provider = String(url.searchParams.get('provider') || '')
+      //
+      // The provider identity is derived from the verified `state` payload
+      // itself (`state.provider`), never from a `?provider=` query
+      // parameter (fixed 2026-08-21, see the redirect_uri architecture
+      // note in providers.js's canonicalCallbackUrl()) -- Enable Banking's
+      // own redirect never carries one (its Control Panel validates the
+      // submitted redirect_url as an exact, bare string with no extra query
+      // parameters at all), so relying on it would break that provider's
+      // callback outright. GoCardless/PayPal's redirects still happen to
+      // carry `?provider=` too (their own redirect_url still embeds it,
+      // unchanged), but it is now purely redundant, never trusted.
       const redirectWithError = (target, errorCode = 'invalid_state') => {
         const location = new URL(target)
         location.searchParams.set('error', errorCode)
@@ -453,9 +480,11 @@ const server = createServer(async (request, response) => {
         response.end()
       }
       let state
+      let provider
       try {
+        state = verifyState(url.searchParams.get('state'), sessionSecret)
+        provider = state.provider
         providerAdapter(provider)
-        state = verifyState(url.searchParams.get('state'), provider, sessionSecret)
       } catch {
         redirectWithError(origin)
         return

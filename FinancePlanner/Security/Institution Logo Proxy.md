@@ -34,7 +34,7 @@ browser (<img src="/api/connectors/enablebanking/logo?institutionId=...">)
   -> served back from Finance Planner's own origin, Cache-Control: public
 ```
 
-The browser only ever supplies an `institutionId` (already-authenticated, length-capped, rate-limited under the same `/api/connectors` sensitive bucket as every other connector route) — never a URL. There is no code path from client input to an arbitrary fetch target.
+The browser only ever supplies an `institutionId` (already-authenticated, length-capped) — never a URL. There is no code path from client input to an arbitrary fetch target. **Rate-limited under its own dedicated `assets` tier** (`ASSET_RATE_LIMIT_PER_MINUTE`, default 240/min), not the sensitive bucket `POST /start`/sync/disconnect share — see [[Rate Limiting]]'s 2026-08-21 entry for why that separation exists (a live production defect where ordinary logo browsing exhausted the sensitive bucket and starved `/start`, found the same day this feature was first deployed).
 
 ## Why raster-only, no SVG
 
@@ -58,6 +58,8 @@ A dedicated adversarial security-specialist pass found **one real, confirmed, ex
 
 ## Verification
 
-`server/test/enable-banking-logo.test.js` (33 cases: URL resolution/validation including group-logo fallback and userinfo rejection, bounded-fetch mechanics including the redirect/SSRF/size/content-type/timeout/overall-deadline/no-body cases, end-to-end caching including TTL expiry and bounded eviction) plus `ConnectionsPage.test.tsx` cases for the resolution-step rows (asserting the exact same-origin proxy URL and the image-error-to-lettermark fallback) and the Step 3 confirmation header (asserting the resolved bank's own logo, and that it updates correctly across a back-and-re-resolve). **Not yet observed rendering a real logo in an actual browser** — no browser QA was run against a live deployment after this feature was implemented; the live-deployment report that motivated it only described the lettermark fallbacks visible *before* this fix.
+`server/test/enable-banking-logo.test.js` (33 cases: URL resolution/validation including group-logo fallback and userinfo rejection, bounded-fetch mechanics including the redirect/SSRF/size/content-type/timeout/overall-deadline/no-body cases, end-to-end caching including TTL expiry and bounded eviction) plus `ConnectionsPage.test.tsx` cases for the resolution-step rows (asserting the exact same-origin proxy URL and the image-error-to-lettermark fallback) and the Step 3 confirmation header (asserting the resolved bank's own logo, and that it updates correctly across a back-and-re-resolve).
 
-Related: [[Enable Banking]] · [[Bank Family Directory Resolution]] · [[Provider Institution Selection Contract]] · [[Connections Page]] · [[Provider Status]]
+**LIVE VERIFIED (2026-08-21):** a temporary production deployment (`finance.luisbenedikt.de`) against the real Enable Banking sandbox confirmed real cooperative-bank logos actually rendering in the picker, and server logs showed `GET /api/connectors/enablebanking/logo -> 200`. This is the first live-traffic evidence this feature has had. The same deployment also surfaced a real, live production defect in an adjacent system — see [[Rate Limiting]]'s 2026-08-21 entry: the logo proxy's own request volume briefly shared Finance Planner's sensitive rate-limit bucket with `POST /start`/sync/disconnect, and a normal user browsing a real bank directory could exhaust it and 429 those genuinely sensitive routes. Fixed with a dedicated tier; **not yet re-verified live**. The logo proxy's own SSRF/CSP/hostname-allowlist/bounded-fetch properties are unaffected by that fix and remain as verified above.
+
+Related: [[Enable Banking]] · [[Bank Family Directory Resolution]] · [[Provider Institution Selection Contract]] · [[Connections Page]] · [[Provider Status]] · [[Rate Limiting]]

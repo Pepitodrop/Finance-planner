@@ -66,7 +66,11 @@ export function createGoogleSubscriptionsRouter({
       const returnUri = exactReturnUrl(input.redirectUri, origin)
       const consentId = randomUUID()
       const state = issueState(user, PROVIDER, sessionSecret, { consentId, redirectUri: returnUri })
-      const claims = verifyState(state, PROVIDER, sessionSecret)
+      // Self-check that what was just issued round-trips and is bound to
+      // this exact provider -- verifyState() no longer takes an expected
+      // provider (see security.js), so the binding is asserted explicitly.
+      const claims = verifyState(state, sessionSecret)
+      if (claims.provider !== PROVIDER) throw new Error('Issued consent state is not bound to the expected provider.')
       const currentCapability = capability(env)
       const redirectUrl = authorize({ env, state, redirectUri: callbackUri })
       await store.createConnectionSetup({
@@ -90,7 +94,8 @@ export function createGoogleSubscriptionsRouter({
     }
 
     if (request.method === 'GET' && url.pathname === '/api/subscriptions/google/callback') {
-      const state = verifyState(url.searchParams.get('state'), PROVIDER, sessionSecret)
+      const state = verifyState(url.searchParams.get('state'), sessionSecret)
+      if (state.provider !== PROVIDER) throw new Error('Google subscription callback state does not match the expected provider.')
       const currentUser = userId(request)
       if (currentUser !== state.sub || !state.consentId || !state.redirectUri) throw new Error('Google subscription callback state does not match the active user.')
       if (url.searchParams.get('error')) throw new Error(`Google subscription authorization failed: ${url.searchParams.get('error')}`)

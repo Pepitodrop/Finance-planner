@@ -13,6 +13,28 @@ export function requestId(headers = {}) {
   return /^[A-Za-z0-9._-]{8,128}$/.test(supplied) ? supplied : randomUUID()
 }
 
+// Checked BEFORE the generic /api/connectors/ sensitive-prefix match below --
+// a decorative image fetch (the institution-logo proxy) is not a
+// security-sensitive banking operation and must never share the sensitive
+// rate-limit bucket with POST /start, sync or disconnect (found live
+// 2026-08-21: a real bank directory's logo requests alone exhausted the
+// sensitive bucket and starved /start for the same client). Matches the
+// exact route shape server.js's own logo handler does. The negative
+// lookahead excludes `webhooks` as the provider segment: without it,
+// `/api/connectors/webhooks/logo` would also match (colliding with the
+// webhook dispatch route's own `/api/connectors/webhooks/:provider`
+// pattern) and get classified into the permissive asset tier. That path is
+// inert today (no provider is ever named "logo", so it 404s before any
+// rate-limit-relevant work happens) but excluding it keeps the two route
+// families from overlapping at all rather than relying on that coincidence.
+const LOGO_ROUTE_PATTERN = /^\/api\/connectors\/(?!webhooks\/)[a-z0-9][a-z0-9-]{1,39}\/logo$/
+
+export function rateLimitTier(pathname) {
+  if (LOGO_ROUTE_PATTERN.test(pathname)) return 'asset'
+  if (/^\/api\/(auth|session|connectors|subscriptions|finance|ai)/.test(pathname)) return 'sensitive'
+  return 'general'
+}
+
 export function clientIp(request) {
   // Prefer X-Real-IP: nginx always overwrites it with $remote_addr, so a
   // client cannot forge it. X-Forwarded-For is nginx-appended but not

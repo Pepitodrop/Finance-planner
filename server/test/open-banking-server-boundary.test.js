@@ -4,6 +4,23 @@ import test from 'node:test'
 
 const serverSource = await readFile(new URL('../src/server.js', import.meta.url), 'utf8')
 
+test('rate limiting dispatches through the shared rateLimitTier() classifier, not a locally re-implemented pattern', () => {
+  // Regression guard for the live production defect (2026-08-21): a
+  // second, drifted copy of the sensitive-route regex living directly in
+  // server.js (rather than importing the single classifier from
+  // runtime-security.js, which server/src/runtime-security.test.js unit
+  // tests directly) is exactly how the logo-vs-sensitive bug could
+  // silently reappear.
+  assert.match(serverSource, /import \{[^}]*rateLimitTier[^}]*\} from '\.\/runtime-security\.js'/)
+  const rateLimitFunction = serverSource.slice(
+    serverSource.indexOf('async function rateLimit(request, response, pathname)'),
+    serverSource.indexOf('function providerAdapter'),
+  )
+  assert.ok(rateLimitFunction.length > 0, 'rateLimit() was not found')
+  assert.match(rateLimitFunction, /const tier = rateLimitTier\(pathname\)/)
+  assert.doesNotMatch(rateLimitFunction, /\/\^\\\/api\\\/\(auth\|session\|connectors/, 'must not re-implement the sensitive-route pattern locally')
+})
+
 test('connector setup authenticates and authorizes before provider capability disclosure', () => {
   const startFunction = serverSource.slice(
     serverSource.indexOf('async function start(provider, request, response)'),
@@ -36,13 +53,18 @@ test('the provider callback route redirects every failure back into the app inst
     callbackStart,
     serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
   )
-  // Provider lookup and state verification must be wrapped in a try/catch
+  // State verification and provider lookup must be wrapped in a try/catch
   // that redirects (never throws out to the generic JSON error handler).
+  // State is verified FIRST (2026-08-21 redirect_uri architecture fix) --
+  // the provider identity is derived FROM the verified state's own payload,
+  // never from an external, unauthenticated query parameter, so there is
+  // nothing to look up until the state itself is known to be genuine.
   const tryStart = callbackRoute.indexOf('try {')
-  const providerLookup = callbackRoute.indexOf('providerAdapter(provider)')
   const stateVerify = callbackRoute.indexOf('verifyState(url.searchParams.get')
+  const providerLookup = callbackRoute.indexOf('providerAdapter(provider)')
   const catchBlock = callbackRoute.indexOf('} catch {')
-  assert.ok(tryStart >= 0 && tryStart < providerLookup && providerLookup < stateVerify && stateVerify < catchBlock)
+  assert.ok(tryStart >= 0 && tryStart < stateVerify && stateVerify < providerLookup && providerLookup < catchBlock)
+  assert.match(callbackRoute.slice(tryStart, catchBlock), /provider = state\.provider/, 'provider must be derived from the verified state, not a query parameter')
   assert.match(callbackRoute.slice(catchBlock), /redirectWithError\(origin\)/, 'a state that fails to parse must redirect to the app origin, never to unverified input')
 
   const missingClaims = callbackRoute.indexOf('!state.consentId || !state.redirectUri')
@@ -73,6 +95,15 @@ test('the provider callback route redirects instead of throwing raw JSON when co
   const consumeCatch = callbackRoute.indexOf('} catch {', consumeTry)
   assert.ok(consumeCatch > consumeTry)
   assert.match(callbackRoute.slice(consumeCatch, consumeCatch + 200), /redirectWithError\(state\.redirectUri\)/)
+})
+
+test('the provider callback route never reads a client-supplied ?provider= query parameter -- the source no longer contains that pattern at all', () => {
+  const callbackStart = serverSource.indexOf("if (request.method === 'GET' && url.pathname === '/api/connectors/callback')")
+  const callbackRoute = serverSource.slice(
+    callbackStart,
+    serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
+  )
+  assert.doesNotMatch(callbackRoute, /searchParams\.get\('provider'\)/, 'provider must be derived from the verified state, never trusted from an unauthenticated query parameter (fixed 2026-08-21 after a live REDIRECT_URI_NOT_ALLOWED rejection)')
 })
 
 test('the provider callback route runs completeCallback() only after the nonce has been consumed, and redirects on failure without exposing raw JSON', () => {

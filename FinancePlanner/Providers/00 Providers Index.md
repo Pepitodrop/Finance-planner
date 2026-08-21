@@ -12,7 +12,7 @@ Hub for every external/device provider. Conservative verification terminology th
 | Provider | Node | Implementation | Runtime verified | Provider/device verified | Production verified |
 |---|---|---|---|---|---|
 | Google OAuth | [[Google OAuth]] | Yes | No | No | No |
-| Enable Banking / Bank AIS (preferred) | [[Enable Banking]] | Yes | No | No | No |
+| Enable Banking / Bank AIS (preferred) | [[Enable Banking]] | Yes | Partial (directory/discovery/logos live-verified; consent blocked on `REDIRECT_URI_NOT_ALLOWED`, fixed not yet re-verified) | No | Partial (same split) |
 | GoCardless / Bank PSD2 (fallback) | [[GoCardless]] | Yes | No | No | No |
 | PayPal | [[PayPal]] | Yes | No | No | No |
 | Google subscriptions | [[Google Subscriptions]] | Yes | No | No | No |

@@ -65,13 +65,26 @@ export function issueState(userId, provider, secret, options = {}) {
   return `${payload}.${sign(payload, secret)}`
 }
 
-export function verifyState(value, expectedProvider, secret) {
+// Deliberately takes no "expected provider" parameter (removed 2026-08-21,
+// see the redirect_uri architecture fix): the provider identity lives
+// *inside* the signed payload (`decoded.provider`), so once the signature
+// is verified that value is already fully trustworthy on its own -- there
+// is nothing left to "expect" it against. This is what lets a callback
+// route derive which provider a return belongs to directly from the
+// verified state itself, rather than from a separate, unauthenticated
+// query parameter the URL may or may not still carry (Enable Banking's own
+// redirect does not; GoCardless/PayPal's still does, but it's now
+// redundant rather than load-bearing). A caller that still wants a strict
+// "this state must belong to provider X" check performs it itself against
+// the returned `.provider` field -- see server.js's start() self-check and
+// google-subscriptions-router.js for examples.
+export function verifyState(value, secret) {
   const [payload, signature] = String(value ?? '').split('.')
   if (!payload || !signature) throw new Error('Invalid consent state.')
   const expected = sign(payload, secret)
   if (!safeSignatureEqual(signature, expected)) throw new Error('Invalid consent state.')
   const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
-  if (decoded.provider !== expectedProvider || decoded.exp < Math.floor(Date.now() / 1000)) throw new Error('Expired consent state.')
+  if (!decoded.provider || decoded.exp < Math.floor(Date.now() / 1000)) throw new Error('Expired consent state.')
   if (!decoded.sub || !decoded.nonce) throw new Error('Invalid consent state.')
   return decoded
 }
