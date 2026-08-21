@@ -64,9 +64,12 @@ import {
   nextSetupStepAfterInstitution,
   previousSetupStepFromConfirmation,
   providerDescriptorFor,
+  familyFilterNarrowed,
   resolveAisProvider,
   summarizeAccountSelection,
+  syntheticAisInstitution,
   validateManualAccount,
+  visibleLiveInstitutions,
   type InstitutionCategory,
   type ProviderStatus,
   type SetupStep,
@@ -133,6 +136,13 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   const [searchTerm, setSearchTerm] = useState('')
   const [category, setCategory] = useState<InstitutionCategory>('popular')
   const [selectedInstitutionId, setSelectedInstitutionId] = useState<string | null>(null)
+  // Set only for a bank picked directly from a live provider directory
+  // (top-level "search the full bank directory" -- see searchLiveDirectory())
+  // rather than one of the static catalogue tiles institutionById() knows
+  // about. Always cleared together with selectedInstitutionId (openSetup,
+  // chooseInstitution, cancelInstitutionResolution) so the two can never
+  // point at different institutions.
+  const [syntheticInstitution, setSyntheticInstitution] = useState<Institution | null>(null)
   const [accountType, setAccountType] = useState<ConnectorAccountType>('checking')
   const [providerStatus, setProviderStatus] = useState<ProviderStatus>({ status: 'loading' })
 
@@ -227,6 +237,18 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per mount; a fresh acceptanceMode always gets a fresh mount (see the `key` prop where ConnectionsPage is used)
   }, [])
 
+  // Same generation-counter contract as loadProviderStatus above: four
+  // separate call sites can now trigger a fetch (chooseInstitution,
+  // searchLiveDirectory, useGoCardlessFallback, retryLiveInstitutions), so a
+  // slow fetch for a provider/attempt the user has since moved away from
+  // (switched provider via fallback, or backed out and started a new
+  // resolution) must never land afterward and silently overwrite state that
+  // belongs to a newer attempt. Only the most recently issued call may
+  // commit. (Even so, this only affects which rows are *displayed* --
+  // start() on both providers re-validates the submitted institutionId
+  // against their own live directory and rejects a mismatch, so a stale
+  // result could never connect the wrong bank, only show a confusing error.)
+  const liveInstitutionsGeneration = useRef(0)
   const loadLiveInstitutions = useCallback(async (provider: ConnectorProvider, options: { force?: boolean } = {}) => {
     // `liveInstitutions` is the whole per-country directory (filtered
     // client-side, see filteredLiveInstitutions below), so an empty array is
@@ -237,14 +259,17 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     // fallback action, where a stale result from the *previous* provider
     // must never be shown as if it belonged to the new one.
     if (!options.force && (liveInstitutions || liveInstitutionsLoading)) return
+    const generation = (liveInstitutionsGeneration.current += 1)
     setLiveInstitutionsLoading(true)
     try {
       const institutions = await fetchProviderInstitutions(provider, 'DE')
+      if (liveInstitutionsGeneration.current !== generation) return
       setLiveInstitutions(institutions)
     } catch (reason) {
+      if (liveInstitutionsGeneration.current !== generation) return
       setLiveInstitutionsError(reason instanceof Error ? reason.message : 'The bank directory could not be loaded.')
     } finally {
-      setLiveInstitutionsLoading(false)
+      if (liveInstitutionsGeneration.current === generation) setLiveInstitutionsLoading(false)
     }
   }, [liveInstitutions, liveInstitutionsLoading])
 
@@ -270,11 +295,19 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   }
 
   const filteredLiveInstitutions = useMemo(() => {
-    if (!liveInstitutions) return []
-    const query = liveInstitutionQuery.trim().toLocaleLowerCase('de-DE')
-    if (!query) return liveInstitutions
-    return liveInstitutions.filter((institution) => institution.name.toLocaleLowerCase('de-DE').includes(query) || institution.bic?.toLocaleLowerCase('de-DE').includes(query))
-  }, [liveInstitutions, liveInstitutionQuery])
+    if (!liveInstitutions || !resolvingInstitution) return []
+    return visibleLiveInstitutions(resolvingInstitution, liveInstitutions, liveInstitutionQuery)
+  }, [liveInstitutions, liveInstitutionQuery, resolvingInstitution])
+
+  // Only meaningful for the blank-query family view (see visibleLiveInstitutions):
+  // once the user types, filteredLiveInstitutions searches the whole
+  // directory and this framing no longer applies. True (nothing to warn
+  // about) until proven otherwise, so it never flashes a false warning
+  // before the directory has loaded.
+  const familyDirectoryUnnarrowed = Boolean(
+    !liveInstitutionQuery.trim() && liveInstitutions && resolvingInstitution
+    && resolvingInstitution.directoryTerms?.length && !familyFilterNarrowed(resolvingInstitution, liveInstitutions),
+  )
 
   // A real, independently-available fallback exists only when the fallback
   // provider itself reports available+configured -- offering the fallback
@@ -282,7 +315,17 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   // relevant while actively resolving through the preferred provider.
   const gocardlessFallbackAvailable = resolvingProvider === aisPrimaryProvider && Boolean(aisFallbackProvider) && Boolean(providerDescriptorFor(aisFallbackProvider, providerStatus)?.available && providerDescriptorFor(aisFallbackProvider, providerStatus)?.configured)
 
-  const selectedInstitution = selectedInstitutionId ? institutionById(selectedInstitutionId) : undefined
+  // Gates the top-level "search the full bank directory" action (see
+  // searchLiveDirectory() and InstitutionStep's empty state) -- there is
+  // nothing to search against while neither AIS provider resolves.
+  const aisProviderAvailable = resolveAisProvider(providerStatus) !== null
+
+  // Retries the live-directory fetch itself (network/provider error), unlike
+  // useGoCardlessFallback which switches to a different provider entirely.
+  // Only meaningful once a resolution attempt is underway.
+  const retryLiveInstitutions = () => { if (resolvingProvider) { setLiveInstitutionsError(''); void loadLiveInstitutions(resolvingProvider, { force: true }) } }
+
+  const selectedInstitution = syntheticInstitution ?? (selectedInstitutionId ? institutionById(selectedInstitutionId) : undefined)
   const filteredInstitutions = useMemo(() => filterInstitutions(searchTerm, category), [searchTerm, category])
   const discoveredAccounts = useMemo(() => previews.flatMap((preview) => preview.accountsToCreate), [previews])
   const selection = summarizeAccountSelection(discoveredAccounts.map((account) => account.id), selectedAccountIds)
@@ -418,9 +461,21 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setSearchTerm('')
     setCategory('popular')
     setSelectedInstitutionId(null)
+    setSyntheticInstitution(null)
     setAccountType('checking')
     setResolvingInstitution(null)
+    setResolvingProvider(null)
     setResolvedProviderInstitution(null)
+    // A previous resolution attempt's directory (and any fetch still in
+    // flight for it) must never leak into a fresh setup session -- bump the
+    // generation so a slow in-flight response from before can't land and get
+    // treated as current, and clear the cached directory so the next
+    // resolution fetches fresh rather than reusing possibly-stale data.
+    liveInstitutionsGeneration.current += 1
+    setLiveInstitutions(null)
+    setLiveInstitutionQuery('')
+    setLiveInstitutionsError('')
+    setLiveInstitutionsLoading(false)
     setSetupError('')
     setSetupOpen(true)
   }
@@ -441,7 +496,17 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setResolvingInstitution(null)
     setResolvingProvider(null)
     setSelectedInstitutionId(null)
+    setSyntheticInstitution(null)
     setResolvedProviderInstitution(null)
+    // Abandoning this attempt must invalidate any fetch still in flight for
+    // it (see loadLiveInstitutions' generation guard) and drop its directory
+    // so re-entering resolution -- for the same or a different institution --
+    // always fetches fresh rather than silently reusing this attempt's data.
+    liveInstitutionsGeneration.current += 1
+    setLiveInstitutions(null)
+    setLiveInstitutionQuery('')
+    setLiveInstitutionsError('')
+    setLiveInstitutionsLoading(false)
   }
 
   const finalizeInstitutionResolution = (match: ProviderInstitution) => {
@@ -461,6 +526,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
       return
     }
     setSelectedInstitutionId(id)
+    setSyntheticInstitution(null)
     setAccountType(defaultAccountTypeForInstitution(institution))
     // Always clear a previous resolution here, not just when re-entering the
     // 'ais' branch below -- otherwise picking a bank, resolving it, going
@@ -488,7 +554,15 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
       if (providerChanged) { setLiveInstitutions(null); setLiveInstitutionsError('') }
       setResolvingProvider(resolved)
       setResolvingInstitution(institution)
-      setLiveInstitutionQuery(institution.name)
+      // Blank, not prefilled with institution.name: a group tile's name
+      // ("Volksbank / Raiffeisenbank") is a Finance Planner UX label, not a
+      // real ASPSP name -- searching for it literally never matches a real
+      // bank ("Volksbank Demmin", "Raiffeisenbank Grävenwiesbach", ...). The
+      // resolution step instead opens on familyFilteredInstitutions()'s
+      // family-scoped view (institution.directoryTerms), computed in
+      // filteredLiveInstitutions below -- immediately visible with no typing
+      // required, exactly like a real bank-family branch picker.
+      setLiveInstitutionQuery('')
       // force: true when the resolved provider changed since the last
       // resolution -- liveInstitutions may still hold a truthy (even if
       // empty) result from the *previous* provider at this point (state
@@ -498,6 +572,33 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
       return
     }
     setSetupStep(nextSetupStepAfterInstitution(institution))
+  }
+
+  // Top-level "search the full bank directory" action (InstitutionStep's
+  // empty state) -- lets a user who typed a concrete bank Finance Planner's
+  // static catalogue doesn't list (e.g. "Berliner Volksbank") reach it
+  // directly, without first knowing which picker tile/family it belongs to.
+  // Reuses the exact same resolution UI and anti-guessing contract as a
+  // catalogue tile: the free-text query the user already typed is real,
+  // user-authored search input (not a synthetic UX label), so prefilling the
+  // live search box with it is correct here, unlike chooseInstitution()
+  // above. A concrete match still requires an explicit tap before it can be
+  // submitted -- see finalizeInstitutionResolution().
+  const searchLiveDirectory = () => {
+    const resolved = resolveAisProvider(providerStatus)
+    if (!resolved) return
+    const synthetic = syntheticAisInstitution({ id: 'live-search', name: searchTerm })
+    setSetupError('')
+    setSelectedInstitutionId(synthetic.id)
+    setSyntheticInstitution(synthetic)
+    setAccountType(defaultAccountTypeForInstitution(synthetic))
+    setResolvedProviderInstitution(null)
+    const providerChanged = resolvingProvider !== resolved
+    if (providerChanged) { setLiveInstitutions(null); setLiveInstitutionsError('') }
+    setResolvingProvider(resolved)
+    setResolvingInstitution(synthetic)
+    setLiveInstitutionQuery(searchTerm)
+    void loadLiveInstitutions(resolved, { force: providerChanged })
   }
 
   const saveManualAccount = async () => {
@@ -660,6 +761,9 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
                 error={liveInstitutionsError}
                 onBack={cancelInstitutionResolution}
                 onChoose={finalizeInstitutionResolution}
+                onRetry={retryLiveInstitutions}
+                onManualAccount={() => openManualAccount('checking', resolvingInstitution.name)}
+                unnarrowed={familyDirectoryUnnarrowed}
                 gocardlessFallbackAvailable={gocardlessFallbackAvailable}
                 onUseGoCardlessFallback={useGoCardlessFallback}
               />
@@ -672,6 +776,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
                 providerStatus={providerStatus}
                 onRetryProviderStatus={loadProviderStatus}
                 onChoose={chooseInstitution}
+                onSearchLiveDirectory={aisProviderAvailable ? searchLiveDirectory : undefined}
               />)}
 
           {setupStep === 2 && selectedInstitution && <AccountTypeStep
@@ -819,9 +924,12 @@ interface InstitutionStepProps {
   providerStatus: ProviderStatus
   onRetryProviderStatus: () => void
   onChoose: (id: string) => void
+  // undefined when no AIS provider currently resolves -- there is nothing
+  // for the "search the full bank directory" action to search against.
+  onSearchLiveDirectory?: () => void
 }
 
-function InstitutionStep({ searchTerm, onSearch, category, onCategory, institutions, providerStatus, onRetryProviderStatus, onChoose }: InstitutionStepProps) {
+function InstitutionStep({ searchTerm, onSearch, category, onCategory, institutions, providerStatus, onRetryProviderStatus, onChoose, onSearchLiveDirectory }: InstitutionStepProps) {
   return <>
     <h2 id="connections-setup-title" className="connections-setup-title">Choose your institution</h2>
     {providerStatus.status === 'error' && <p className="status-message error-message" role="alert">
@@ -844,7 +952,10 @@ function InstitutionStep({ searchTerm, onSearch, category, onCategory, instituti
           {!availability.unavailable && <ChevronRight size={18}/>}
         </button>
       })}
-      {institutions.length === 0 && <p className="connections-empty-copy">No institution matches your search. Try a different name, BIC or bank code, or use a manual account.</p>}
+      {institutions.length === 0 && <div className="connections-empty-state">
+        <p className="connections-empty-copy">No institution matches your search. Try a different name, BIC or bank code, or use a manual account.</p>
+        {onSearchLiveDirectory && searchTerm.trim() && <button type="button" className="connections-text-button connections-empty-action" onClick={onSearchLiveDirectory}>Search the full bank directory for &quot;{searchTerm.trim()}&quot;</button>}
+      </div>}
     </div>
     <p className="connections-footnote"><Info size={15}/> Provider availability depends on your institution and region.</p>
   </>
@@ -859,11 +970,18 @@ interface InstitutionResolutionStepProps {
   error: string
   onBack: () => void
   onChoose: (match: ProviderInstitution) => void
+  onRetry: () => void
+  onManualAccount: () => void
+  // True when the bank-family narrowing found nothing in the loaded
+  // directory and silently fell back to showing every institution --
+  // surfaced to the user instead of a silent scope change (see
+  // familyFilterNarrowed()). Never true while a query is active.
+  unnarrowed: boolean
   gocardlessFallbackAvailable: boolean
   onUseGoCardlessFallback: () => void
 }
 
-function InstitutionResolutionStep({ institution, query, onQuery, results, loading, error, onBack, onChoose, gocardlessFallbackAvailable, onUseGoCardlessFallback }: InstitutionResolutionStepProps) {
+function InstitutionResolutionStep({ institution, query, onQuery, results, loading, error, onBack, onChoose, onRetry, onManualAccount, unnarrowed, gocardlessFallbackAvailable, onUseGoCardlessFallback }: InstitutionResolutionStepProps) {
   // Never names the aggregator to the user -- bank-centric copy throughout,
   // matching how the rest of the picker never says "GoCardless"/"Enable
   // Banking" either. The fallback affordance below is the one place a
@@ -874,16 +992,40 @@ function InstitutionResolutionStep({ institution, query, onQuery, results, loadi
     <button type="button" className="connections-back connections-live-search-back" onClick={onBack}><ArrowLeft size={18}/> All institutions</button>
     <h2 id="connections-setup-title" className="connections-setup-title">Find your {institution.name} branch</h2>
     <p className="connections-setup-subtitle">Finance Planner connects to the exact bank on file — never a guess. Search and select it below.</p>
-    <label className="connections-search connections-live-search"><Search size={18}/><input autoFocus value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search by bank name or BIC"/>{query && <button type="button" aria-label="Clear search" onClick={() => onQuery('')}><X size={16}/></button>}</label>
-    <div className="connections-institution-list" aria-live="polite">
-      {loading && <p className="connections-empty-copy">Loading banks…</p>}
-      {!loading && error && <p className="status-message error-message" role="alert">{error}</p>}
+    {unnarrowed && !loading && !error && <p className="connections-footnote">
+      <Info size={15}/> {institution.name} wasn&apos;t found under this connection method — showing every institution instead.
+    </p>}
+    <label className="connections-search connections-live-search"><Search size={18}/><input autoFocus value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search bank, city or BIC"/>{query && <button type="button" aria-label="Clear search" onClick={() => onQuery('')}><X size={16}/></button>}</label>
+    {/* aria-live lives on this always-present container, not on the
+        conditionally-inserted children below -- a live region only reliably
+        announces *changes* to a node already in the accessibility tree; a
+        fresh node inserted with content already in it (e.g. a loading div
+        that only exists while loading===true) is not guaranteed to announce
+        in every screen reader. One persistent region covers loading, error,
+        result-count and empty-state transitions uniformly. */}
+    <div className="connections-institution-list" role="status" aria-live="polite">
+      {loading && <div className="connections-institution-list-loading">
+        <p className="connections-empty-copy">Loading banks…</p>
+        <div className="connections-institution-skeleton" aria-hidden="true">
+          <span/><span/><span/><span/><span/>
+        </div>
+      </div>}
+      {!loading && error && <p className="status-message error-message" role="alert">
+        {error}
+        <button type="button" className="connections-text-button connections-retry-button" onClick={onRetry}>Retry</button>
+      </p>}
+      {!loading && !error && results.length > 0 && <p className="connections-live-search-meta">{results.length} bank{results.length === 1 ? '' : 's'}</p>}
       {!loading && !error && results.map((match) => <button type="button" key={match.id} className="connections-institution-row" onClick={() => onChoose(match)}>
         <span className="connections-row-icon"><InstitutionMark id={match.id} name={match.name} size={20}/></span>
         <span className="connections-institution-name">{match.name}{match.bic && <small className="connections-institution-bic">{match.bic}</small>}</span>
         <ChevronRight size={18}/>
       </button>)}
-      {!loading && !error && results.length === 0 && <p className="connections-empty-copy">No bank matches your search. Try a different name or BIC.</p>}
+      {!loading && !error && results.length === 0 && <div className="connections-empty-state">
+        <p className="connections-empty-copy">No bank matches your search. Try a different name or BIC.</p>
+        <div className="connections-empty-actions">
+          <button type="button" className="connections-text-button" onClick={onManualAccount}>Add a manual account instead</button>
+        </div>
+      </div>}
     </div>
     {showFallback && <p className="status-message connections-fallback-message">
       Connection through the preferred bank interface is currently unavailable.{' '}

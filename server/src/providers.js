@@ -496,13 +496,27 @@ function decodeAspspId(id) {
   return { country: id.slice(0, separator), name: id.slice(separator + 1) }
 }
 
+// Enable Banking's ASPSP object carries a `group` field for cooperative
+// banking networks (ASPSPGroup: { name, logo }) -- e.g. every Volksbank/
+// Raiffeisenbank branch and every Sparkasse shares one group.name. Passed
+// through sanitized to exactly {name, logo?} like every other field here, so
+// the frontend can group/filter the directory by real provider metadata
+// instead of guessing from the bank's own name. Never more than that: no
+// group id, no member list, nothing else upstream might add to this object.
+function sanitizeEnableBankingGroup(group) {
+  if (!group || typeof group !== 'object' || !group.name) return undefined
+  return { name: String(group.name), ...(group.logo ? { logo: String(group.logo) } : {}) }
+}
+
 function sanitizeEnableBankingAspsp(aspsp) {
+  const group = sanitizeEnableBankingGroup(aspsp.group)
   return {
     id: encodeAspspId(aspsp.name, aspsp.country),
     name: String(aspsp.name || ''),
     country: String(aspsp.country || ''),
     ...(aspsp.bic ? { bic: String(aspsp.bic) } : {}),
     ...(aspsp.logo ? { logo: String(aspsp.logo) } : {}),
+    ...(group ? { group } : {}),
   }
 }
 

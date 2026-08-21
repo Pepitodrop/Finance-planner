@@ -186,7 +186,7 @@ describe('GoCardless institution resolution (never guesses a real bank)', () => 
     expect(screen.getByRole('button', { name: /Sparkasse KoelnBonn/ })).toBeInTheDocument()
     expect(startConnector).not.toHaveBeenCalled()
 
-    const liveSearchInput = screen.getByPlaceholderText('Search by bank name or BIC')
+    const liveSearchInput = screen.getByPlaceholderText('Search bank, city or BIC')
     await user.clear(liveSearchInput)
     await user.type(liveSearchInput, 'Koeln')
     expect(screen.queryByRole('button', { name: /Aachener Sparkasse/ })).not.toBeInTheDocument()
@@ -253,7 +253,7 @@ describe('GoCardless institution resolution (never guesses a real bank)', () => 
     await user.click(screen.getByRole('button', { name: /^Sparkasse$/ }))
     await screen.findByRole('button', { name: /Aachener Sparkasse/ })
 
-    const liveSearchInput = screen.getByPlaceholderText('Search by bank name or BIC')
+    const liveSearchInput = screen.getByPlaceholderText('Search bank, city or BIC')
     await user.type(liveSearchInput, 'zzz-no-such-bank')
     expect(screen.queryByRole('button', { name: /Aachener Sparkasse/ })).not.toBeInTheDocument()
     expect(screen.getByText('No bank matches your search. Try a different name or BIC.')).toBeInTheDocument()
@@ -271,6 +271,155 @@ describe('GoCardless institution resolution (never guesses a real bank)', () => 
 
     await user.click(screen.getByRole('button', { name: 'Back' }))
     expect(screen.getByRole('heading', { name: 'Choose your institution' })).toBeInTheDocument()
+  })
+})
+
+// Regression coverage for the reported UX defect: choosing the "Volksbank /
+// Raiffeisenbank" picker tile opened a branch search prefilled with that
+// entire literal label ("Volksbank / Raiffeisenbank"), which never matched a
+// real ASPSP name ("Volksbank Demmin", "Raiffeisenbank Grävenwiesbach", ...)
+// -- see FinancePlanner/Providers/Enable Banking.md and connectionsModel.ts's
+// familyFilteredInstitutions().
+describe('bank-family resolution (institutions.ts directoryTerms, never the literal picker label)', () => {
+  it('opens the branch search with a blank query and shows real branches immediately, never a dead "no results" for the exact bug report', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([
+      { id: 'DE:Volksbank Demmin', name: 'Volksbank Demmin' },
+      { id: 'DE:Raiffeisenbank Grävenwiesbach', name: 'Raiffeisenbank Grävenwiesbach' },
+    ])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    await screen.findByRole('heading', { name: /Find your Volksbank \/ Raiffeisenbank branch/ })
+
+    const liveSearchInput = screen.getByPlaceholderText('Search bank, city or BIC')
+    expect(liveSearchInput).toHaveValue('')
+    expect(await screen.findByRole('button', { name: /Volksbank Demmin/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Raiffeisenbank Grävenwiesbach/ })).toBeInTheDocument()
+    expect(screen.queryByText(/No bank matches your search/)).not.toBeInTheDocument()
+  })
+
+  it('narrows to real cooperative-network branches via Enable Banking group.name, filtering out an unrelated bank in the same directory', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([
+      { id: 'DE:Semper Bank AG', name: 'Semper Bank AG', group: { name: 'Volksbanken Raiffeisenbanken' } },
+      { id: 'DE:ING-DiBa', name: 'ING-DiBa' },
+    ])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    expect(await screen.findByRole('button', { name: /Semper Bank AG/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /ING-DiBa/ })).not.toBeInTheDocument()
+  })
+
+  it('tells the user when the family narrowing found nothing and fell back to the whole directory, instead of silently showing unrelated banks', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:ING-DiBa', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    expect(await screen.findByRole('button', { name: /ING-DiBa/ })).toBeInTheDocument()
+    expect(screen.getByText(/Volksbank \/ Raiffeisenbank wasn.t found under this connection method/)).toBeInTheDocument()
+  })
+
+  it('does not show the unnarrowed notice once real family matches are found', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:Volksbank Demmin', name: 'Volksbank Demmin' }])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    expect(await screen.findByRole('button', { name: /Volksbank Demmin/ })).toBeInTheDocument()
+    expect(screen.queryByText(/wasn.t found under this connection method/)).not.toBeInTheDocument()
+  })
+
+  it('lets Retry re-fetch the live directory after a load failure, without leaving the resolution step', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions)
+      .mockRejectedValueOnce(new Error('The bank directory could not be loaded.'))
+      .mockResolvedValueOnce([{ id: 'DE:Volksbank Demmin', name: 'Volksbank Demmin' }])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('The bank directory could not be loaded.')
+
+    await user.click(within(alert).getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByRole('button', { name: /Volksbank Demmin/ })).toBeInTheDocument()
+    expect(fetchProviderInstitutions).toHaveBeenCalledTimes(2)
+  })
+
+  it('lets the user clear the search and add a manual account from the empty-results state, and never implies the bank is unsupported', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:Volksbank Demmin', name: 'Volksbank Demmin' }])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    await screen.findByRole('button', { name: /Volksbank Demmin/ })
+
+    const liveSearchInput = screen.getByPlaceholderText('Search bank, city or BIC')
+    await user.type(liveSearchInput, 'zzz-no-such-bank')
+    await screen.findByText('No bank matches your search. Try a different name or BIC.')
+
+    await user.click(screen.getByRole('button', { name: 'Clear search' }))
+    expect(liveSearchInput).toHaveValue('')
+    expect(await screen.findByRole('button', { name: /Volksbank Demmin/ })).toBeInTheDocument()
+
+    await user.type(liveSearchInput, 'zzz-no-such-bank')
+    await screen.findByText('No bank matches your search. Try a different name or BIC.')
+    await user.click(screen.getByRole('button', { name: 'Add a manual account instead' }))
+    expect(screen.getByRole('heading', { name: 'Add manual account' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Account name')).toHaveValue('Volksbank / Raiffeisenbank')
+  })
+})
+
+describe('top-level search reaching a concrete live bank the static catalogue does not list', () => {
+  it('offers an explicit "search the full bank directory" action only once the static list comes up empty, and resolving a match skips straight to confirmation', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:Berliner Volksbank', name: 'Berliner Volksbank', bic: 'BEVODEBBXXX' }])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    expect(screen.queryByRole('button', { name: /Search the full bank directory/ })).not.toBeInTheDocument()
+
+    await user.type(screen.getByPlaceholderText('Search institutions'), 'Berliner Volksbank')
+    const searchAction = await screen.findByRole('button', { name: /Search the full bank directory for "Berliner Volksbank"/ })
+    await user.click(searchAction)
+
+    expect(fetchProviderInstitutions).toHaveBeenCalledWith('gocardless', 'DE')
+    await user.click(await screen.findByRole('button', { name: /Berliner Volksbank/ }))
+    expect(screen.getByRole('heading', { name: 'Continue to your provider' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+    expect(startConnector).toHaveBeenCalledWith('gocardless', { institutionId: 'DE:Berliner Volksbank', institutionName: 'Berliner Volksbank', accountType: 'checking' })
+  })
+
+  it('does not offer the live-directory search action when no AIS provider is available', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (
+      provider.id === 'gocardless' || provider.id === 'enablebanking' ? { ...provider, available: false, configured: false } : provider
+    )))
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.type(screen.getByPlaceholderText('Search institutions'), 'Berliner Volksbank')
+    expect(screen.queryByRole('button', { name: /Search the full bank directory/ })).not.toBeInTheDocument()
+  })
+
+  it('shows an error with Retry when the live directory fails to load via this entry point too, distinct from the family-tile path', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions)
+      .mockRejectedValueOnce(new Error('The bank directory could not be loaded.'))
+      .mockResolvedValueOnce([{ id: 'DE:Berliner Volksbank', name: 'Berliner Volksbank' }])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.type(screen.getByPlaceholderText('Search institutions'), 'Berliner Volksbank')
+    await user.click(await screen.findByRole('button', { name: /Search the full bank directory for "Berliner Volksbank"/ }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('The bank directory could not be loaded.')
+
+    await user.click(within(alert).getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByRole('button', { name: /Berliner Volksbank/ })).toBeInTheDocument()
+    expect(fetchProviderInstitutions).toHaveBeenCalledTimes(2)
   })
 })
 

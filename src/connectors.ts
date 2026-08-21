@@ -12,7 +12,13 @@ export interface ConnectorStartContext {
 }
 
 export interface ConnectorConnection { id: string; provider: ConnectorProvider; displayName: string; status: ConnectorStatus; lastSyncAt?: string; consentExpiresAt?: string; institutionId?: string; error?: string }
-export interface ProviderInstitution { id: string; name: string; bic?: string; logo?: string; country?: string }
+// `group` is Enable Banking-specific (ASPSPGroup: cooperative banking
+// networks like "Volksbanken Raiffeisenbanken" or "Sparkassen-Finanzgruppe"
+// share one group.name across many concrete ASPSPs) -- sanitized the same
+// way as every other field here, never more than {name, logo?}. GoCardless
+// institutions never carry it. UX-only: never part of the institutionId
+// contract, never used to validate a selection server-side.
+export interface ProviderInstitution { id: string; name: string; bic?: string; logo?: string; country?: string; group?: { name: string; logo?: string } }
 export interface ProviderDescriptor { id: ConnectorProvider; displayName: string; kind: string; available: boolean; configured: boolean; mode?: 'owner' | 'partner'; reason?: string }
 export interface ExternalAccount {
   externalId: string

@@ -44,6 +44,10 @@
 .connections-trust-row strong { display: block; color: var(--fp-color-text-primary); }
 .connections-trust-row span { color: var(--fp-color-text-secondary); font-size: var(--fp-font-size-supporting); }
 .connections-empty-copy { margin: 0; padding: var(--fp-space-4); color: var(--fp-color-text-secondary); }
+.connections-empty-state { display: grid; gap: var(--fp-space-2); padding-bottom: var(--fp-space-3); }
+.connections-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--fp-space-2) var(--fp-space-4); padding-inline: var(--fp-space-4); }
+.connections-empty-actions .connections-text-button { min-height: var(--fp-touch-target); padding-inline: var(--fp-space-2); }
+.connections-empty-action { min-height: var(--fp-touch-target); padding: 0 var(--fp-space-4) var(--fp-space-3); text-align: left; justify-self: start; }
 
 /* Hidden statement-import file input */
 .connections-hidden-file { position: absolute; width: 1px; height: 1px; overflow: hidden; }
@@ -104,6 +108,19 @@
 .modal.connections-setup-modal .connections-search input:focus, .modal.connections-setup-modal .connections-search input:focus-visible { border: 0; box-shadow: none; outline: none; }
 .connections-search button { display: grid; place-items: center; border: 0; background: transparent; color: var(--fp-color-text-muted); }
 .connections-live-search { margin-top: var(--fp-space-1); }
+.connections-live-search-meta { margin: 0; padding: var(--fp-space-2) var(--fp-space-4) 0; color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); }
+
+/* Stable-height loading state: five fixed-size skeleton rows the same shape
+   as a real .connections-institution-row, so the dialog never grows/shrinks
+   between "loading" and "results loaded" and nothing perceptibly jumps.
+   role="status"/aria-live="polite" on the wrapper (not the individual rows,
+   which are aria-hidden) gives assistive tech one clear "loading" announcement
+   instead of five identical skeleton rows read out individually. */
+.connections-institution-list-loading { display: grid; gap: 0; }
+.connections-institution-skeleton { display: grid; }
+.connections-institution-skeleton span { display: block; height: var(--fp-touch-target); border-bottom: 1px solid var(--fp-color-divider); background: linear-gradient(90deg, var(--fp-color-surface) 25%, var(--fp-color-surface-hover) 37%, var(--fp-color-surface) 63%); background-size: 400% 100%; animation: connections-skeleton-pulse 1.4s ease infinite; }
+.connections-institution-skeleton span:last-child { border-bottom: 0; }
+@keyframes connections-skeleton-pulse { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
 
 /* Full-bleed horizontal scroller: the pills scroll edge-to-edge inside the
    dialog's true width (compensating the parent's inline padding with a
@@ -279,4 +296,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .connections-checking-spinner { animation-duration: 1.01ms; }
+  .connections-institution-skeleton span { animation-duration: 1.01ms; }
+}
+
+@media (forced-colors: active) {
+  .connections-institution-skeleton span { background: ButtonFace; forced-color-adjust: none; }
 }
