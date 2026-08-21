@@ -36,6 +36,43 @@
   display: none;
 }
 
+/* Firefox production regression (2026-08-21): the Connections setup dialog
+   intentionally has one vertical scroll owner: .connections-setup-content.
+   The first live fix made the outer shell a column flex container, but the
+   content region itself remained a CSS Grid. Under the dialog height clamp,
+   Grid could shrink the institution-list track; because that list uses
+   overflow:hidden for rounded-border clipping, its rows were cut off inside
+   the list instead of contributing overflow to the parent. The result was a
+   visibly clipped final row with scrollHeight == clientHeight on the intended
+   scroll owner.
+
+   Keep both layout levels in normal flex flow: the shell lets the content
+   region shrink beneath the fixed header/progress, while the content's direct
+   children never shrink. Long content therefore exceeds the content region's
+   client height and that region -- not the list or the modal -- scrolls. */
+.modal.connections-setup-modal {
+  display: flex;
+  flex-direction: column;
+}
+
+.modal.connections-setup-modal > .connections-setup-header,
+.modal.connections-setup-modal > .connections-setup-progress {
+  flex: 0 0 auto;
+}
+
+.modal.connections-setup-modal > .connections-setup-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: stretch;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.modal.connections-setup-modal > .connections-setup-content > * {
+  flex: 0 0 auto;
+}
 
 @media (forced-colors: active) {
   .dashboard-transaction-row:focus-visible {
