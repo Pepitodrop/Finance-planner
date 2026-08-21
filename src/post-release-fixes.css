@@ -36,6 +36,30 @@
   display: none;
 }
 
+/* Firefox production regression (2026-08-21): the Connections setup shell
+   used a CSS Grid with only max-height. With an auto block size, the 1fr
+   content track could keep its intrinsic height instead of shrinking to the
+   clamped dialog, so the parent's overflow:hidden clipped the institution
+   rows and .connections-setup-content had nothing to scroll. A column flex
+   shell preserves the same visual order/fixed header + progress treatment,
+   while allowing the content item to shrink and own the single vertical
+   scroll region at every viewport height. */
+.modal.connections-setup-modal {
+  display: flex;
+  flex-direction: column;
+}
+
+.modal.connections-setup-modal > .connections-setup-header,
+.modal.connections-setup-modal > .connections-setup-progress {
+  flex: 0 0 auto;
+}
+
+.modal.connections-setup-modal > .connections-setup-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 
 @media (forced-colors: active) {
   .dashboard-transaction-row:focus-visible {
