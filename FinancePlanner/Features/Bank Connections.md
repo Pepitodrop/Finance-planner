@@ -52,4 +52,8 @@ Verification state: **implemented / not runtime or production verified — no ev
 
 [[GoCardless]] (in [[Providers Index]]) holds the atomic verification-status breakdown; [[Bank Connection Flow]], [[Bank Consent Flow]], [[Bank Sync Flow]], [[Bank Disconnect Flow]] (in [[Flows Index]]) hold the step-by-step sequences; [[Banking Core Module]] and its responsibility nodes (in [[COBOL Index]]) hold the deterministic validation detail.
 
-Related: [[Enable Banking]], [[GoCardless]], [[PayPal]], [[COBOL Domain Core]], [[Provider Status]], [[Architecture Decisions]], [[Providers Index]], [[Flows Index]], [[Provider Institution Selection Contract]], [[Connections Page]]
+## Bank-family picker tiles vs. exact ASPSP (2026-08-21)
+
+See [[Bank Family Directory Resolution]] for the full fix: a "Volksbank / Raiffeisenbank"/"Sparkasse"-style picker tile is a Finance Planner UX grouping, not a real bank identity, and the resolution step that follows it now opens on a real, family-scoped subset of the live provider directory rather than a broken literal-label search.
+
+Related: [[Enable Banking]], [[GoCardless]], [[PayPal]], [[COBOL Domain Core]], [[Provider Status]], [[Architecture Decisions]], [[Providers Index]], [[Flows Index]], [[Provider Institution Selection Contract]], [[Connections Page]], [[Bank Family Directory Resolution]]

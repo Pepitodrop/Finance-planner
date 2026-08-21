@@ -50,4 +50,8 @@ Verification: `server/test/enable-banking-directory.test.js`, `server/test/enabl
 
 ## Follow-up (2026-08-18): a real GoCardless/bank-flow trace during this same continuation session found the disconnect path had an analogous honesty gap -- fixed alongside this contract's spirit ("never claim more than the provider confirmed") rather than as part of institution selection itself; see [[Bank Disconnect Flow]] for the full fix (`OpenBankingProvider.disconnect()`, `GoCardlessProvider`/`PayPalProvider` overrides, and the server/frontend wiring that derives `providerRevoked` from the adapter instead of assuming it).
 
-Related: [[Enable Banking]] · [[GoCardless]] · [[Bank Connections]] · [[Bank Connection Flow]] · [[Bank Disconnect Flow]] · [[Connections Page]] · [[Provider Callback Binding]] · [[Provider Status]] · [[PayPal]]
+## Follow-up (2026-08-21): bank-family UX fix, contract unaffected
+
+A real, reported UX defect — the "Volksbank / Raiffeisenbank" and "Sparkasse" picker tiles prefilled the live branch-search box with that literal umbrella label, which never matches a real ASPSP name — was fixed on `feat/bank-discovery-ux`. This contract's guarantee was never at risk: the prefilled/typed search text only ever affects which live directory rows are *displayed*; the `institutionId` actually submitted to `start()` still always comes from an explicit tap on a real, server-fetched directory entry (`resolvedProviderInstitution`), never from search text or a picker-tile label. Independently re-verified during that work's own adversarial review pass. See [[Bank Family Directory Resolution]] for the full mechanism.
+
+Related: [[Enable Banking]] · [[GoCardless]] · [[Bank Connections]] · [[Bank Connection Flow]] · [[Bank Disconnect Flow]] · [[Connections Page]] · [[Provider Callback Binding]] · [[Provider Status]] · [[PayPal]] · [[Bank Family Directory Resolution]]
