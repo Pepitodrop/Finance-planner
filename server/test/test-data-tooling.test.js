@@ -13,17 +13,22 @@ const createScriptUrl = new URL('../scripts/create-test-account.mjs', import.met
 const clearScriptUrl = new URL('../scripts/clear-test-account-data.mjs', import.meta.url)
 const createSource = await readFile(createScriptUrl, 'utf8')
 const clearSource = await readFile(clearScriptUrl, 'utf8')
-const cobolSourceUrl = new URL('../../core/cobol/test_seed_generator.cob', import.meta.url)
-const cobolSourcePath = fileURLToPath(cobolSourceUrl)
-const cobolSource = await readFile(cobolSourceUrl, 'utf8')
+const emptyCobolSourceUrl = new URL('../../core/cobol/test_account_empty_generator.cob', import.meta.url)
+const seedCobolSourceUrl = new URL('../../core/cobol/test_seed_generator.cob', import.meta.url)
+const emptyCobolSourcePath = fileURLToPath(emptyCobolSourceUrl)
+const seedCobolSourcePath = fileURLToPath(seedCobolSourceUrl)
+const emptyCobolSource = await readFile(emptyCobolSourceUrl, 'utf8')
+const seedCobolSource = await readFile(seedCobolSourceUrl, 'utf8')
 const cobcAvailable = spawnSync('cobc', ['--version'], { stdio: 'ignore' }).status === 0
 
-test('server package exposes only isolated test-account seed/reset commands, not a global demo reset', () => {
+test('server package exposes isolated empty/seed/reset test-account commands, not a global demo reset', () => {
   assert.equal(packageJson.scripts['database:reset-demo'], undefined)
   assert.equal(packageJson.scripts['database:reset-demo:dry-run'], undefined)
   assert.equal(packageJson.scripts['test-account:provision'], 'node scripts/create-test-account.mjs')
+  assert.match(packageJson.scripts['test-account:build-empty'], /cobc -free .*test_account_empty_generator\.cob/)
   assert.match(packageJson.scripts['test-account:build-seed'], /cobc -free .*test_seed_generator\.cob/)
-  assert.equal(packageJson.scripts['test-account:seed'], 'npm run test-account:build-seed && node scripts/create-test-account.mjs --seed-cobol')
+  assert.equal(packageJson.scripts['test-account:create-empty'], 'npm run test-account:build-empty && node scripts/create-test-account.mjs --empty-cobol')
+  assert.equal(packageJson.scripts['test-account:seed'], 'npm run test-account:build-empty && npm run test-account:build-seed && node scripts/create-test-account.mjs --seed-cobol')
   assert.equal(packageJson.scripts['test-account:clear-data'], 'node scripts/clear-test-account-data.mjs')
 })
 
@@ -34,12 +39,16 @@ test('maintenance scripts are valid Node syntax', async () => {
   ])
 })
 
-test('COBOL-generated seed is opt-in, validated, and encrypted before persistence', () => {
+test('empty COBOL bootstrap executes before account/database mutation and seed mode auto-creates missing account first', () => {
+  assert.match(createSource, /args\.includes\('--empty-cobol'\)/)
   assert.match(createSource, /args\.includes\('--seed-cobol'\)/)
-  assert.match(createSource, /validateCloudPayload\(JSON\.parse\(stdout\)\)/)
-  assert.match(createSource, /encryptCloudPayload\(/)
-  assert.match(createSource, /Choose exactly one test-data seed source/)
+  assert.match(createSource, /new URL\('\.\.\/build\/test-account-empty', import\.meta\.url\)/)
   assert.match(createSource, /new URL\('\.\.\/build\/test-seed', import\.meta\.url\)/)
+  assert.match(createSource, /validateCloudPayload\(JSON\.parse\(stdout\)\)/)
+  assert.ok(createSource.indexOf('await loadCobolPayload(cobolEmptyBinary') < createSource.indexOf('const pool = createDatabase'))
+  assert.match(createSource, /emptyWithCobol \|\| \(provisioned\.created && seedInput\.payload\)/)
+  assert.match(createSource, /encryptCloudPayload\(/)
+  assert.match(createSource, /emptyBootstrapApplied/)
   assert.doesNotMatch(createSource, /TRUNCATE\s+/i)
 })
 
@@ -62,44 +71,50 @@ test('test-account clear command is confirmation-gated, refuses non-test account
   assert.match(clearSource, /providerRevocationAttempted: false/)
 })
 
-test('COBOL seed contains deterministic finance fixtures only and no credentials', () => {
-  assert.match(cobolSource, />>SOURCE FORMAT IS FREE/)
-  assert.match(cobolSource, /Finance Planner Test Girokonto/)
-  assert.match(cobolSource, /balanceCents":695950/)
-  assert.match(cobolSource, /amountCents":250000/)
-  assert.match(cobolSource, /amountCents":9000/)
-  assert.match(cobolSource, /amountCents":4999/)
-  assert.match(cobolSource, /amountCents":12000/)
-  assert.match(cobolSource, /amountCents":5000/)
-  assert.doesNotMatch(cobolSource, /password|secret|token|session|iban|pin|tan/i)
+test('COBOL test-data generators contain finance fixtures only and no credentials', () => {
+  assert.match(emptyCobolSource, />>SOURCE FORMAT IS FREE/)
+  assert.match(emptyCobolSource, /"accounts": \[\]/)
+  assert.match(emptyCobolSource, /"transactions": \[\]/)
+  assert.match(emptyCobolSource, /"goals": \[\]/)
+  assert.match(seedCobolSource, />>SOURCE FORMAT IS FREE/)
+  assert.match(seedCobolSource, /Test Girokonto/)
+  assert.match(seedCobolSource, /Test Kreditkarte/)
+  assert.match(seedCobolSource, /Emergency fund/)
+  assert.match(seedCobolSource, /Transfer to savings/)
+  assert.match(seedCobolSource, /"recurring":true/)
+  assert.doesNotMatch(`${emptyCobolSource}\n${seedCobolSource}`, /password|secret|token|session|iban|pin|tan/i)
 })
 
-test('compiled COBOL seed emits valid deterministic JSON', { skip: !cobcAvailable }, async () => {
-  const tempDirectory = await mkdtemp(join(tmpdir(), 'finance-planner-test-seed-'))
-  const binary = join(tempDirectory, 'test-seed')
+async function compileAndRun(sourcePath, binaryName) {
+  const tempDirectory = await mkdtemp(join(tmpdir(), 'finance-planner-cobol-test-'))
+  const binary = join(tempDirectory, binaryName)
   try {
-    await execFileAsync('cobc', ['-free', '-Wall', '-Wextra', '-x', '-o', binary, cobolSourcePath], { timeout: 10_000 })
-    const { stdout, stderr } = await execFileAsync(binary, [], { encoding: 'utf8', timeout: 10_000 })
+    await execFileAsync('cobc', ['-free', '-Wall', '-Wextra', '-x', '-o', binary, sourcePath], { timeout: 10_000 })
+    const { stdout, stderr } = await execFileAsync(binary, [], { encoding: 'utf8', timeout: 10_000, maxBuffer: 2_000_000 })
     assert.equal(stderr, '')
-    const payload = JSON.parse(stdout)
-    assert.deepEqual(payload.state.accounts, [{
-      id: 'seed-checking',
-      name: 'Finance Planner Test Girokonto',
-      type: 'checking',
-      balanceCents: 695950,
-      currency: 'EUR',
-    }])
-    assert.equal(payload.state.transactions.length, 5)
-    assert.deepEqual(payload.state.transactions.map(({ type, amountCents }) => [type, amountCents]), [
-      ['income', 250000],
-      ['expense', 9000],
-      ['expense', 4999],
-      ['expense', 12000],
-      ['income', 5000],
-    ])
-    assert.deepEqual(payload.state.goals, [])
-    assert.deepEqual(payload.secureData, { testSeed: { generator: 'gnucobol', version: 1 } })
+    return JSON.parse(stdout)
   } finally {
     await rm(tempDirectory, { recursive: true, force: true })
   }
+}
+
+test('compiled COBOL empty-account generator emits valid zero-data state', { skip: !cobcAvailable }, async () => {
+  const payload = await compileAndRun(emptyCobolSourcePath, 'test-account-empty')
+  assert.deepEqual(payload.state, { accounts: [], transactions: [], goals: [] })
+  assert.deepEqual(payload.secureData, { testAccount: { generator: 'gnucobol', mode: 'empty', version: 1 } })
+})
+
+test('compiled comprehensive COBOL seed exercises account, transaction, recurring, transfer, category, and goals UI', { skip: !cobcAvailable }, async () => {
+  const payload = await compileAndRun(seedCobolSourcePath, 'test-seed')
+  assert.equal(payload.state.accounts.length, 5)
+  assert.equal(payload.state.transactions.length, 111)
+  assert.equal(payload.state.goals.length, 5)
+  assert.deepEqual(new Set(payload.state.accounts.map(({ type }) => type)), new Set(['checking', 'savings', 'cash', 'investment', 'credit-card']))
+  assert.ok(payload.state.transactions.filter(({ recurring }) => recurring).length >= 50)
+  assert.ok(payload.state.transactions.some(({ category }) => category === 'Transfer'))
+  assert.ok(payload.state.transactions.some(({ category }) => category === 'Travel'))
+  assert.ok(payload.state.transactions.some(({ category }) => category === 'Investment'))
+  assert.ok(payload.state.transactions.some(({ type }) => type === 'income'))
+  assert.ok(payload.state.transactions.some(({ type }) => type === 'expense'))
+  assert.deepEqual(payload.secureData, { testSeed: { generator: 'gnucobol', mode: 'comprehensive', version: 2, scenario: 'full-ui' } })
 })
