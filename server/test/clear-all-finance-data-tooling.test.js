@@ -17,11 +17,13 @@ test('whole-finance reset script is valid Node syntax and explicitly confirmatio
   assert.match(source, /FINANCE_DATA_RESET_CONFIRM/)
 })
 
-test('whole-finance reset publishes encrypted empty cloud states instead of deleting them', () => {
+test('whole-finance reset publishes and verifies encrypted empty cloud states instead of deleting them', () => {
   assert.match(source, /state: \{ accounts: \[\], transactions: \[\], goals: \[\] \}/)
-  assert.match(source, /encryptCloudPayload\(emptyPayload, env\.CONNECTOR_MASTER_KEY, user\.id\)/)
+  assert.match(source, /encryptCloudPayload\(emptyPayload, env\.CONNECTOR_MASTER_KEY, userId\)/)
+  assert.match(source, /decryptCloudPayload\(row\.encrypted_payload, env\.CONNECTOR_MASTER_KEY, row\.user_id\)/)
   assert.match(source, /INSERT INTO user_finance_state/)
   assert.match(source, /version = user_finance_state\.version \+ 1/)
+  assert.match(source, /verifiedEmpty: true/)
   assert.doesNotMatch(source, /DELETE FROM user_finance_state/)
 })
 
@@ -31,6 +33,7 @@ test('whole-finance reset preserves authentication/security infrastructure and c
   assert.match(source, /DELETE FROM oauth_nonces/)
   assert.match(source, /DELETE FROM user_budget_learning_profiles/)
   assert.match(source, /DELETE FROM webhook_events/)
+  assert.match(source, /Finance reset verification found residual provider or learning data/)
   assert.doesNotMatch(source, /DELETE FROM auth_store|DELETE FROM schema_migrations|DELETE FROM user_session_revocations|DELETE FROM request_rate_limits|TRUNCATE/i)
   assert.match(source, /providerRevocationAttempted: false/)
 })
