@@ -76,13 +76,13 @@ describe('AccountPage (ACCOUNT-01)', () => {
     expect(screen.getByRole('button', { name: /sign out completely/i })).not.toBeDisabled()
     expect(logoutSecurity.clearUnlockedState).not.toHaveBeenCalled()
     expect(logoutSecurity.lockVault).not.toHaveBeenCalled()
-    expect(screen.queryByText(/everywhere|all devices/i)).not.toBeInTheDocument()
   })
 
-  it('keeps the encrypted local vault while explaining that only the decrypted copy leaves memory', () => {
+  it('accurately explains per-user session revocation while keeping the encrypted local vault', () => {
     render(<AccountPage user={USER} onLogout={vi.fn()} onNavigateToData={vi.fn()}/>)
-    expect(screen.queryByText(/everywhere|all devices|deletes your vault|clears your vault/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/other signed-in devices will need to sign in again/i)).toBeInTheDocument()
     expect(screen.getByText(/decrypted vault is removed from memory/i)).toBeInTheDocument()
-    expect(screen.getByText(/encrypted vault remains on this device/i)).toBeInTheDocument()
+    expect(screen.getByText(/encrypted vault remains available/i)).toBeInTheDocument()
+    expect(screen.queryByText(/deletes your vault|clears your vault/i)).not.toBeInTheDocument()
   })
 })
