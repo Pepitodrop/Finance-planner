@@ -1102,9 +1102,44 @@ class EnableBankingProvider extends OpenBankingProvider {
         if (!Array.isArray(page?.transactions)) throw new Error('Enable Banking transaction response is invalid.')
         for (const item of page.transactions) {
           if (item.transaction_amount?.currency !== 'EUR') continue
-          const signedCents = await this.core.normalizeProviderAmount(item.transaction_amount.amount)
+          // Found during Mock ASPSP sandbox prep (2026-08-22), confirmed
+          // against the current official Enable Banking account-information
+          // API reference: transaction_amount.amount is an ABSOLUTE value --
+          // unlike GoCardless's transactionAmount.amount, which already
+          // carries its own sign -- and direction comes only from
+          // credit_debit_indicator (CRDT = credit/incoming, DBIT =
+          // debit/outgoing). The previous code passed the absolute amount
+          // straight through, silently importing every transaction as
+          // positive income. Applying the sign as a decimal-string prefix
+          // BEFORE handing it to the same core.normalizeProviderAmount() /
+          // COBOL fixed-point path every other provider already uses --
+          // never a JS-side sign flip on the resulting integer -- keeps this
+          // inside the existing deterministic architecture rather than
+          // adding a second, parallel one; COBOL's NUMVAL-based parser
+          // already accepts a leading '-' correctly. Fails closed (throws,
+          // never silently treated as a credit) for anything other than the
+          // two documented indicator values, rather than guessing a
+          // direction from creditor/debtor fields.
+          const indicator = item.credit_debit_indicator
+          if (indicator !== 'CRDT' && indicator !== 'DBIT') {
+            throw new Error(`Enable Banking transaction has an unrecognized credit_debit_indicator: ${JSON.stringify(indicator ?? null)}`)
+          }
+          const signedAmountText = indicator === 'DBIT' ? `-${item.transaction_amount.amount}` : String(item.transaction_amount.amount)
+          const signedCents = await this.core.normalizeProviderAmount(signedAmountText)
           await normalizeSignedAmount(signedCents, this.env)
-          const externalId = item.transaction_id || `${account.uid}:${item.booking_date || item.value_date}:${item.transaction_amount.amount}:${(item.remittance_information || []).join(' ')}`
+          // entry_reference is the ASPSP transaction identifier in the
+          // current official API -- transaction_id is not part of the
+          // documented transaction schema (also found during Mock ASPSP
+          // prep). Namespaced with account.uid: Enable Banking documents
+          // entry_reference as scoped to the account it was issued against,
+          // never guaranteed unique across accounts, so two different
+          // accounts sharing a value could otherwise silently dedupe each
+          // other's transactions away via the shared `seen` set below. Falls
+          // back to the existing deterministic account/date/amount/
+          // description key (already account-namespaced) when absent.
+          const externalId = item.entry_reference
+            ? `${account.uid}:${item.entry_reference}`
+            : `${account.uid}:${item.booking_date || item.value_date}:${item.transaction_amount.amount}:${(item.remittance_information || []).join(' ')}`
           if (seen.has(externalId)) continue
           seen.add(externalId)
           transactions.push({
@@ -1114,7 +1149,11 @@ class EnableBankingProvider extends OpenBankingProvider {
             amountCents: signedCents,
             currency: 'EUR',
             bookingDate: item.booking_date || item.value_date || item.transaction_date || window.dateTo,
-            pending: item.status === 'PEND',
+            // PDNG = pending, BOOK = booked in the current official status
+            // enum -- previously compared against 'PEND', a value this API
+            // does not use, so every transaction was silently treated as
+            // booked (pending: false) regardless of its real status.
+            pending: item.status === 'PDNG',
           })
         }
         continuationKey = page.continuation_key
