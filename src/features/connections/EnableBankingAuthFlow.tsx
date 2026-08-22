@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { loadEnableBankingAuthFlowWidget, ENABLE_BANKING_WIDGET_ELEMENT_TAG } from './enableBankingWidgetLoader'
+import './enableBankingAuthFlow.css'
 
 export type EnableBankingAuthFlowStatus = 'loading' | 'ready' | 'error'
 
@@ -81,5 +82,11 @@ export function EnableBankingAuthFlow({ authorizationId, origin, sandbox, locale
     }
   }, [authorizationId, origin, sandbox, locale, fixtureStatus])
 
-  return <div className="connections-auth-flow-widget" ref={containerRef} data-fixture-status={fixtureStatus}/>
+  return <div className="connections-auth-flow-widget-shell" data-environment={sandbox ? 'sandbox' : 'production'}>
+    {sandbox && <div className="connections-auth-flow-sandbox-note" role="note" aria-label="Sandbox test environment">
+      <strong>Sandbox test</strong>
+      <span>Use Enable Banking test credentials only. Never enter credentials from a real bank account here.</span>
+    </div>}
+    <div className="connections-auth-flow-widget" ref={containerRef} data-fixture-status={fixtureStatus}/>
+  </div>
 }
