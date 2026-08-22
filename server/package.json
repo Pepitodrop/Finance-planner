@@ -10,9 +10,11 @@
     "verify:issue-105-live": "node scripts/verify-issue-105-live.mjs",
     "migrate": "node src/migrate.js",
     "migrate:rollback": "node src/migrate-rollback.js",
-    "database:reset-demo": "node scripts/reset-and-seed-demo.mjs",
-    "database:reset-demo:dry-run": "node scripts/reset-and-seed-demo.mjs --dry-run",
-    "test-account:provision": "node scripts/create-test-account.mjs"
+    "database:clear-finance": "node scripts/clear-finance-data.mjs",
+    "database:clear-finance:dry-run": "node scripts/clear-finance-data.mjs --dry-run",
+    "test-account:provision": "node scripts/create-test-account.mjs",
+    "test-account:seed": "node scripts/seed-test-account.mjs",
+    "test-account:seed:dry-run": "node scripts/seed-test-account.mjs --dry-run"
   },
   "dependencies": {
     "@simplewebauthn/server": "^13.1.2",
