@@ -76,6 +76,7 @@ test('COBOL test-data generators contain finance fixtures only and no credential
   assert.match(emptyCobolSource, /"accounts": \[\]/)
   assert.match(emptyCobolSource, /"transactions": \[\]/)
   assert.match(emptyCobolSource, /"goals": \[\]/)
+  assert.match(emptyCobolSource, /"secureData": \{\}/)
   assert.match(seedCobolSource, />>SOURCE FORMAT IS FREE/)
   assert.match(seedCobolSource, /Test Girokonto/)
   assert.match(seedCobolSource, /Test Kreditkarte/)
@@ -101,7 +102,7 @@ async function compileAndRun(sourcePath, binaryName) {
 test('compiled COBOL empty-account generator emits valid zero-data state', { skip: !cobcAvailable }, async () => {
   const payload = await compileAndRun(emptyCobolSourcePath, 'test-account-empty')
   assert.deepEqual(payload.state, { accounts: [], transactions: [], goals: [] })
-  assert.deepEqual(payload.secureData, { testAccount: { generator: 'gnucobol', mode: 'empty', version: 1 } })
+  assert.deepEqual(payload.secureData, {})
 })
 
 test('compiled comprehensive COBOL seed exercises account, transaction, recurring, transfer, category, and goals UI', { skip: !cobcAvailable }, async () => {
