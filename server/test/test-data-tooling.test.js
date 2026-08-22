@@ -82,7 +82,7 @@ test('COBOL test-data generators contain finance fixtures only and no credential
   assert.match(seedCobolSource, /Test Kreditkarte/)
   assert.match(seedCobolSource, /Emergency fund/)
   assert.match(seedCobolSource, /Transfer to savings/)
-  assert.match(seedCobolSource, /"recurring":true/)
+  assert.doesNotMatch(seedCobolSource, /"recurring":true/)
   assert.doesNotMatch(`${emptyCobolSource}\n${seedCobolSource}`, /\b(?:password|secret|token|session|iban|pin|tan)\b/i)
 })
 
@@ -105,14 +105,15 @@ test('compiled COBOL empty-account generator emits valid zero-data state', { ski
   assert.deepEqual(payload.secureData, {})
 })
 
-test('compiled comprehensive COBOL seed exercises account, transaction, recurring, transfer, category, and goals UI', { skip: !cobcAvailable }, async () => {
+test('compiled comprehensive COBOL seed exercises accounts, repeated history, transfers, categories, and goals', { skip: !cobcAvailable }, async () => {
   const payload = await compileAndRun(seedCobolSourcePath, 'test-seed')
   assert.equal(payload.state.accounts.length, 5)
   assert.equal(payload.state.transactions.length, 111)
   assert.equal(payload.state.goals.length, 5)
   assert.deepEqual(new Set(payload.state.accounts.map(({ type }) => type)), new Set(['checking', 'savings', 'cash', 'investment', 'credit-card']))
-  assert.ok(payload.state.transactions.filter(({ recurring }) => recurring).length >= 50)
-  assert.ok(payload.state.transactions.some(({ category }) => category === 'Transfer'))
+  assert.equal(payload.state.transactions.filter(({ recurring }) => recurring).length, 0)
+  assert.equal(payload.state.transactions.filter(({ description }) => description === 'Test Rent').length, 8)
+  assert.equal(payload.state.transactions.filter(({ category }) => category === 'Transfer').length, 16)
   assert.ok(payload.state.transactions.some(({ category }) => category === 'Travel'))
   assert.ok(payload.state.transactions.some(({ category }) => category === 'Investment'))
   assert.ok(payload.state.transactions.some(({ type }) => type === 'income'))
