@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import { AuthStore } from '../src/auth-store.js'
 import { createDatabase, migrateDatabase } from '../src/database.js'
 import {
+  decryptCloudPayload,
   encryptCloudPayload,
   validateCloudPayload,
 } from '../src/user-state-store.js'
@@ -94,24 +95,43 @@ try {
       env.CONNECTOR_MASTER_KEY,
       provisioned.userId,
     )
-    const result = await pool.query(
-      `INSERT INTO user_finance_state
-         (user_id, encrypted_payload, version, updated_at)
-       VALUES ($1, $2, 1, now())
-       ON CONFLICT (user_id)
-       DO UPDATE SET
-         encrypted_payload = EXCLUDED.encrypted_payload,
-         version = user_finance_state.version + 1,
-         updated_at = now()
-       RETURNING version`,
-      [provisioned.userId, encryptedPayload],
-    )
-    return {
-      source: input.source,
-      version: Number(result.rows[0].version),
-      accounts: input.payload.state.accounts.length,
-      transactions: input.payload.state.transactions.length,
-      goals: input.payload.state.goals.length,
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const result = await client.query(
+        `INSERT INTO user_finance_state
+           (user_id, encrypted_payload, version, updated_at)
+         VALUES ($1, $2, 1, now())
+         ON CONFLICT (user_id)
+         DO UPDATE SET
+           encrypted_payload = EXCLUDED.encrypted_payload,
+           version = user_finance_state.version + 1,
+           updated_at = now()
+         RETURNING version, encrypted_payload`,
+        [provisioned.userId, encryptedPayload],
+      )
+      const verifiedPayload = decryptCloudPayload(
+        result.rows[0].encrypted_payload,
+        env.CONNECTOR_MASTER_KEY,
+        provisioned.userId,
+      )
+      if (JSON.stringify(verifiedPayload) !== JSON.stringify(input.payload)) {
+        throw new Error(`Encrypted ${input.source} persistence verification failed.`)
+      }
+      await client.query('COMMIT')
+      return {
+        source: input.source,
+        version: Number(result.rows[0].version),
+        verified: true,
+        accounts: input.payload.state.accounts.length,
+        transactions: input.payload.state.transactions.length,
+        goals: input.payload.state.goals.length,
+      }
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {})
+      throw error
+    } finally {
+      client.release()
     }
   }
 
