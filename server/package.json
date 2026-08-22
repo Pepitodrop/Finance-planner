@@ -11,7 +11,7 @@
     "migrate": "node src/migrate.js",
     "migrate:rollback": "node src/migrate-rollback.js",
     "test-account:provision": "node scripts/create-test-account.mjs",
-    "test-account:build-seed": "mkdir -p build && cobc -Wall -Wextra -x -o build/test-seed ../core/cobol/test_seed_generator.cob",
+    "test-account:build-seed": "mkdir -p build && cobc -free -Wall -Wextra -x -o build/test-seed ../core/cobol/test_seed_generator.cob",
     "test-account:seed": "npm run test-account:build-seed && node scripts/create-test-account.mjs --seed-cobol",
     "test-account:clear-data": "node scripts/clear-test-account-data.mjs"
   },
