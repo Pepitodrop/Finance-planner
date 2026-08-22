@@ -10,6 +10,8 @@ PROCEDURE DIVISION.
 MAIN.
     *> Comprehensive deterministic test data only. Node.js remains
     *> responsible for authentication, encryption and PostgreSQL persistence.
+    *> Repeated historical expenses intentionally exercise recurring-pattern
+    *> inference; individual history rows are not manually marked recurring.
     *> This generator contains no credentials and never runs at app startup.
     DISPLAY '{'
     DISPLAY '  "state": {'
@@ -23,22 +25,22 @@ MAIN.
     DISPLAY '    "transactions": ['
 
     PERFORM VARYING WS-MONTH FROM 1 BY 1 UNTIL WS-MONTH > 8
-        DISPLAY '      {"id":"salary-' WS-MONTH '","accountId":"seed-checking","description":"Test Salary","category":"Income","type":"income","amountCents":295000,"date":"2026-' WS-MONTH '-01","recurring":true},'
-        DISPLAY '      {"id":"rent-' WS-MONTH '","accountId":"seed-checking","description":"Test Rent","category":"Housing","type":"expense","amountCents":98000,"date":"2026-' WS-MONTH '-02","recurring":true},'
-        DISPLAY '      {"id":"internet-' WS-MONTH '","accountId":"seed-checking","description":"Test Internet","category":"Utilities","type":"expense","amountCents":4999,"date":"2026-' WS-MONTH '-05","recurring":true},'
-        DISPLAY '      {"id":"mobile-' WS-MONTH '","accountId":"seed-checking","description":"Test Mobile","category":"Utilities","type":"expense","amountCents":2499,"date":"2026-' WS-MONTH '-06","recurring":true},'
-        DISPLAY '      {"id":"streaming-' WS-MONTH '","accountId":"seed-card","description":"Test Streaming","category":"Subscriptions","type":"expense","amountCents":1799,"date":"2026-' WS-MONTH '-08","recurring":true},'
-        DISPLAY '      {"id":"fitness-' WS-MONTH '","accountId":"seed-card","description":"Test Fitness","category":"Health","type":"expense","amountCents":3499,"date":"2026-' WS-MONTH '-10","recurring":true},'
+        DISPLAY '      {"id":"salary-' WS-MONTH '","accountId":"seed-checking","description":"Test Salary","category":"Income","type":"income","amountCents":295000,"date":"2026-' WS-MONTH '-01"},'
+        DISPLAY '      {"id":"rent-' WS-MONTH '","accountId":"seed-checking","description":"Test Rent","category":"Housing","type":"expense","amountCents":98000,"date":"2026-' WS-MONTH '-02"},'
+        DISPLAY '      {"id":"internet-' WS-MONTH '","accountId":"seed-checking","description":"Test Internet","category":"Utilities","type":"expense","amountCents":4999,"date":"2026-' WS-MONTH '-05"},'
+        DISPLAY '      {"id":"mobile-' WS-MONTH '","accountId":"seed-checking","description":"Test Mobile","category":"Utilities","type":"expense","amountCents":2499,"date":"2026-' WS-MONTH '-06"},'
+        DISPLAY '      {"id":"streaming-' WS-MONTH '","accountId":"seed-card","description":"Test Streaming","category":"Subscriptions","type":"expense","amountCents":1799,"date":"2026-' WS-MONTH '-08"},'
+        DISPLAY '      {"id":"fitness-' WS-MONTH '","accountId":"seed-card","description":"Test Fitness","category":"Health","type":"expense","amountCents":3499,"date":"2026-' WS-MONTH '-10"},'
         DISPLAY '      {"id":"groceries-a-' WS-MONTH '","accountId":"seed-checking","description":"Test Supermarket","category":"Groceries","type":"expense","amountCents":9200,"date":"2026-' WS-MONTH '-11"},'
         DISPLAY '      {"id":"groceries-b-' WS-MONTH '","accountId":"seed-card","description":"Test Grocery Store","category":"Groceries","type":"expense","amountCents":6100,"date":"2026-' WS-MONTH '-18"},'
         DISPLAY '      {"id":"transport-' WS-MONTH '","accountId":"seed-card","description":"Test Transit","category":"Transport","type":"expense","amountCents":5800,"date":"2026-' WS-MONTH '-12"},'
         DISPLAY '      {"id":"dining-' WS-MONTH '","accountId":"seed-card","description":"Test Restaurant","category":"Dining","type":"expense","amountCents":5200,"date":"2026-' WS-MONTH '-16"},'
         DISPLAY '      {"id":"cash-' WS-MONTH '","accountId":"seed-cash","description":"Test Cash Purchase","category":"Leisure","type":"expense","amountCents":1750,"date":"2026-' WS-MONTH '-20"},'
-        DISPLAY '      {"id":"savings-out-' WS-MONTH '","accountId":"seed-checking","description":"Transfer to savings","category":"Transfer","type":"expense","amountCents":30000,"date":"2026-' WS-MONTH '-25","recurring":true},'
-        DISPLAY '      {"id":"savings-in-' WS-MONTH '","accountId":"seed-savings","description":"Transfer from checking","category":"Transfer","type":"income","amountCents":30000,"date":"2026-' WS-MONTH '-25","recurring":true},'
+        DISPLAY '      {"id":"savings-out-' WS-MONTH '","accountId":"seed-checking","description":"Transfer to savings","category":"Transfer","type":"expense","amountCents":30000,"date":"2026-' WS-MONTH '-25"},'
+        DISPLAY '      {"id":"savings-in-' WS-MONTH '","accountId":"seed-savings","description":"Transfer from checking","category":"Transfer","type":"income","amountCents":30000,"date":"2026-' WS-MONTH '-25"},'
     END-PERFORM
 
-    DISPLAY '      {"id":"insurance-2026","accountId":"seed-checking","description":"Test Insurance","category":"Insurance","type":"expense","amountCents":78000,"date":"2026-01-15","recurring":true},'
+    DISPLAY '      {"id":"insurance-2026","accountId":"seed-checking","description":"Test Insurance","category":"Insurance","type":"expense","amountCents":78000,"date":"2026-01-15"},'
     DISPLAY '      {"id":"travel-hotel-202604","accountId":"seed-card","description":"Test Hotel","category":"Travel","type":"expense","amountCents":145000,"date":"2026-04-21"},'
     DISPLAY '      {"id":"travel-flight-202604","accountId":"seed-card","description":"Test Flight","category":"Travel","type":"expense","amountCents":89000,"date":"2026-04-19"},'
     DISPLAY '      {"id":"electronics-202605","accountId":"seed-card","description":"Test Electronics","category":"Shopping","type":"expense","amountCents":129900,"date":"2026-05-14"},'
