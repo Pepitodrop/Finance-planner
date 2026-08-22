@@ -30,7 +30,7 @@ function TransactionRows({ transactions }: { transactions: Transaction[] }) {
     return <li key={transaction.id}>
       <span className={`accounts-transaction-icon accounts-transaction-icon--${type}`} aria-hidden="true"><Icon/></span>
       <span><time dateTime={transaction.date}>{new Intl.DateTimeFormat('en-GB',{day:'numeric',month:'short'}).format(new Date(`${transaction.date}T12:00:00`))}</time><strong>{transaction.description}</strong><small>{type === 'transfer' ? 'Transfer' : transaction.category}</small></span>
-      <b className={`accounts-money accounts-money--${type}`}><span className="sr-only">{type}: </span>{type === 'income' ? '+' : '−'}{formatMoney(transaction.amountCents)}</b>
+      <b className={`accounts-money accounts-money--${type}`}><span className="sr-only">{type}: </span>{transaction.type === 'income' ? '+' : '−'}{formatMoney(transaction.amountCents)}</b>
     </li>
   })}</ul>
 }
