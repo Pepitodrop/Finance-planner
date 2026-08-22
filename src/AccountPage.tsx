@@ -34,8 +34,9 @@ export function AccountPage({ user, onLogout, onNavigateToData }: AccountPagePro
       // session still exists. This never exposes the vault password or key.
       await flushCloudState()
 
-      // The server revokes the authenticated session and expires fp_session.
-      // Only after that succeeds do we discard the decrypted client state.
+      // The server revokes the user's authenticated sessions and expires the
+      // current fp_session cookie. Only after that succeeds do we discard the
+      // decrypted client state on this device.
       await onLogout()
       clearUnlockedState()
       lockVault()
@@ -70,8 +71,8 @@ export function AccountPage({ user, onLogout, onNavigateToData }: AccountPagePro
 
     <section className="panel account-signout-panel">
       <p className="eyebrow">Session</p>
-      <h2>Fully sign out of Finance Planner on this device</h2>
-      <p className="muted">Your server session is revoked and the decrypted vault is removed from memory. The encrypted vault remains on this device, so you can unlock it again after signing back in.</p>
+      <h2>Fully sign out of Finance Planner</h2>
+      <p className="muted">Your Finance Planner sessions are revoked, so other signed-in devices will need to sign in again. On this device the decrypted vault is removed from memory, while the encrypted vault remains available for your next sign-in.</p>
       <button type="button" className="secondary" disabled={busy} onClick={() => void signOut()}>
         <LogOut size={18}/> {busy ? 'Signing out…' : 'Sign out completely'}
       </button>
