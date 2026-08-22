@@ -4,6 +4,7 @@ import {
   normalizeTestAccountEmail,
   testAccountUserId,
 } from '../src/test-account-provisioning.js'
+import { encryptCloudPayload, validateCloudPayload } from '../src/user-state-store.js'
 
 export const REQUIRED_CONFIRMATION = 'CLEAR_TEST_ACCOUNT_FINANCE_DATA'
 
@@ -33,27 +34,45 @@ try {
     throw new Error('Refusing to clear data for a non-test account.')
   }
 
+  const emptyPayload = validateCloudPayload({
+    state: { accounts: [], transactions: [], goals: [] },
+    secureData: {},
+  })
+  const encryptedEmptyPayload = encryptCloudPayload(emptyPayload, env.CONNECTOR_MASTER_KEY, user.id)
+
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
     const connectorConnections = await client.query('DELETE FROM connector_connections WHERE user_id=$1', [user.id])
     const oauthNonces = await client.query('DELETE FROM oauth_nonces WHERE user_id=$1', [user.id])
-    const financeState = await client.query('DELETE FROM user_finance_state WHERE user_id=$1', [user.id])
     const learningProfiles = await client.query('DELETE FROM user_budget_learning_profiles WHERE user_id=$1', [user.id])
+    const financeState = await client.query(
+      `INSERT INTO user_finance_state
+         (user_id, encrypted_payload, version, updated_at)
+       VALUES ($1, $2, 1, now())
+       ON CONFLICT (user_id)
+       DO UPDATE SET
+         encrypted_payload = EXCLUDED.encrypted_payload,
+         version = user_finance_state.version + 1,
+         updated_at = now()
+       RETURNING version`,
+      [user.id, encryptedEmptyPayload],
+    )
     await client.query('COMMIT')
 
     console.log(JSON.stringify({
       status: 'ok',
       userId: user.id,
       accountPreserved: true,
+      financeStateReset: true,
+      financeStateVersion: Number(financeState.rows[0].version),
       providerRevocationAttempted: false,
       deleted: {
         connectorConnections: connectorConnections.rowCount || 0,
         oauthNonces: oauthNonces.rowCount || 0,
-        financeState: financeState.rowCount || 0,
         learningProfiles: learningProfiles.rowCount || 0,
       },
-      note: 'Local test data was removed. Provider-side sandbox sessions are not revoked by this maintenance command.',
+      note: 'The test account now has an encrypted empty cloud finance state. Provider-side sandbox sessions are not revoked by this maintenance command.',
     }, null, 2))
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {})
