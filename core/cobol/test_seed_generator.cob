@@ -2,15 +2,11 @@
 IDENTIFICATION DIVISION.
 PROGRAM-ID. FINANCE-TEST-SEED.
 
-DATA DIVISION.
-WORKING-STORAGE SECTION.
-01 WS-SEED-VERSION PIC 9 VALUE 1.
-
 PROCEDURE DIVISION.
 MAIN.
-    *> This program deliberately owns only deterministic fixture generation.
-    *> PostgreSQL access, encryption, user lookup and authorization remain in
-    *> Node.js. Nothing here runs during normal application startup.
+    *> Deterministic fixture generation only. PostgreSQL access, encryption,
+    *> user lookup and authorization remain in Node.js. This program is never
+    *> invoked by normal application startup.
     DISPLAY '{'
     DISPLAY '  "state": {'
     DISPLAY '    "accounts": ['
@@ -26,9 +22,7 @@ MAIN.
     DISPLAY '    "goals": []'
     DISPLAY '  },'
     DISPLAY '  "secureData": {'
-    DISPLAY '    "testSeed": {"generator":"gnucobol","version":' WITH NO ADVANCING
-    DISPLAY WS-SEED-VERSION WITH NO ADVANCING
-    DISPLAY '}'
+    DISPLAY '    "testSeed": {"generator":"gnucobol","version":1}'
     DISPLAY '  }'
     DISPLAY '}'
     STOP RUN.
