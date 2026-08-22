@@ -84,12 +84,13 @@ docker compose --env-file .env exec -T \
   connector node scripts/clear-test-account-data.mjs
 ```
 
-The command removes only that test user's local Finance Planner finance/provider state:
+The command deletes the test user's local provider/setup records:
 
 - `connector_connections`
 - `oauth_nonces`
-- `user_finance_state`
 - `user_budget_learning_profiles`
+
+For `user_finance_state`, it deliberately does **not** delete the row. Instead it writes a newly encrypted `{ accounts: [], transactions: [], goals: [] }` payload and increments the cloud-state version. This matters on a device that still has the old seeded encrypted browser vault: on the next normal sync, the empty server version can replace the stale synced local copy instead of the browser simply recreating the deleted server row. If that browser has genuinely unsynced local changes, the existing conflict protection still stops an automatic overwrite.
 
 The authentication account is preserved so the same test login can be reused with empty finance state.
 
