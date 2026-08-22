@@ -36,6 +36,27 @@ test('connector setup authenticates and authorizes before provider capability di
   assert.ok(authorization < availabilityCheck)
 })
 
+// Regression guard for the Enable Banking Auth Flow widget descriptor
+// (2026-08-22): the /start response must explicitly whitelist exactly
+// {provider, authorizationId, origin, sandbox} from result.authFlow, never
+// spread it (or the whole `result` object, which also carries `credential`
+// -- signed state, institutionId, aspspName/country, accessValidUntil --
+// destined only for server-side pending-setup storage, never the browser).
+test('the /start response whitelists exactly four authFlow fields and never spreads the raw provider result', () => {
+  const startFunction = serverSource.slice(
+    serverSource.indexOf('async function start(provider, request, response)'),
+    serverSource.indexOf('async function buildSyncPayload'),
+  )
+  assert.match(startFunction, /result\.authFlow\.provider/)
+  assert.match(startFunction, /result\.authFlow\.authorizationId/)
+  assert.match(startFunction, /result\.authFlow\.origin/)
+  assert.match(startFunction, /result\.authFlow\.sandbox/)
+  assert.doesNotMatch(startFunction, /\.\.\.result(?!\.)/, 'must never spread the whole provider result object itself (as opposed to its nested .credential, used only for server-side pending-setup storage) into the client response')
+  assert.doesNotMatch(startFunction, /\.\.\.result\.authFlow\b/, 'must whitelist authFlow fields explicitly, never forward the object verbatim')
+  const sendCall = startFunction.slice(startFunction.indexOf('send(response, 200'))
+  assert.doesNotMatch(sendCall, /credential/i, 'the client-facing /start response must never mention credential (signed state, institutionId, aspspName/country, accessValidUntil live server-side only)')
+})
+
 test('every stored owner-account connection is re-authorized before synchronization', () => {
   const syncFunction = serverSource.slice(
     serverSource.indexOf('async function buildSyncPayload(user)'),

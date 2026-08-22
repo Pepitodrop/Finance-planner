@@ -161,6 +161,11 @@ services:
       # Enable Banking is actually usable is the application id above and
       # whatever the read-only mount below actually contains, not this path.
       ENABLE_BANKING_PRIVATE_KEY_FILE: /run/secrets/enable-banking-private-key.pem
+      # Controls the official Auth Flow widget's `sandbox` attribute. Empty
+      # by default (falls back to hostname-based inference from Enable
+      # Banking's own POST /auth response -- see providers.js and
+      # .env.example); set explicitly for a production deployment.
+      ENABLE_BANKING_SANDBOX: ${ENABLE_BANKING_SANDBOX:-}
     ports:
       - "127.0.0.1:${CONNECTOR_PORT:-8787}:8787"
     volumes:

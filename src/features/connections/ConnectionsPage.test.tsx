@@ -24,7 +24,12 @@ vi.mock('../../connectors', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../connectors')>()
   return {
     ...actual,
-    startConnector: vi.fn(async () => {}),
+    // 'redirect' by default -- matches every existing provider's real
+    // behavior (the browser is already navigating away by the time this
+    // resolves) and keeps every pre-existing test in this file unaffected.
+    // The Enable-Banking-embedded-widget describe block below overrides
+    // this per-test with an 'embedded-auth' result.
+    startConnector: vi.fn(async () => ({ mode: 'redirect' as const })),
     synchronizeConnections: vi.fn(async () => []),
     disconnectConnector: vi.fn(async () => ({ disconnected: true, providerRevoked: true, providerRevokeReason: 'confirmed' as const })),
     fetchProviderStatus: vi.fn(async () => DEFAULT_PROVIDER_STATUS),
@@ -650,6 +655,163 @@ describe('redirect confirmation', () => {
     expect(screen.getByRole('heading', { name: 'Add manual account' })).toBeInTheDocument()
     expect(screen.getByLabelText('Account type')).toHaveValue('credit-card')
     expect(startConnector).not.toHaveBeenCalled()
+  })
+})
+
+describe('Enable Banking Auth Flow widget', () => {
+  it('1. stays on the setup modal and shows the secure-authorization loading state instead of navigating away when a valid embedded-auth descriptor is returned', async () => {
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:ING-DiBa', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }])
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: 'https://auth.enablebanking.com/ais/auth-1', authorizationId: 'auth-1', origin: 'https://auth.enablebanking.com', sandbox: false })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^ING/ }))
+    await user.click(await screen.findByRole('button', { name: /ING-DiBa/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+
+    expect(await screen.findByRole('heading', { name: 'Secure bank authorization' })).toBeInTheDocument()
+    expect(screen.getByText('Finance Planner never receives your online-banking credentials.')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Continue to your provider' })).not.toBeInTheDocument()
+    expect(screen.getByText('Preparing secure bank authorization…')).toBeInTheDocument()
+  })
+
+  it('does not disable the widget view behind a permanently-busy Continue button -- busy is cleared once the embedded-auth result lands', async () => {
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:ING-DiBa', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }])
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: 'https://auth.enablebanking.com/ais/auth-1', authorizationId: 'auth-1', origin: 'https://auth.enablebanking.com', sandbox: false })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^ING/ }))
+    await user.click(await screen.findByRole('button', { name: /ING-DiBa/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+    await screen.findByRole('heading', { name: 'Secure bank authorization' })
+    // The widget view's own Cancel button must be interactable, not stuck
+    // disabled by a `busy` flag that was never cleared.
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled()
+  })
+
+  it('13. backing out of the widget view and choosing a different institution shows the plain confirmation view again, never a stale widget', async () => {
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValue([{ id: 'DE:ING-DiBa', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }])
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: 'https://auth.enablebanking.com/ais/auth-1', authorizationId: 'auth-1', origin: 'https://auth.enablebanking.com', sandbox: false })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^ING/ }))
+    await user.click(await screen.findByRole('button', { name: /ING-DiBa/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+    await screen.findByRole('heading', { name: 'Secure bank authorization' })
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('heading', { name: 'Secure bank authorization' })).not.toBeInTheDocument()
+  })
+
+  it('12. closing and reopening the setup dialog never reuses a previous attempt\'s widget -- reopening starts at the institution picker', async () => {
+    vi.mocked(fetchProviderStatus).mockResolvedValue(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:ING-DiBa', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }])
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: 'https://auth.enablebanking.com/ais/auth-1', authorizationId: 'auth-1', origin: 'https://auth.enablebanking.com', sandbox: false })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^ING/ }))
+    await user.click(await screen.findByRole('button', { name: /ING-DiBa/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+    await screen.findByRole('heading', { name: 'Secure bank authorization' })
+
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    expect(screen.queryByRole('heading', { name: 'Secure bank authorization' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Choose your institution' })).toBeInTheDocument()
+  })
+
+  it('11. shows no credential-shaped input anywhere in the setup modal while the widget view is active', async () => {
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:ING-DiBa', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }])
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: 'https://auth.enablebanking.com/ais/auth-1', authorizationId: 'auth-1', origin: 'https://auth.enablebanking.com', sandbox: false })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^ING/ }))
+    await user.click(await screen.findByRole('button', { name: /ING-DiBa/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+    await screen.findByRole('heading', { name: 'Secure bank authorization' })
+
+    expect(document.querySelectorAll('.connections-setup-modal input')).toHaveLength(0)
+  })
+
+  it('15. the widget frame is a live region and the Cancel action stays a real, keyboard-reachable button', async () => {
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:ING-DiBa', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }])
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: 'https://auth.enablebanking.com/ais/auth-1', authorizationId: 'auth-1', origin: 'https://auth.enablebanking.com', sandbox: false })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^ING/ }))
+    await user.click(await screen.findByRole('button', { name: /ING-DiBa/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+    await screen.findByRole('heading', { name: 'Secure bank authorization' })
+
+    expect(document.querySelector('.connections-auth-flow-frame')).toHaveAttribute('aria-live', 'polite')
+    const cancelButton = screen.getByRole('button', { name: 'Cancel' })
+    expect(cancelButton.tagName).toBe('BUTTON')
+    cancelButton.focus()
+    expect(cancelButton).toHaveFocus()
+  })
+
+  describe('deterministic fixture states (acceptanceMode, never contacting the real widget script)', () => {
+    it('7. renders the loading shell via the enablebanking-auth-flow-loading fixture', () => {
+      renderConnections({ acceptanceMode: 'enablebanking-auth-flow-loading' })
+      expect(screen.getByRole('heading', { name: 'Secure bank authorization' })).toBeInTheDocument()
+      expect(screen.getByText('Preparing secure bank authorization…')).toBeInTheDocument()
+    })
+
+    it('8/10. renders the error fallback via the enablebanking-auth-flow-error fixture, and its fallback button redirects only to the validated redirectUrl from /start', () => {
+      const assignSpy = vi.fn()
+      const originalLocation = window.location
+      Object.defineProperty(window, 'location', { value: { ...originalLocation, assign: assignSpy }, writable: true })
+      try {
+        renderConnections({ acceptanceMode: 'enablebanking-auth-flow-error' })
+        expect(screen.getByText(/couldn.t load/)).toBeInTheDocument()
+        const fallbackButton = screen.getByRole('button', { name: 'Open secure provider page' })
+        fireEvent.click(fallbackButton)
+        expect(assignSpy).toHaveBeenCalledWith('https://tilisy-sandbox.enablebanking.com/ais/00000000-0000-0000-0000-000000000000')
+        // Never automatically redirected without this explicit user action.
+        expect(assignSpy).toHaveBeenCalledTimes(1)
+      } finally {
+        Object.defineProperty(window, 'location', { value: originalLocation, writable: true })
+      }
+    })
+
+    it('the error fixture also offers Try again, without ever calling the fallback redirect on its own', () => {
+      renderConnections({ acceptanceMode: 'enablebanking-auth-flow-error' })
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+    })
+
+    // Regression coverage (correctness review, 2026-08-22): the Back-arrow
+    // collapse handler used to clear embeddedAuthFlow but not
+    // authFlowFixtureStatus, so backing out of a fixture-error widget view
+    // and then starting a REAL Enable Banking attempt right after left the
+    // real widget permanently short-circuited into the stale fixture's
+    // 'error' status -- it would never even attempt to load. Only reachable
+    // in a VITE_ACCEPTANCE_FIXTURES=true build, but a genuine state leak.
+    it('backing out of the error fixture and then starting a real attempt does not leave the real widget stuck in the fixture\'s error status', async () => {
+      const user = userEvent.setup()
+      vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: 'https://auth.enablebanking.com/ais/real-auth', authorizationId: 'real-auth', origin: 'https://auth.enablebanking.com', sandbox: false })
+      renderConnections({ acceptanceMode: 'enablebanking-auth-flow-error' })
+      expect(screen.getByText(/couldn.t load/)).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: 'Back' }))
+      expect(screen.queryByText(/couldn.t load/)).not.toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+
+      await screen.findByRole('heading', { name: 'Secure bank authorization' })
+      // Must show the real widget's own initial loading state, never the
+      // stale fixture's error state carried over from before Back.
+      expect(screen.getByText('Preparing secure bank authorization…')).toBeInTheDocument()
+      expect(screen.queryByText(/couldn.t load/)).not.toBeInTheDocument()
+    })
   })
 })
 

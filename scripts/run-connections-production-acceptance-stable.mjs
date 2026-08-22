@@ -23,6 +23,8 @@ const CASES = [
   ['attention', 'Connection needs attention'],
   ['manual', 'Add manual account'],
   ['statement-preview', 'finance_statement_march.csv'],
+  ['enablebanking-auth-flow-loading', 'Secure bank authorization'],
+  ['enablebanking-auth-flow-error', 'Secure bank authorization'],
 ]
 const FINAL_ROW_MODES = new Set(['populated', 'sync-selection', 'attention', 'statement-preview'])
 
@@ -84,7 +86,7 @@ try {
       )
       .replace(
         '  assert.equal(assertions.mobileNavigationUnobscured, true)',
-        "  const modalMode = ['institution-selector', 'institution-search', 'provider-unavailable', 'paypal-unconfigured', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'manual'].includes(mode)\n  if (width <= 768 && modalMode) {\n    assert.equal(assertions.mobileNavigationUnobscured, false)\n    assert.equal(assertions.mobileNavigationInert, true)\n  } else {\n    assert.equal(assertions.mobileNavigationUnobscured, true)\n  }",
+        "  const modalMode = ['institution-selector', 'institution-search', 'provider-unavailable', 'paypal-unconfigured', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'manual', 'enablebanking-auth-flow-loading', 'enablebanking-auth-flow-error'].includes(mode)\n  if (width <= 768 && modalMode) {\n    assert.equal(assertions.mobileNavigationUnobscured, false)\n    assert.equal(assertions.mobileNavigationInert, true)\n  } else {\n    assert.equal(assertions.mobileNavigationUnobscured, true)\n  }",
       )
       .replace(
         '  assert.deepEqual(assertions.viewport, { width, height })',

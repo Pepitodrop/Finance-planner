@@ -486,6 +486,79 @@ function canonicalCallbackUrl(appOrigin) {
   return new URL('/api/connectors/callback', appOrigin)
 }
 
+// Widget descriptor support for Enable Banking's official Auth Flow widget
+// (<enablebanking-auth-flow>, https://enablebanking.com/docs/api/widgets/#auth-flow),
+// added 2026-08-22 so the pre-ASPSP-authorization step can render inside
+// Finance Planner's own modal instead of an abrupt full-page redirect --
+// Enable Banking explicitly does not support running the flow in a
+// cross-origin iframe, so the official custom element is the only supported
+// embedding mechanism. The widget needs two values straight from Enable
+// Banking's own POST /auth response: `authorization_id` and the ORIGIN of
+// the `url` it returned (never the full URL -- path/query are not part of
+// the widget's documented `origin` attribute and must never reach the DOM).
+//
+// Unlike ENABLE_BANKING_LOGO_HOSTNAMES above (a single fixed CDN hostname
+// confirmed against the API reference), the authorization URL can
+// legitimately live on more than one Enable Banking-owned host: production
+// widget traffic uses `auth.enablebanking.com`, but a given sandbox/live run
+// may return a different Enable Banking-owned host (confirmed live
+// 2026-08-21/22: the real sandbox response pointed at
+// `tilisy-sandbox.enablebanking.com`). This uses an explicit suffix-based
+// ownership policy -- exactly `enablebanking.com` or any `*.enablebanking.com`
+// subdomain -- rather than either a single fixed hostname (too narrow, breaks
+// on the very sandbox host this was built against) or "any HTTPS host the
+// provider claims" (too broad, defeats the point of an allowlist).
+const ENABLE_BANKING_WIDGET_HOSTNAME_SUFFIX = '.enablebanking.com'
+const ENABLE_BANKING_WIDGET_HOSTNAME_EXACT = 'enablebanking.com'
+function isEnableBankingOwnedHost(hostname) {
+  return hostname === ENABLE_BANKING_WIDGET_HOSTNAME_EXACT || hostname.endsWith(ENABLE_BANKING_WIDGET_HOSTNAME_SUFFIX)
+}
+
+// Returns just the bare origin (scheme + host [+ port]), or null for
+// anything that doesn't pass -- callers must treat null as "no widget
+// metadata available" and fall back to the plain redirect, never throw and
+// never forward a partially-validated value. Deliberately mirrors
+// validateEnableBankingLogoUrl()'s fail-closed shape (HTTPS-only, reject
+// embedded userinfo) plus the wider hostname policy above.
+function validateEnableBankingAuthOrigin(candidateUrl) {
+  if (!candidateUrl || typeof candidateUrl !== 'string') return null
+  let parsed
+  try { parsed = new URL(candidateUrl) } catch { return null }
+  if (parsed.protocol !== 'https:') return null
+  if (parsed.username || parsed.password) return null
+  if (!isEnableBankingOwnedHost(parsed.hostname)) return null
+  return parsed.origin
+}
+
+// Bounded, safe-charset check for the opaque authorization_id Enable Banking
+// returns -- it is embedded directly into a DOM attribute by the frontend
+// widget wrapper, so this is the server-side gate against ever forwarding an
+// unbounded or unexpectedly-shaped upstream value, not just a UUID-format
+// nicety. Real Enable Banking authorization ids are UUIDs; this pattern is
+// intentionally a little more permissive than a strict UUID regex so a
+// provider-side format change doesn't immediately fail closed, while still
+// rejecting anything absurd (empty, huge, containing markup-relevant
+// characters).
+const AUTHORIZATION_ID_PATTERN = /^[A-Za-z0-9._-]{1,200}$/
+function validEnableBankingAuthorizationId(candidate) {
+  return typeof candidate === 'string' && AUTHORIZATION_ID_PATTERN.test(candidate) ? candidate : null
+}
+
+// Sandbox is a property of which Enable Banking APPLICATION issued the
+// authorization (sandbox vs. production application credentials), which
+// Finance Planner has no direct API signal for -- so this prefers an
+// explicit operator setting and only falls back to inference, and only ever
+// infers `true` from a positive signal (a hostname that says so), never
+// defaults a bare/unset config to sandbox. A future production deployment
+// that simply never sets ENABLE_BANKING_SANDBOX therefore stays `false`
+// unless Enable Banking's own response host happens to say otherwise.
+function isEnableBankingSandbox(env, authOriginHostname) {
+  const configured = String(env.ENABLE_BANKING_SANDBOX || '').trim().toLowerCase()
+  if (configured === 'true') return true
+  if (configured === 'false') return false
+  return authOriginHostname.includes('sandbox')
+}
+
 function sanitizeGocardlessInstitution(institution) {
   return {
     id: String(institution.id),
@@ -908,8 +981,29 @@ class EnableBankingProvider extends OpenBankingProvider {
     }, policy)
     if (!response?.url || !String(response.url).startsWith('https://')) throw new Error('Enable Banking did not return a secure authorization URL.')
 
+    // Safe, minimal descriptor for the frontend's official Auth Flow widget
+    // (see the validators above) -- built ONLY from this trusted provider
+    // response, never from anything client-supplied. `authFlow` is null
+    // (never a partially-filled object) whenever either value fails
+    // validation, so the frontend's fallback-to-plain-redirect path is the
+    // only option in that case rather than being handed a broken widget
+    // descriptor. Deliberately excludes signed `state`, any JWT/PEM/API
+    // credential, and the `credential` object below -- those never leave
+    // the server.
+    const authOrigin = validateEnableBankingAuthOrigin(response.url)
+    const authorizationId = validEnableBankingAuthorizationId(response.authorization_id)
+    const authFlow = authOrigin && authorizationId
+      ? {
+          provider: 'enablebanking',
+          authorizationId,
+          origin: authOrigin,
+          sandbox: isEnableBankingSandbox(this.env, new URL(authOrigin).hostname),
+        }
+      : null
+
     return {
       redirectUrl: response.url,
+      authFlow,
       credential: {
         // Round-trips through server.js's connection() helper as
         // stored.institutionId, exactly like GoCardlessProvider's

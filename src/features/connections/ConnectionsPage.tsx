@@ -40,10 +40,12 @@ import {
   type ConnectorConnection,
   type ConnectorProvider,
   type ConnectorStartContext,
+  type ConnectorStartResult,
   type ProviderDescriptor,
   type ProviderInstitution,
   type SyncPreview,
 } from '../../connectors'
+import { EnableBankingAuthFlow, type EnableBankingAuthFlowStatus } from './EnableBankingAuthFlow'
 import { institutionLettermark, institutionLogoUrl } from '../../institution-logos'
 import { normalizeManualCreditCard } from '../../manualCreditCard'
 import { applyStatementImport, buildStatementPreview, parseStatement, type StatementPreview } from '../../statementImport'
@@ -151,6 +153,16 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   const [setupOpen, setSetupOpen] = useState(false)
   const [setupStep, setSetupStep] = useState<SetupStep>(1)
   const [setupError, setSetupError] = useState('')
+  // Set only when startProvider() got back an 'embedded-auth' result --
+  // Step 3 renders the official Enable Banking Auth Flow widget instead of
+  // navigating away. Cleared everywhere a fresh/different attempt begins
+  // (openSetup, closeSetup, and the Step 3 back button) so a stale
+  // authorizationId from a previous bank/attempt can never be reused.
+  const [embeddedAuthFlow, setEmbeddedAuthFlow] = useState<Extract<ConnectorStartResult, { mode: 'embedded-auth' }> | null>(null)
+  // Acceptance-fixture-only override forwarded to EnableBankingAuthFlow's
+  // fixtureStatus prop -- see the acceptanceMode effect below. Always null
+  // outside VITE_ACCEPTANCE_FIXTURES=true fixture wiring.
+  const [authFlowFixtureStatus, setAuthFlowFixtureStatus] = useState<EnableBankingAuthFlowStatus | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [category, setCategory] = useState<InstitutionCategory>('popular')
   const [selectedInstitutionId, setSelectedInstitutionId] = useState<string | null>(null)
@@ -214,7 +226,19 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     if (acceptanceMode === 'manual') { setManualOpen(true); return }
     if (acceptanceMode === 'statement-preview') { setStatementFileName('finance_statement_march.csv'); setStatementPreview(ACCEPTANCE_STATEMENT_PREVIEW); setScreen('statement-preview'); return }
     if (acceptanceMode === 'provider-unavailable') { setConnections(ACCEPTANCE_CONNECTIONS); setProviderStatus({ status: 'ready', providers: ACCEPTANCE_PROVIDER_STATUS_UNAVAILABLE }); setSetupStep(1); setCategory('popular'); setSearchTerm(''); setSetupOpen(true); return }
-    if (acceptanceMode === 'paypal-unconfigured') { setSelectedInstitutionId('paypal'); setProviderStatus({ status: 'ready', providers: ACCEPTANCE_PROVIDER_STATUS_PAYPAL_UNCONFIGURED }); setSetupStep(3); setSetupOpen(true) }
+    if (acceptanceMode === 'paypal-unconfigured') { setSelectedInstitutionId('paypal'); setProviderStatus({ status: 'ready', providers: ACCEPTANCE_PROVIDER_STATUS_PAYPAL_UNCONFIGURED }); setSetupStep(3); setSetupOpen(true); return }
+    // Deterministic Auth Flow widget shell states -- fixtureStatus on
+    // EnableBankingAuthFlow means neither of these ever contacts the real
+    // auth.enablebanking.com script or uses a real authorization id.
+    if (acceptanceMode === 'enablebanking-auth-flow-loading' || acceptanceMode === 'enablebanking-auth-flow-error') {
+      setSelectedInstitutionId('ing')
+      setResolvingProvider('enablebanking')
+      setResolvedProviderInstitution({ id: 'AACSDE33XXX_DE', name: 'Aachener Bank' })
+      setEmbeddedAuthFlow({ mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: 'https://tilisy-sandbox.enablebanking.com/ais/00000000-0000-0000-0000-000000000000', authorizationId: '00000000-0000-0000-0000-000000000000', origin: 'https://tilisy-sandbox.enablebanking.com', sandbox: true })
+      setAuthFlowFixtureStatus(acceptanceMode === 'enablebanking-auth-flow-loading' ? 'loading' : 'error')
+      setSetupStep(3)
+      setSetupOpen(true)
+    }
   }, [acceptanceMode])
 
   // Provider status gates whether an external (gocardless/paypal/finapi)
@@ -423,7 +447,16 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setBusy(true)
     onError('')
     try {
-      await startConnector(provider, context)
+      const result = await startConnector(provider, context)
+      if (result.mode === 'embedded-auth') {
+        // Enable Banking only: stay on Step 3 and render the official Auth
+        // Flow widget instead of leaving Finance Planner. Every other
+        // provider's 'redirect' result means the browser is already
+        // navigating away by the time this resolves, so busy correctly
+        // stays true for it (there's nothing left to interact with here).
+        setEmbeddedAuthFlow(result)
+        setBusy(false)
+      }
     } catch (reason) {
       onError(reason instanceof Error ? reason.message : 'The connection could not be started.')
       setBusy(false)
@@ -495,9 +528,13 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setLiveInstitutionsError('')
     setLiveInstitutionsLoading(false)
     setSetupError('')
+    // A stale authorizationId from a previous attempt (this bank or a
+    // different one) must never be reused for a fresh setup session.
+    setEmbeddedAuthFlow(null)
+    setAuthFlowFixtureStatus(null)
     setSetupOpen(true)
   }
-  const closeSetup = useCallback(() => { if (!busy) { setSetupOpen(false); setSetupError('') } }, [busy])
+  const closeSetup = useCallback(() => { if (!busy) { setSetupOpen(false); setSetupError(''); setEmbeddedAuthFlow(null); setAuthFlowFixtureStatus(null) } }, [busy])
 
   const openManualAccount = (hintedType: ConnectorAccountType = 'checking', hintedName = '') => {
     setManualName(hintedName)
@@ -532,6 +569,10 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setResolvedProviderInstitution(match)
     setSetupStep(nextSetupStepAfterInstitution(resolvingInstitution))
     setResolvingInstitution(null)
+    // A different bank than whatever a previous attempt's widget was showing
+    // -- never let a stale authorizationId survive a re-resolution.
+    setEmbeddedAuthFlow(null)
+    setAuthFlowFixtureStatus(null)
   }
 
   const chooseInstitution = (id: string) => {
@@ -539,6 +580,8 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     if (!institution) return
     if (institutionAvailability(institution, providerStatus).unavailable) return
     setSetupError('')
+    setEmbeddedAuthFlow(null)
+    setAuthFlowFixtureStatus(null)
     if (institution.provider === 'manual') {
       openManualAccount(defaultAccountTypeForInstitution(institution), institution.name === 'Virtuelles / manuelles Konto' ? '' : institution.name)
       return
@@ -805,23 +848,43 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
             onChoose={(next) => { setAccountType(next); setSetupStep(3) }}
           />}
 
-          {setupStep === 3 && selectedInstitution && <RedirectConfirmationStep
-            institution={selectedInstitution}
-            resolvedInstitutionName={resolvedProviderInstitution?.name}
-            resolvedInstitutionId={resolvedProviderInstitution?.id}
-            resolvedProvider={effectiveProvider()}
-            busy={busy}
-            error={setupError}
-            providerDescriptor={(() => { const provider = effectiveProvider(); return provider ? providerDescriptorFor(provider, providerStatus) : undefined })()}
-            onCancel={closeSetup}
-            onConfirm={() => { const provider = effectiveProvider(); if (provider) void startProvider(provider, connectorContext(), setSetupError) }}
-          />}
+          {setupStep === 3 && selectedInstitution && (embeddedAuthFlow
+            ? <EnableBankingAuthorizationStep
+                institution={selectedInstitution}
+                resolvedInstitutionName={resolvedProviderInstitution?.name}
+                resolvedInstitutionId={resolvedProviderInstitution?.id}
+                authFlow={embeddedAuthFlow}
+                fixtureStatus={authFlowFixtureStatus}
+                onCancel={closeSetup}
+              />
+            : <RedirectConfirmationStep
+                institution={selectedInstitution}
+                resolvedInstitutionName={resolvedProviderInstitution?.name}
+                resolvedInstitutionId={resolvedProviderInstitution?.id}
+                resolvedProvider={effectiveProvider()}
+                busy={busy}
+                error={setupError}
+                providerDescriptor={(() => { const provider = effectiveProvider(); return provider ? providerDescriptorFor(provider, providerStatus) : undefined })()}
+                onCancel={closeSetup}
+                onConfirm={() => { const provider = effectiveProvider(); if (provider) void startProvider(provider, connectorContext(), setSetupError) }}
+              />)}
         </div>
 
         <div className="connections-setup-header">
           <button type="button" className="connections-icon-button" aria-label="Back" disabled={(setupStep === 1 && !resolvingInstitution) || busy} onClick={() => {
             setSetupError('')
             if (setupStep === 1 && resolvingInstitution) { cancelInstitutionResolution(); return }
+            // On the widget sub-view, Back collapses one level (back to the
+            // plain confirmation view, same Step 3) rather than leaving
+            // Step 3 entirely -- an in-flight pending setup and its
+            // authorizationId are left alone either way (see the widget
+            // lifecycle note on EnableBankingAuthorizationStep/embeddedAuthFlow).
+            // Both embeddedAuthFlow AND authFlowFixtureStatus must clear here,
+            // not just the former: found by review (2026-08-22) that clearing
+            // only embeddedAuthFlow let a stale acceptance-fixture status
+            // survive into a real widget attempt started right afterward,
+            // permanently short-circuiting it into a fake error/loading state.
+            if (setupStep === 3 && embeddedAuthFlow) { setEmbeddedAuthFlow(null); setAuthFlowFixtureStatus(null); return }
             setSetupStep(setupStep === 3 ? previousSetupStepFromConfirmation(selectedInstitution) : 1)
           }}><ArrowLeft size={18}/></button>
           <p className="connections-step-label">Step {setupStep} of 3</p>
@@ -1089,6 +1152,67 @@ function AccountTypeStep({ institution, resolvedInstitutionName, accountType, on
     </div>
     <p className="connections-footnote"><Info size={15}/> Available types depend on the institution.</p>
   </>
+}
+
+interface EnableBankingAuthorizationStepProps {
+  institution: { id: string; name: string; provider: string; kind: string }
+  resolvedInstitutionName?: string
+  resolvedInstitutionId?: string
+  authFlow: Extract<ConnectorStartResult, { mode: 'embedded-auth' }>
+  // Acceptance/browser-QA fixture escape hatch, forwarded straight to
+  // EnableBankingAuthFlow -- see that component's own fixtureStatus doc.
+  fixtureStatus?: EnableBankingAuthFlowStatus | null
+  onCancel: () => void
+}
+
+// Renders once startProvider() has already confirmed Enable Banking's
+// official Auth Flow widget can be embedded (see ConnectionsPage's
+// embeddedAuthFlow state) -- this replaces RedirectConfirmationStep's
+// post-confirm view for Enable Banking only, on the same Step 3, so the
+// modal transitions into a secure-authorization state rather than
+// disappearing behind a full-page redirect. GoCardless/PayPal never reach
+// this component; they still redirect exactly as before.
+function EnableBankingAuthorizationStep({ institution, resolvedInstitutionName, resolvedInstitutionId, authFlow, fixtureStatus, onCancel }: EnableBankingAuthorizationStepProps) {
+  const [status, setStatus] = useState<EnableBankingAuthFlowStatus>(fixtureStatus ?? 'loading')
+  // Bumped on "Try again" to force EnableBankingAuthFlow (keyed on this) to
+  // unmount and remount a fresh widget element, rather than trying to
+  // recover a possibly-broken existing one in place.
+  const [attempt, setAttempt] = useState(0)
+
+  return <div className="connections-confirmation connections-auth-flow-step">
+    <div className="connections-institution-banner">
+      <span className="connections-row-icon"><InstitutionIcon key={resolvedInstitutionId ?? institution.id} institution={institution}/></span>
+      <span className="connections-row-body"><strong>{institution.name}</strong>{resolvedInstitutionName && resolvedInstitutionName !== institution.name && <small>{resolvedInstitutionName}</small>}</span>
+    </div>
+    <h2 id="connections-setup-title" className="connections-setup-title">Secure bank authorization</h2>
+    <p className="connections-setup-subtitle">Finance Planner never receives your online-banking credentials.</p>
+
+    <div className="connections-auth-flow-frame" aria-live="polite">
+      {status === 'loading' && <p className="connections-auth-flow-loading">Preparing secure bank authorization…</p>}
+      {status === 'error'
+        ? <div className="connections-auth-flow-error" role="alert">
+            <AlertTriangle size={18}/>
+            <p>The secure authorization widget couldn&apos;t load. You can still continue on the provider&apos;s own page.</p>
+            <div className="connections-modal-actions">
+              <button type="button" className="secondary" onClick={() => { setStatus('loading'); setAttempt((count) => count + 1) }}>Try again</button>
+              <button type="button" className="primary" onClick={() => window.location.assign(authFlow.redirectUrl)}>Open secure provider page</button>
+            </div>
+          </div>
+        : <EnableBankingAuthFlow
+            key={attempt}
+            authorizationId={authFlow.authorizationId}
+            origin={authFlow.origin}
+            sandbox={authFlow.sandbox}
+            onStatusChange={setStatus}
+            fixtureStatus={fixtureStatus ?? undefined}
+          />}
+    </div>
+
+    <p className="connections-footnote connections-auth-flow-footer"><ShieldCheck size={14}/> Protected by your bank and Enable Banking.</p>
+    <div className="connections-modal-actions">
+      <button type="button" className="secondary" onClick={onCancel}>Cancel</button>
+    </div>
+  </div>
 }
 
 interface RedirectConfirmationStepProps {

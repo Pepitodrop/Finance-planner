@@ -15,6 +15,8 @@ const CONNECTIONS_ACCEPTANCE_MODES: ConnectionsAcceptanceMode[] = [
   'attention',
   'manual',
   'statement-preview',
+  'enablebanking-auth-flow-loading',
+  'enablebanking-auth-flow-error',
 ]
 
 const ACCEPTANCE_MODE_STORAGE_KEY = 'finance-planner-connections-acceptance-mode'

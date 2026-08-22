@@ -186,6 +186,16 @@
 .connections-scope-status { display: inline-flex; align-items: center; gap: .25rem; color: var(--fp-color-accent); font-size: var(--fp-font-size-metadata); }
 .connections-scope-footnote { margin: 0; color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); }
 
+/* Step 3 (Enable Banking only): embedded Auth Flow widget sub-view */
+.connections-auth-flow-step { text-align: left; }
+.connections-auth-flow-frame { display: grid; place-items: center; min-height: 22rem; padding: var(--fp-space-3); border: var(--fp-border); border-radius: var(--fp-radius-panel); background: var(--fp-color-surface); overflow: hidden; }
+.connections-auth-flow-widget { width: 100%; min-height: 20rem; }
+.connections-auth-flow-widget enablebanking-auth-flow { display: block; width: 100%; }
+.connections-auth-flow-loading { margin: 0; color: var(--fp-color-text-secondary); text-align: center; }
+.connections-auth-flow-error { display: grid; justify-items: center; gap: var(--fp-space-3); padding: var(--fp-space-4); color: var(--fp-color-text-secondary); text-align: center; }
+.connections-auth-flow-error p { margin: 0; }
+.connections-auth-flow-footer { display: inline-flex; align-items: center; gap: var(--fp-space-2); color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); }
+
 /* Shared modal actions */
 .connections-modal-actions { display: grid; gap: var(--fp-space-2); }
 .connections-modal-actions--page { max-width: 30rem; }

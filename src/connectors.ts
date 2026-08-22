@@ -39,6 +39,21 @@ export interface ExternalTransaction { externalId: string; externalAccountId: st
 export interface SyncPayload { connection: ConnectorConnection; accounts: ExternalAccount[]; transactions: ExternalTransaction[] }
 export interface SyncPreview { accountsToCreate: Account[]; transactionsToImport: Transaction[]; duplicateCount: number; pendingCount: number; quality: BankImportQuality }
 
+// startConnector()'s result. Every provider except Enable Banking always
+// gets 'redirect' (the browser is already navigating away by the time this
+// resolves -- see startConnector() below, unchanged behavior). Enable
+// Banking gets 'embedded-auth' only when the server's /start response
+// included a validated authFlow descriptor (see server/src/providers.js's
+// validateEnableBankingAuthOrigin()/validEnableBankingAuthorizationId()) --
+// the caller must keep the setup modal open and render the official Auth
+// Flow widget instead of navigating, and `redirectUrl` is kept on this
+// result specifically so the widget's own error-fallback UI has an
+// already-validated plain-redirect URL to fall back to without a second
+// network round trip.
+export type ConnectorStartResult =
+  | { mode: 'redirect' }
+  | { mode: 'embedded-auth'; provider: 'enablebanking'; redirectUrl: string; authorizationId: string; origin: string; sandbox: boolean }
+
 const REQUEST_TIMEOUT_MS = 15_000
 const RETRY_DELAYS_MS = [350, 900]
 const MAX_RETRY_AFTER_MS = 5_000
@@ -168,14 +183,29 @@ export async function fetchProviderInstitutions(provider: ConnectorProvider, cou
   if (!Array.isArray(result.institutions)) throw new Error('The bank directory response was invalid.')
   return result.institutions
 }
-export async function startConnector(provider: ConnectorProvider, context: ConnectorStartContext = {}): Promise<void> {
-  const result = await requestJson<{ redirectUrl?: string }>(`/api/connectors/${provider}/start`, {
+export async function startConnector(provider: ConnectorProvider, context: ConnectorStartContext = {}): Promise<ConnectorStartResult> {
+  const result = await requestJson<{ redirectUrl?: string; authFlow?: { provider?: string; authorizationId?: string; origin?: string; sandbox?: boolean } }>(`/api/connectors/${provider}/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ redirectUri: connectorReturnUrl(), country: 'DE', institutionId: context.institutionId, institutionName: context.institutionName, accountType: context.accountType }),
   }, { idempotent: true })
   if (!result.redirectUrl || !result.redirectUrl.startsWith('https://')) throw new Error('The connector did not return a secure redirect address.')
+  const authFlow = result.authFlow
+  // Every field is re-validated here, client-side, even though the server
+  // already validated them -- this function's contract must never hand the
+  // widget a value it can't itself vouch for, regardless of what the network
+  // layer in between claims the response shape was.
+  if (
+    provider === 'enablebanking' &&
+    authFlow &&
+    authFlow.provider === 'enablebanking' &&
+    typeof authFlow.authorizationId === 'string' && authFlow.authorizationId.length > 0 &&
+    typeof authFlow.origin === 'string' && authFlow.origin.startsWith('https://')
+  ) {
+    return { mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: result.redirectUrl, authorizationId: authFlow.authorizationId, origin: authFlow.origin, sandbox: Boolean(authFlow.sandbox) }
+  }
   window.location.assign(result.redirectUrl)
+  return { mode: 'redirect' }
 }
 export async function synchronizeConnections(): Promise<SyncPayload[]> { if (activeSynchronization) return activeSynchronization; const operation = (async () => { const result = await requestJson<{ connections?: SyncPayload[] }>('/api/connectors/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } }, { retry: true, idempotent: true }); if (!Array.isArray(result.connections)) throw new Error('The sync service returned an invalid result.'); return result.connections })(); activeSynchronization = operation; try { return await operation } finally { if (activeSynchronization === operation) activeSynchronization = null } }
 export type DisconnectResult = { disconnected: boolean; providerRevoked: boolean; providerRevokeReason: 'confirmed' | 'not_applicable' | 'not_supported' | 'provider_error' }

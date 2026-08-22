@@ -23,9 +23,10 @@ status: unverified
 - **Reconnect (fixed 2026-08-20):** `start()`'s returned credential was missing `institutionId`, so a stored connection had nothing to resubmit and Reconnect was unconditionally broken for every Enable Banking connection from the moment this provider was added. Also found by the same independent review pass; fixed and covered by a "Reconnect round-trip" regression test.
 - **Disconnect:** `DELETE /sessions/{id}`, idempotent on 404, never a false-positive `revoked: true` — same contract as [[GoCardless]]'s `disconnect()`.
 - **Test coverage:** `server/test/enable-banking-jwt.test.js`, `server/test/enable-banking-directory.test.js`, `server/test/enable-banking-callback.test.js`, `server/test/enable-banking-sync.test.js`, `server/test/enable-banking-disconnect.test.js`, plus `server/test/open-banking-server-boundary.test.js`/`postgres-store.test.js`/`crypto-store.test.js` for the shared two-phase callback contract, and `src/features/connections/connectionsModel.test.ts`/`ConnectionsPage.test.tsx` for the frontend preference/fallback resolution.
-- **Runtime verified (updated 2026-08-21, second live pass):** partial, further than before. PR #144 was temporarily deployed to production (`finance.luisbenedikt.de`) against the real configured Enable Banking sandbox application, twice in sequence as fixes landed.
+- **Runtime verified (updated 2026-08-22, third live pass):** partial, further than before — `POST /auth` is now accepted and a real bank authentication page has been reached. PR #144 was temporarily deployed to production (`finance.luisbenedikt.de`) against the real configured Enable Banking sandbox application, three times in sequence as fixes landed.
+- **Official Auth Flow widget:** `<enablebanking-auth-flow>` is now embedded in the Connections modal for the pre-auth step (IMPLEMENTED / LOCALLY VERIFIED only, not yet redeployed) — see [[Enable Banking Auth Flow Widget]] for the full architecture, security review, and CSP change.
 
-### Live verification matrix (as of the second live pass)
+### Live verification matrix (as of the third live pass)
 
 | Capability | Status |
 |---|---|
@@ -37,16 +38,25 @@ status: unverified
 | Real bank logos | **LIVE VERIFIED = YES** (screenshot showed real cooperative-bank logos) |
 | Logo proxy (`GET /api/connectors/enablebanking/logo`) | **LIVE VERIFIED = YES** (HTTP 200 observed in server logs) |
 | `POST /auth` request reaches Enable Banking | **LIVE VERIFIED = YES** (a real, structured provider response was received) |
-| `POST /auth` accepted | **NO** |
-| Current real provider blocker | **`REDIRECT_URI_NOT_ALLOWED`** |
+| `POST /auth` accepted | **LIVE VERIFIED = YES** (third live pass, 2026-08-22 — see below) |
+| Enable Banking pre-auth (authorization) page reached | **LIVE VERIFIED = YES** — `tilisy-sandbox.enablebanking.com/ais/` showing "Authentication is initiated by Finance Planner" |
+| Bank authentication page reached | **LIVE VERIFIED = YES** — real sandbox authentication-method selector (VR NetKey, PIN fields) for Volksbank Köln Bonn |
+| Authorization successfully completed | **NO** — a credential attempt against Volksbank Köln Bonn returned "Invalid credentials" from the external bank sandbox, not a Finance Planner defect (see [[Enable Banking Auth Flow Widget]] for the recommended next test bank) |
 | Consent | NO |
 | Callback | NO |
 | `POST /sessions` | NO |
 | Balances | NO |
 | Transactions | NO |
 | Disconnect | NO |
+| Official Auth Flow widget (`<enablebanking-auth-flow>`) | **IMPLEMENTED / LOCALLY VERIFIED only** — see [[Enable Banking Auth Flow Widget]]. Not yet exercised live: the third live pass above reached the pre-auth/bank-auth pages via Enable Banking's own plain hosted page (pre-widget code), not yet through the embedded widget. |
 
-Also live-observed and fixed this pass: **Finance Planner's own rate limiter** could exhaust the sensitive bucket on ordinary logo traffic alone and starve `POST /start` for the same client — see [[Rate Limiting]]. After waiting out the one-minute window, `/start` succeeded in reaching Enable Banking, confirming this was a genuinely separate problem from the provider-side redirect_uri rejection below, not the same root cause wearing two symptoms.
+Also live-observed and fixed on the second pass: **Finance Planner's own rate limiter** could exhaust the sensitive bucket on ordinary logo traffic alone and starve `POST /start` for the same client — see [[Rate Limiting]]. After waiting out the one-minute window, `/start` succeeded in reaching Enable Banking, confirming this was a genuinely separate problem from the provider-side redirect_uri rejection below, not the same root cause wearing two symptoms.
+
+## Third live pass (2026-08-22): `POST /auth` accepted, real sandbox authentication reached
+
+After the redirect_uri and rate-limit fixes above were redeployed, `POST /auth` was **accepted** by Enable Banking (no more `REDIRECT_URI_NOT_ALLOWED`) — confirming the canonical callback URI fix in [[Provider Callback Binding]] works far enough for the real provider. The browser reached `tilisy-sandbox.enablebanking.com/ais/` ("Authentication is initiated by Finance Planner"), then progressed to a real bank authentication-method selector (VR NetKey, PIN) for Volksbank Köln Bonn. A credential attempt was rejected by the bank sandbox itself ("Invalid credentials") — this is Enable Banking/bank sandbox UI behavior, not a Finance Planner code path, and is not evidence of any defect here.
+
+This pass is also what motivated embedding the **official Auth Flow widget** (see [[Enable Banking Auth Flow Widget]]): the pre-auth step above currently happens on a generic Enable Banking-hosted page with an abrupt visual transition away from Finance Planner; the widget keeps that step inside the app's own modal instead.
 
 - **Two sequential `POST /auth` bugs found and fixed this pass (2026-08-21) — do not conflate them:**
   1. **`maximum_consent_validity` unit bug** (found on the *first* live pass): `start()` compared this ASPSP field — documented as an integer number of **seconds** — directly against a day count with no conversion, so the per-ASPSP consent-duration clamp never fired. Fixed (milliseconds throughout). This fix is *why* the second live pass's request reached Enable Banking and got a real, structured response at all, instead of the earlier generic "Internal server error" — but it was **not confirmed via production logs on the first pass** (none were accessible), only via code + current official docs. Whether it was *also* independently rejecting the first live attempt (in addition to, or instead of, a redirect_uri problem Enable Banking may validate earlier in its own pipeline) cannot be fully disentangled from the evidence available — both are real, confirmed bugs regardless of which one the very first "Internal server error" was specifically reporting.
@@ -61,4 +71,4 @@ Also live-observed and fixed this pass: **Finance Planner's own rate limiter** c
 
 - **Institution-discovery UX (fixed 2026-08-21):** the picker's "Volksbank / Raiffeisenbank" and "Sparkasse" tiles used to prefill the live branch-search box with that literal umbrella label, which never matches a real ASPSP name ("Volksbank Demmin", "Raiffeisenbank Grävenwiesbach", ...) — a real, reported UX defect, not a security one (the anti-guessing `institutionId` contract above was never affected). Fixed in `src/institutions.ts`/`connectionsModel.ts`/`ConnectionsPage.tsx` — see [[Bank Family Directory Resolution]] for the full mechanism and verification state.
 
-Related: [[Providers Index]] · [[Bank Connections]] · [[Bank Connection Flow]] · [[Provider Callback Binding]] · [[Provider Institution Selection Contract]] · [[GoCardless]] · [[Banking Core Module]] · [[Provider Status]] · [[Bank Family Directory Resolution]] · [[Institution Logo Proxy]]
+Related: [[Providers Index]] · [[Bank Connections]] · [[Bank Connection Flow]] · [[Provider Callback Binding]] · [[Provider Institution Selection Contract]] · [[GoCardless]] · [[Banking Core Module]] · [[Provider Status]] · [[Bank Family Directory Resolution]] · [[Institution Logo Proxy]] · [[Enable Banking Auth Flow Widget]]

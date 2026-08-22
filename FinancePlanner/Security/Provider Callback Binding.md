@@ -70,4 +70,8 @@ Found during the independent `/code-review` pass on PR #142, auditing callback r
 
 Deliberately not fixed here — needs either an optimistic-concurrency version column on `connector_connections` or a disconnect-tombstone `finalizeConnection()` checks before writing, neither of which this persistence layer has today. See [[Known Issues and Limitations]] and the TODOS.md "Connections" section.
 
-Related: [[Security Index]] · [[OAuth State and Nonce]] · [[Bank Connection Flow]] · [[Provider Status]] · [[Provider Institution Selection Contract]] · [[Enable Banking]] · [[Known Issues and Limitations]] · [[Rate Limiting]] · [[Institution Logo Proxy]]
+## Note (2026-08-22): the Auth Flow widget is a frontend-only addition on top of this
+
+[[Enable Banking Auth Flow Widget]] embeds Enable Banking's official pre-authorization widget in the Connections modal, but changes nothing documented in this note — the canonical callback URI, signed state, nonce/replay protection, and provider-derived-from-verified-state design above are all still exactly what the widget's authorization ultimately resolves through. The widget only replaces what the browser displays before that callback lands.
+
+Related: [[Security Index]] · [[OAuth State and Nonce]] · [[Bank Connection Flow]] · [[Provider Status]] · [[Provider Institution Selection Contract]] · [[Enable Banking]] · [[Known Issues and Limitations]] · [[Rate Limiting]] · [[Institution Logo Proxy]] · [[Enable Banking Auth Flow Widget]]

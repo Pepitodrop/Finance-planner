@@ -239,7 +239,17 @@ async function start(provider, request, response) {
     expiresAt: claims.exp * 1000,
     connection: { ...result.credential, consentId, redirectUri: redirect.toString(), state, createdAt: new Date().toISOString() },
   })
-  send(response, 200, { redirectUrl: result.redirectUrl })
+  // result.authFlow is only ever set by EnableBankingProvider.start(), and
+  // only after its own validation against the trusted provider response
+  // (see providers.js) -- GoCardless/PayPal never set it, so this never
+  // changes their response shape. Explicitly whitelists the four fields
+  // rather than spreading result.authFlow verbatim, so a future field added
+  // to that object can never reach the client without a deliberate change
+  // here too.
+  const authFlow = result.authFlow
+    ? { provider: result.authFlow.provider, authorizationId: result.authFlow.authorizationId, origin: result.authFlow.origin, sandbox: Boolean(result.authFlow.sandbox) }
+    : undefined
+  send(response, 200, { redirectUrl: result.redirectUrl, ...(authFlow ? { authFlow } : {}) })
 }
 
 async function buildSyncPayload(user) {
