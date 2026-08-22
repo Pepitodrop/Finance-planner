@@ -38,11 +38,11 @@ test('test-account clear command is confirmation-gated and refuses non-test acco
 
 test('COBOL seed contains deterministic finance fixtures only and no credentials', () => {
   assert.match(cobolSource, /Finance Planner Test Girokonto/)
-  assert.match(cobolSource, /balanceCents\\":695950/)
-  assert.match(cobolSource, /amountCents\\":250000/)
-  assert.match(cobolSource, /amountCents\\":9000/)
-  assert.match(cobolSource, /amountCents\\":4999/)
-  assert.match(cobolSource, /amountCents\\":12000/)
-  assert.match(cobolSource, /amountCents\\":5000/)
+  assert.match(cobolSource, /balanceCents":695950/)
+  assert.match(cobolSource, /amountCents":250000/)
+  assert.match(cobolSource, /amountCents":9000/)
+  assert.match(cobolSource, /amountCents":4999/)
+  assert.match(cobolSource, /amountCents":12000/)
+  assert.match(cobolSource, /amountCents":5000/)
   assert.doesNotMatch(cobolSource, /password|secret|token|session|iban|pin|tan/i)
 })
