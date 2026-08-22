@@ -48,13 +48,6 @@ const ACCOUNT_TYPE_LABELS = {
   'credit-card': 'Credit card',
 } as const
 
-function greetingFor(date: Date): string {
-  const hour = date.getHours()
-  if (hour < 12) return 'Good morning'
-  if (hour < 18) return 'Good afternoon'
-  return 'Good evening'
-}
-
 function signedMoney(transaction: Transaction): string {
   if (isDetectedTransfer(transaction)) return formatMoney(transaction.amountCents)
   return `${transaction.type === 'income' ? '+' : '−'}${formatMoney(transaction.amountCents)}`
@@ -70,7 +63,7 @@ export function Dashboard({ state, userName, onAddTransaction, onEditTransaction
     <header className="dashboard-toolbar">
       <div>
         <h1>Dashboard</h1>
-        <p>{greetingFor(referenceDate)}, {firstName}. Here is your financial overview.</p>
+        <p>Welcome back, {firstName}. Here is your financial overview.</p>
       </div>
       <button type="button" className="primary dashboard-add-action" onClick={onAddTransaction}>
         <Plus size={18}/> Add transaction
