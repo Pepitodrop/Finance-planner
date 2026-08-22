@@ -104,8 +104,9 @@ test('test-account COBOL empty bootstrap, comprehensive seed, and clear workflow
     assert.equal(seededPayload.state.transactions.length, 111)
     assert.equal(seededPayload.state.goals.length, 5)
     assert.equal(seededPayload.state.accounts.find((account) => account.type === 'credit-card')?.balanceCents, -84530)
-    assert.ok(seededPayload.state.transactions.filter((transaction) => transaction.recurring).length >= 50)
-    assert.ok(seededPayload.state.transactions.some((transaction) => transaction.category === 'Transfer'))
+    assert.equal(seededPayload.state.transactions.filter((transaction) => transaction.recurring).length, 0)
+    assert.equal(seededPayload.state.transactions.filter((transaction) => transaction.description === 'Test Rent').length, 8)
+    assert.equal(seededPayload.state.transactions.filter((transaction) => transaction.category === 'Transfer').length, 16)
     assert.deepEqual(seededPayload.secureData, { testSeed: { generator: 'gnucobol', mode: 'comprehensive', version: 2, scenario: 'full-ui' } })
 
     const authStore = new AuthStore(join(workdir, 'unused-auth.enc.json'), authKey, pool, connectorKey)
