@@ -19,7 +19,8 @@ const serverRoot = fileURLToPath(new URL('../', import.meta.url))
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url))
 const createScript = join(serverRoot, 'scripts', 'create-test-account.mjs')
 const clearScript = join(serverRoot, 'scripts', 'clear-test-account-data.mjs')
-const cobolSource = join(repoRoot, 'core', 'cobol', 'test_seed_generator.cob')
+const emptyCobolSource = join(repoRoot, 'core', 'cobol', 'test_account_empty_generator.cob')
+const seedCobolSource = join(repoRoot, 'core', 'cobol', 'test_seed_generator.cob')
 const cobcAvailable = spawnSync('cobc', ['--version'], { stdio: 'ignore' }).status === 0
 
 function databaseUrlFor(baseUrl, databaseName) {
@@ -32,7 +33,7 @@ function quoteIdentifier(value) {
   return `"${String(value).replaceAll('"', '""')}"`
 }
 
-test('test-account COBOL seed and clear workflow round-trips against PostgreSQL without deleting the login identity', { timeout: 120_000 }, async (t) => {
+test('test-account COBOL empty bootstrap, comprehensive seed, and clear workflow round-trip against PostgreSQL', { timeout: 120_000 }, async (t) => {
   const baseUrl = process.env.TEST_DATABASE_URL
   if (!baseUrl) return t.skip('TEST_DATABASE_URL is required for the PostgreSQL integration test.')
   if (!cobcAvailable) return t.skip('GnuCOBOL is required for the test-data integration test.')
@@ -41,7 +42,8 @@ test('test-account COBOL seed and clear workflow round-trips against PostgreSQL 
   const databaseUrl = databaseUrlFor(baseUrl, databaseName)
   const adminPool = new Pool({ connectionString: databaseUrlFor(baseUrl, 'postgres'), max: 1 })
   const workdir = await mkdtemp(join(tmpdir(), 'finance-planner-test-data-'))
-  const binary = join(workdir, 'test-seed')
+  const emptyBinary = join(workdir, 'test-account-empty')
+  const seedBinary = join(workdir, 'test-seed')
   const connectorKey = 'test-data-connector-master-key-with-more-than-32-characters'
   const authKey = 'test-data-auth-master-key-with-more-than-32-characters'
   const email = 'isolated-seed@example.test'
@@ -54,7 +56,8 @@ test('test-account COBOL seed and clear workflow round-trips against PostgreSQL 
     pool = createDatabase(databaseUrl, { max: 3 })
     await migrateDatabase(pool)
 
-    await execFileAsync('cobc', ['-free', '-Wall', '-Wextra', '-x', '-o', binary, cobolSource], { timeout: 10_000 })
+    await execFileAsync('cobc', ['-free', '-Wall', '-Wextra', '-x', '-o', emptyBinary, emptyCobolSource], { timeout: 10_000 })
+    await execFileAsync('cobc', ['-free', '-Wall', '-Wextra', '-x', '-o', seedBinary, seedCobolSource], { timeout: 10_000 })
 
     const scriptEnv = {
       ...process.env,
@@ -63,7 +66,8 @@ test('test-account COBOL seed and clear workflow round-trips against PostgreSQL 
       AUTH_MASTER_KEY: authKey,
       TEST_ACCOUNT_EMAIL: email,
       TEST_ACCOUNT_NAME: name,
-      COBOL_TEST_SEED_BINARY: binary,
+      COBOL_TEST_ACCOUNT_EMPTY_BINARY: emptyBinary,
+      COBOL_TEST_SEED_BINARY: seedBinary,
     }
 
     const seeded = await execFileAsync(process.execPath, [createScript, '--seed-cobol'], {
@@ -71,24 +75,39 @@ test('test-account COBOL seed and clear workflow round-trips against PostgreSQL 
       env: scriptEnv,
       encoding: 'utf8',
       timeout: 60_000,
-      maxBuffer: 1_000_000,
+      maxBuffer: 2_000_000,
     })
     assert.equal(seeded.stderr, '')
     const seedSummary = JSON.parse(seeded.stdout)
     assert.equal(seedSummary.status, 'ok')
+    assert.equal(seedSummary.mode, 'seeded')
+    assert.equal(seedSummary.created, true)
+    assert.equal(seedSummary.emptyBootstrapApplied, true)
+    assert.equal(seedSummary.emptyBootstrap.source, 'gnucobol:empty-account')
+    assert.equal(seedSummary.emptyBootstrap.verified, true)
+    assert.equal(seedSummary.emptyBootstrap.accounts, 0)
+    assert.equal(seedSummary.emptyBootstrap.transactions, 0)
+    assert.equal(seedSummary.emptyBootstrap.goals, 0)
     assert.equal(seedSummary.seedApplied, true)
-    assert.equal(seedSummary.seed.source, 'gnucobol')
-    assert.equal(seedSummary.seed.accounts, 1)
-    assert.equal(seedSummary.seed.transactions, 5)
-    assert.equal(seedSummary.seed.goals, 0)
+    assert.equal(seedSummary.seed.source, 'gnucobol:comprehensive-seed')
+    assert.equal(seedSummary.seed.verified, true)
+    assert.equal(seedSummary.seed.accounts, 5)
+    assert.equal(seedSummary.seed.transactions, 111)
+    assert.equal(seedSummary.seed.goals, 5)
 
     const financeBefore = await pool.query('SELECT encrypted_payload, version FROM user_finance_state WHERE user_id=$1', [userId])
     assert.equal(financeBefore.rowCount, 1)
     const financeBeforeVersion = Number(financeBefore.rows[0].version)
+    assert.equal(financeBeforeVersion, 2)
     const seededPayload = decryptCloudPayload(financeBefore.rows[0].encrypted_payload, connectorKey, userId)
-    assert.equal(seededPayload.state.accounts[0].balanceCents, 695950)
-    assert.deepEqual(seededPayload.state.transactions.map((transaction) => transaction.amountCents), [250000, 9000, 4999, 12000, 5000])
-    assert.deepEqual(seededPayload.secureData, { testSeed: { generator: 'gnucobol', version: 1 } })
+    assert.equal(seededPayload.state.accounts.length, 5)
+    assert.equal(seededPayload.state.transactions.length, 111)
+    assert.equal(seededPayload.state.goals.length, 5)
+    assert.equal(seededPayload.state.accounts.find((account) => account.type === 'credit-card')?.balanceCents, -84530)
+    assert.equal(seededPayload.state.transactions.filter((transaction) => transaction.recurring).length, 0)
+    assert.equal(seededPayload.state.transactions.filter((transaction) => transaction.description === 'Test Rent').length, 8)
+    assert.equal(seededPayload.state.transactions.filter((transaction) => transaction.category === 'Transfer').length, 16)
+    assert.deepEqual(seededPayload.secureData, { testSeed: { generator: 'gnucobol', mode: 'comprehensive', version: 2, scenario: 'full-ui' } })
 
     const authStore = new AuthStore(join(workdir, 'unused-auth.enc.json'), authKey, pool, connectorKey)
     await authStore.load()

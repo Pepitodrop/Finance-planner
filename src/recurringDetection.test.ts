@@ -58,4 +58,15 @@ describe('detectRecurringPayments', () => {
 
     expect(result).toEqual([{ transaction: manual, cadence: 'manual', confidence: 100, occurrences: 1 }])
   })
+
+  it('excludes internal transfers even when they form a monthly pattern or are manually flagged', () => {
+    const transfers: Transaction[] = [
+      { ...expense('t1', '2026-06-25', 30000, 'Transfer to savings'), category: 'Transfer' },
+      { ...expense('t2', '2026-07-25', 30000, 'Transfer to savings'), category: 'Transfer' },
+      { ...expense('t3', '2026-08-25', 30000, 'Transfer to savings'), category: 'Transfer' },
+      { ...expense('t4', '2026-09-25', 30000, 'Transfer to savings'), category: 'Transfer', recurring: true },
+    ]
+
+    expect(detectRecurringPayments(transfers)).toEqual([])
+  })
 })

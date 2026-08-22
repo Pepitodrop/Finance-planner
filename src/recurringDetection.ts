@@ -1,3 +1,4 @@
+import { isDetectedTransfer } from './transactionClassification'
 import type { Transaction } from './types'
 
 export type RecurringCadence = 'weekly' | 'monthly' | 'yearly' | 'manual'
@@ -90,7 +91,7 @@ function inferredCandidates(group: Transaction[]): RecurringCandidate[] {
 }
 
 export function detectRecurringPayments(transactions: Transaction[]): RecurringCandidate[] {
-  const expenses = transactions.filter((transaction) => transaction.type === 'expense' && transaction.amountCents > 0)
+  const expenses = transactions.filter((transaction) => transaction.type === 'expense' && transaction.amountCents > 0 && !isDetectedTransfer(transaction))
   const manual = expenses
     .filter((transaction) => transaction.recurring)
     .map((transaction): RecurringCandidate => ({ transaction, cadence: 'manual', confidence: 100, occurrences: 1 }))

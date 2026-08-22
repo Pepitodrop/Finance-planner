@@ -25,6 +25,21 @@ test('cloud payload is validated and encrypted without plaintext financial recor
   assert.throws(() => decryptCloudPayload(encrypted, secret, 'google:other-user'))
 })
 
+test('cloud payload accepts the credit-card account type used by the account liability UI', () => {
+  const normalized = validateCloudPayload({
+    ...payload,
+    state: {
+      ...payload.state,
+      accounts: [
+        ...payload.state.accounts,
+        { id: 'card-1', name: 'Test Kreditkarte', type: 'credit-card', balanceCents: -84530, currency: 'EUR' },
+      ],
+    },
+  })
+  assert.equal(normalized.state.accounts.at(-1).type, 'credit-card')
+  assert.equal(normalized.state.accounts.at(-1).balanceCents, -84530)
+})
+
 test('cloud payload rejects unknown fields and broken account references', () => {
   assert.throws(() => validateCloudPayload({ ...payload, unexpected: true }), /Unexpected payload field/)
   assert.throws(() => validateCloudPayload({

@@ -10,9 +10,13 @@
     "verify:issue-105-live": "node scripts/verify-issue-105-live.mjs",
     "migrate": "node src/migrate.js",
     "migrate:rollback": "node src/migrate-rollback.js",
+    "finance-data:clear-all": "node scripts/clear-all-finance-data.mjs",
+    "factory-reset": "node scripts/factory-reset.mjs",
     "test-account:provision": "node scripts/create-test-account.mjs",
+    "test-account:build-empty": "mkdir -p build && cobc -free -Wall -Wextra -x -o build/test-account-empty ../core/cobol/test_account_empty_generator.cob",
     "test-account:build-seed": "mkdir -p build && cobc -free -Wall -Wextra -x -o build/test-seed ../core/cobol/test_seed_generator.cob",
-    "test-account:seed": "npm run test-account:build-seed && node scripts/create-test-account.mjs --seed-cobol",
+    "test-account:create-empty": "npm run test-account:build-empty && node scripts/create-test-account.mjs --empty-cobol",
+    "test-account:seed": "npm run test-account:build-empty && npm run test-account:build-seed && node scripts/create-test-account.mjs --seed-cobol",
     "test-account:clear-data": "node scripts/clear-test-account-data.mjs"
   },
   "dependencies": {

@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { HttpError } from './runtime-security.js'
 
-const ACCOUNT_TYPES = new Set(['checking', 'savings', 'cash', 'investment'])
+const ACCOUNT_TYPES = new Set(['checking', 'savings', 'cash', 'investment', 'credit-card'])
 const TRANSACTION_TYPES = new Set(['income', 'expense'])
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const MAX_SECURE_DATA_BYTES = 512_000

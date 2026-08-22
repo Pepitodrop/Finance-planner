@@ -1,51 +1,83 @@
 # Test account data
 
-Finance Planner does **not** seed finance data during normal startup, registration, login, vault setup, migration, or deployment. A fresh account starts with empty `accounts`, `transactions`, and `goals` collections. Test data is an explicit operator action and is scoped to the deterministic test account only.
+Finance Planner does **not** create test users or seed finance data during normal startup, registration, login, vault setup, migration, or deployment. Test-account creation and test-data seeding are explicit operator actions.
 
-## Configure the deterministic test account
+Authentication/security/database orchestration stays in Node.js. GnuCOBOL is used only for deterministic test-finance payload generation; plaintext passwords, password hashes, provider tokens, bank credentials, and database credentials are never embedded in the COBOL programs.
 
-The tooling requires a test email and display name:
+## Two COBOL generators
+
+`core/cobol/test_account_empty_generator.cob` emits the canonical empty test-finance payload:
+
+```json
+{
+  "state": { "accounts": [], "transactions": [], "goals": [] },
+  "secureData": {}
+}
+```
+
+`core/cobol/test_seed_generator.cob` emits a deterministic comprehensive UI/test fixture containing:
+
+- 5 EUR accounts: checking, savings, cash, investment, and credit card;
+- 111 transactions across January-August 2026;
+- income and expenses;
+- recurring salary, rent, utilities, subscription-like charges, fitness, and monthly savings transfers;
+- matched transfer presentation records between checking and savings;
+- groceries, dining, transport, leisure, insurance, travel, shopping, gifts, and investment activity;
+- a credit-card liability balance;
+- 5 savings goals at different progress levels and target dates.
+
+This fixture is intentionally broad enough to exercise the Dashboard, Accounts, Transactions, Recurring Payments, Goals, category analysis, transfer presentation, AI transaction inputs, and credit-card liability UI. It does **not** fake provider-dependent behavior: live bank/PayPal/Google connections, provider subscriptions, OAuth/PSD2 consent, sync, disconnect, and revocation still require their real sandbox/runtime flows.
+
+## Configure the deterministic test identity
+
+The Node provisioning boundary reads the test identity from server-side configuration:
 
 ```bash
-export TEST_ACCOUNT_EMAIL="demo@finance-planner.test"
+export TEST_ACCOUNT_EMAIL="<configured test email>"
 export TEST_ACCOUNT_NAME="Finance Planner Test User"
 ```
 
 `server/src/test-account-provisioning.js` derives a deterministic `test:<hash>` user id from the normalized email and refuses to take over an existing non-test account using that address.
 
-If the account must sign in through the normal email/password form, configure `TEST_ACCOUNT_PASSWORD_HASH` through the existing server-side test-password mechanism. The plaintext password is never stored by the provisioning or seed scripts.
+If the account signs in through the normal email/password form, configure `TEST_ACCOUNT_PASSWORD_HASH` through the existing server-side test-password mechanism. The plaintext password is never stored by the provisioning or seed scripts and must not be committed to the repository.
 
-## Local development
+## Empty test account
 
-From `server/`, with PostgreSQL/encryption environment variables already configured:
+The explicit empty-account workflow is:
+
+1. execute the compiled GnuCOBOL empty-state generator **before any auth/database mutation**;
+2. validate the emitted JSON through `validateCloudPayload()`;
+3. create/update the deterministic test auth identity in Node.js;
+4. encrypt the fully empty payload with the user binding;
+5. persist that encrypted empty state in PostgreSQL.
+
+Local development, with GnuCOBOL installed:
 
 ```bash
-npm run test-account:provision
+npm --prefix server run test-account:create-empty
 ```
 
-This creates or updates the deterministic authentication identity and leaves finance data empty.
-
-To add the deterministic GnuCOBOL fixture:
-
-```bash
-npm run test-account:seed
-```
-
-The command first compiles `core/cobol/test_seed_generator.cob` to `server/build/test-seed`, then runs the Node provisioning script with the seed explicitly enabled. GnuCOBOL (`cobc`) must therefore be installed locally.
-
-## Deployed Docker environment
-
-`Dockerfile.server` compiles the same generator to `/app/build/test-seed`. The hardened runtime image intentionally removes `npm`, so maintenance commands in the running connector use `node` directly rather than `npm run`.
-
-With `TEST_ACCOUNT_EMAIL` already present in the deployment `.env`, provision an empty test account with:
+Deployed Docker environment, where the COBOL program is already compiled into the connector image:
 
 ```bash
 docker compose --env-file .env exec -T \
   -e TEST_ACCOUNT_NAME="Finance Planner Test User" \
-  connector node scripts/create-test-account.mjs
+  connector node scripts/create-test-account.mjs --empty-cobol
 ```
 
-Seed the deterministic finance fixture with:
+Running this again deliberately returns the deterministic test account to an encrypted `accounts=[]`, `transactions=[]`, `goals=[]`, `secureData={}` state while preserving its test login identity.
+
+## Comprehensive seed
+
+Local development:
+
+```bash
+npm --prefix server run test-account:seed
+```
+
+The local command compiles both COBOL generators and then runs the Node orchestrator.
+
+Deployed Docker environment:
 
 ```bash
 docker compose --env-file .env exec -T \
@@ -53,27 +85,43 @@ docker compose --env-file .env exec -T \
   connector node scripts/create-test-account.mjs --seed-cobol
 ```
 
-The Node script executes the compiled COBOL binary, parses its JSON output, validates it through the same `validateCloudPayload()` boundary used for cloud state, encrypts it with the authenticated-user binding, and stores it only for the deterministic test account.
+The seed command is safe to run when the test account does not exist. It loads the empty COBOL payload first, creates the deterministic test identity, persists the empty state as the bootstrap version, and only then applies the comprehensive COBOL seed. If the test account already exists, the comprehensive seed replaces that account's encrypted finance state without creating another identity.
 
-The fixture contains one EUR checking account and five deterministic transactions. It is test data, not a product default and not evidence of live bank-provider verification.
+The command reports whether the test account was newly created, whether an empty bootstrap was applied, and the final account/transaction/goal counts.
 
-An operator-supplied JSON fixture remains available for controlled tests:
+## Provision identity only
+
+For maintenance cases that need only the deterministic authentication identity without touching its finance state:
 
 ```bash
-TEST_ACCOUNT_SEED_FILE=/path/to/payload.json npm run test-account:provision
+npm --prefix server run test-account:provision
 ```
 
-File seeding and `--seed-cobol` are mutually exclusive. The supplied JSON still passes through `validateCloudPayload()` before encryption/persistence.
+In the deployed connector:
+
+```bash
+docker compose --env-file .env exec -T \
+  -e TEST_ACCOUNT_NAME="Finance Planner Test User" \
+  connector node scripts/create-test-account.mjs
+```
+
+Prefer `--empty-cobol` when the objective is an explicitly empty test account.
+
+## Operator-supplied seed file
+
+A controlled JSON fixture remains supported through `TEST_ACCOUNT_SEED_FILE`. If the deterministic test identity does not yet exist, the same empty COBOL bootstrap runs first before the supplied validated payload is persisted.
+
+`TEST_ACCOUNT_SEED_FILE` cannot be combined with `--seed-cobol` or `--empty-cobol`.
 
 ## Clear test-account finance data while preserving login access
 
-The reset is deliberately confirmation-gated and refuses any user whose id does not match the deterministic `test:*` identity for `TEST_ACCOUNT_EMAIL`.
+The existing reset remains confirmation-gated and refuses any user whose id does not match the deterministic `test:*` identity for `TEST_ACCOUNT_EMAIL`.
 
 Local development:
 
 ```bash
 export TEST_DATA_RESET_CONFIRM=CLEAR_TEST_ACCOUNT_FINANCE_DATA
-npm run test-account:clear-data
+npm --prefix server run test-account:clear-data
 ```
 
 Deployed Docker environment:
@@ -84,22 +132,12 @@ docker compose --env-file .env exec -T \
   connector node scripts/clear-test-account-data.mjs
 ```
 
-The command deletes the test user's local provider/setup records:
+For `user_finance_state`, this reset writes a newly encrypted empty payload and increments the cloud-state version instead of deleting the row. That prevents a stale synced browser vault from treating a missing server row as an invitation to recreate old cloud data.
 
-- `connector_connections`
-- `oauth_nonces`
-- `user_budget_learning_profiles`
+The command also clears the test user's local connector/setup/learning rows. It does **not** contact external providers and therefore does not claim to revoke provider-side sessions or consents.
 
-For `user_finance_state`, it deliberately does **not** delete the row. Instead it writes a newly encrypted `{ accounts: [], transactions: [], goals: [] }` payload and increments the cloud-state version. This matters on a device that still has the old seeded encrypted browser vault: on the next normal sync, the empty server version can replace the stale synced local copy instead of the browser simply recreating the deleted server row. If that browser has genuinely unsynced local changes, the existing conflict protection still stops an automatic overwrite.
+## Factory reset versus test-account reset
 
-The authentication account is preserved so the same test login can be reused with empty finance state.
-
-### Provider-session limitation
-
-The maintenance reset does **not** contact external providers and therefore does not claim to revoke provider-side sessions. Use the normal Connections **Disconnect** flow when provider-side consent/session revocation must be tested. This reset exists to clean local sandbox/test state, not as a substitute for production disconnect semantics.
-
-## Removed global demo reset
-
-The former `database:reset-demo` workflow was intentionally removed. It globally truncated application tables and injected a large hardcoded demo dataset. That behavior conflicts with Finance Planner's empty-by-default production contract and is unnecessarily broad for ordinary testing.
+`factory-reset` removes all Finance Planner user/application data and is intended only for an explicit full clean baseline. `test-account:create-empty` is much narrower: it creates or resets only the configured deterministic test account to zero finance data.
 
 For backups/restores of real deployments, follow `DATABASE.md`; do not use test-account tooling as a database recovery mechanism.

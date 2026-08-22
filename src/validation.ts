@@ -12,7 +12,7 @@ function isAccount(value: unknown): value is Account {
   if (!isRecord(value)) return false
   return typeof value.id === 'string'
     && typeof value.name === 'string'
-    && ['checking', 'savings', 'cash', 'investment'].includes(String(value.type))
+    && ['checking', 'savings', 'cash', 'investment', 'credit-card'].includes(String(value.type))
     && isFiniteInteger(value.balanceCents)
     && value.currency === 'EUR'
 }
