@@ -5,8 +5,8 @@ PROGRAM-ID. FINANCE-TEST-ACCOUNT-EMPTY.
 PROCEDURE DIVISION.
 MAIN.
     *> Deterministic empty finance payload for the configured test identity.
-    *> Node.js remains responsible for authentication, password verification,
-    *> encryption and PostgreSQL persistence. No credentials enter COBOL.
+    *> Node.js remains responsible for authentication, encryption and
+    *> PostgreSQL persistence. No credentials enter COBOL.
     DISPLAY '{'
     DISPLAY '  "state": {'
     DISPLAY '    "accounts": [],'
