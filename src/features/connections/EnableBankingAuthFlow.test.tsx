@@ -42,6 +42,23 @@ describe('EnableBankingAuthFlow', () => {
     expect(element?.hasAttribute('sandbox')).toBe(false)
   })
 
+  it('shows an explicit test-environment warning for sandbox authorizations', async () => {
+    vi.mocked(loadEnableBankingAuthFlowWidget).mockResolvedValue(undefined)
+    const { getByRole } = render(<EnableBankingAuthFlow authorizationId="a" origin="https://tilisy-sandbox.enablebanking.com" sandbox onStatusChange={vi.fn()}/>)
+    await flush()
+    const note = getByRole('note', { name: 'Sandbox test environment' })
+    expect(note.textContent).toContain('Sandbox test')
+    expect(note.textContent).toContain('test credentials only')
+    expect(note.textContent).toContain('Never enter credentials from a real bank account')
+  })
+
+  it('does not show the sandbox warning for production authorizations', async () => {
+    vi.mocked(loadEnableBankingAuthFlowWidget).mockResolvedValue(undefined)
+    const { queryByRole } = render(<EnableBankingAuthFlow authorizationId="a" origin="https://auth.enablebanking.com" sandbox={false} onStatusChange={vi.fn()}/>)
+    await flush()
+    expect(queryByRole('note', { name: 'Sandbox test environment' })).toBeNull()
+  })
+
   it('7. reports "ready" when the widget fires its ready event', async () => {
     vi.mocked(loadEnableBankingAuthFlowWidget).mockResolvedValue(undefined)
     const onStatusChange = vi.fn()
