@@ -40,7 +40,7 @@ jobs:
       ASSET_RATE_LIMIT_PER_MINUTE: 1000
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: 22 }
       - name: Install frontend dependencies
         run: npm install --no-fund --no-audit --silent
