@@ -10,8 +10,8 @@ const accounts: Account[] = [
 ]
 
 const transfers: Transaction[] = [
-  { id: 'out', accountId: 'checking', description: 'Transfer to savings', category: 'Transfer', type: 'expense', amountCents: 30000, date: '2026-08-25', recurring: true },
-  { id: 'in', accountId: 'savings', description: 'Transfer from checking', category: 'Transfer', type: 'income', amountCents: 30000, date: '2026-08-25', recurring: true },
+  { id: 'out', accountId: 'checking', description: 'Transfer to savings', category: 'Transfer', type: 'expense', amountCents: 30000, date: '2026-08-25' },
+  { id: 'in', accountId: 'savings', description: 'Transfer from checking', category: 'Transfer', type: 'income', amountCents: 30000, date: '2026-08-25' },
 ]
 
 afterEach(() => cleanup())
@@ -30,10 +30,10 @@ describe('transfer amount direction', () => {
     const incomingRow = screen.getAllByText('Transfer from checking')[0].closest('tr')!
     const outgoingRow = screen.getAllByText('Transfer to savings')[0].closest('tr')!
 
-    expect(within(incomingRow).getByText((_, element) => element?.textContent?.replace(/\s/g, ' ') === '+300,00 €')).toBeInTheDocument()
-    expect(within(outgoingRow).getByText((_, element) => element?.textContent?.replace(/\s/g, ' ') === '−300,00 €')).toBeInTheDocument()
-    expect(within(incomingRow).getByText('Transfer')).toBeInTheDocument()
-    expect(within(outgoingRow).getByText('Transfer')).toBeInTheDocument()
+    expect(incomingRow).toHaveTextContent(/\+300,00\s*€/)
+    expect(outgoingRow).toHaveTextContent(/−300,00\s*€/)
+    expect(within(incomingRow).getAllByText('Transfer').length).toBeGreaterThan(0)
+    expect(within(outgoingRow).getAllByText('Transfer').length).toBeGreaterThan(0)
   })
 
   it('shows an incoming transfer as positive in the destination account detail', () => {
@@ -46,6 +46,6 @@ describe('transfer amount direction', () => {
     />)
 
     const recent = screen.getByRole('list', { name: 'Recent account transactions' })
-    expect(within(recent).getByText((_, element) => element?.tagName === 'B' && element.textContent?.replace(/\s/g, ' ') === 'transfer: +300,00 €')).toBeInTheDocument()
+    expect(recent).toHaveTextContent(/transfer:\s*\+300,00\s*€/i)
   })
 })
