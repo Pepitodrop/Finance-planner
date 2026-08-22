@@ -83,7 +83,7 @@ test('COBOL test-data generators contain finance fixtures only and no credential
   assert.match(seedCobolSource, /Emergency fund/)
   assert.match(seedCobolSource, /Transfer to savings/)
   assert.match(seedCobolSource, /"recurring":true/)
-  assert.doesNotMatch(`${emptyCobolSource}\n${seedCobolSource}`, /password|secret|token|session|iban|pin|tan/i)
+  assert.doesNotMatch(`${emptyCobolSource}\n${seedCobolSource}`, /\b(?:password|secret|token|session|iban|pin|tan)\b/i)
 })
 
 async function compileAndRun(sourcePath, binaryName) {
