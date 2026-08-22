@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Landmark, LockKeyhole, Menu, ShieldCheck, X } from 'lucide-react'
+import { Landmark, LockKeyhole, LogOut, Menu, ShieldCheck, X } from 'lucide-react'
 import {
   DESKTOP_DESTINATIONS,
   MOBILE_PRIMARY_DESTINATIONS,
@@ -15,6 +15,7 @@ interface ApplicationShellProps {
   children: ReactNode
   overlays?: ReactNode
   onLockVault?: () => void
+  onLogout?: () => Promise<void>
 }
 
 interface DestinationButtonProps {
@@ -40,8 +41,22 @@ function DestinationButton({ destination, activeDestination, onNavigate, classNa
   </button>
 }
 
-export function ApplicationShell({ activeDestination, onNavigate, children, overlays, onLockVault }: ApplicationShellProps) {
+async function logoutAndReload(): Promise<void> {
+  const response = await fetch('/api/auth/logout', {
+    method: 'POST',
+    credentials: 'include',
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  })
+  if (!response.ok) throw new Error('Sign out failed.')
+  window.location.reload()
+}
+
+export function ApplicationShell({ activeDestination, onNavigate, children, overlays, onLockVault, onLogout }: ApplicationShellProps) {
   const [moreOpen, setMoreOpen] = useState(false)
+  const [logoutBusy, setLogoutBusy] = useState(false)
+  const [logoutError, setLogoutError] = useState('')
   const frameRef = useRef<HTMLDivElement>(null)
   const mobileNavigationRef = useRef<HTMLElement>(null)
   const sheetRef = useRef<HTMLElement>(null)
@@ -65,6 +80,18 @@ export function ApplicationShell({ activeDestination, onNavigate, children, over
     pendingMainFocusRef.current = true
     navigate(destination)
     closeMore(false)
+  }
+
+  const signOut = async () => {
+    if (logoutBusy) return
+    setLogoutBusy(true)
+    setLogoutError('')
+    try {
+      await (onLogout ?? logoutAndReload)()
+    } catch {
+      setLogoutError("Couldn't log out. Check your connection and try again.")
+      setLogoutBusy(false)
+    }
   }
 
   useEffect(() => {
@@ -140,6 +167,11 @@ export function ApplicationShell({ activeDestination, onNavigate, children, over
           <span className="app-navigation__icon" aria-hidden="true"><LockKeyhole size={20}/></span>
           <span className="app-navigation__label">Lock vault</span>
         </button>}
+        <button type="button" className="app-navigation__button app-navigation__security app-navigation__logout" aria-label="Log out of Finance Planner" disabled={logoutBusy} onClick={() => void signOut()}>
+          <span className="app-navigation__icon" aria-hidden="true"><LogOut size={20}/></span>
+          <span className="app-navigation__label">{logoutBusy ? 'Logging out…' : 'Log out'}</span>
+        </button>
+        {logoutError && <p className="status-message error-message app-navigation__logout-error" role="alert">{logoutError}</p>}
         <div className="privacy-note app-navigation__privacy">
           <ShieldCheck size={18} aria-hidden="true"/>
           <div><strong>Encrypted storage</strong><span>Sensitive connection secrets remain server-side.</span></div>
@@ -214,6 +246,10 @@ export function ApplicationShell({ activeDestination, onNavigate, children, over
           closeMore(false)
           onLockVault()
         }}><LockKeyhole size={18} aria-hidden="true"/> Lock encrypted finance vault</button>}
+        <button type="button" className="app-more-sheet__security" disabled={logoutBusy} onClick={() => {
+          closeMore(false)
+          void signOut()
+        }}><LogOut size={18} aria-hidden="true"/> {logoutBusy ? 'Logging out…' : 'Log out of Finance Planner'}</button>
       </section>
     </div>}
 
