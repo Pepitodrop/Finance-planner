@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { LogOut } from 'lucide-react'
 import type { AuthUser } from './AuthGate'
+import { clearUnlockedState, flushCloudState } from './storage'
+import { lockVault } from './vault'
 
 interface AccountPageProps {
   user: AuthUser
@@ -28,10 +30,18 @@ export function AccountPage({ user, onLogout, onNavigateToData }: AccountPagePro
     setBusy(true)
     setError('')
     try {
+      // Flush any queued encrypted cloud write while the authenticated
+      // session still exists. This never exposes the vault password or key.
+      await flushCloudState()
+
+      // The server revokes the authenticated session and expires fp_session.
+      // Only after that succeeds do we discard the decrypted client state.
       await onLogout()
+      clearUnlockedState()
+      lockVault()
     } catch {
-      // Network failure only -- do not clear any local app state, the
-      // session cookie may still be valid.
+      // If server sign-out fails, keep the unlocked state intact: the cookie
+      // may still be valid and the UI must not pretend that logout succeeded.
       setError("Couldn't sign out. Check your connection and try again.")
       setBusy(false)
     }
@@ -60,10 +70,10 @@ export function AccountPage({ user, onLogout, onNavigateToData }: AccountPagePro
 
     <section className="panel account-signout-panel">
       <p className="eyebrow">Session</p>
-      <h2>Sign out of Finance Planner on this device</h2>
-      <p className="muted">You'll need to sign in again to continue. Your encrypted data stays safely on this device either way.</p>
+      <h2>Fully sign out of Finance Planner on this device</h2>
+      <p className="muted">Your server session is revoked and the decrypted vault is removed from memory. The encrypted vault remains on this device, so you can unlock it again after signing back in.</p>
       <button type="button" className="secondary" disabled={busy} onClick={() => void signOut()}>
-        <LogOut size={18}/> {busy ? 'Signing out…' : 'Sign out'}
+        <LogOut size={18}/> {busy ? 'Signing out…' : 'Sign out completely'}
       </button>
       {error && <p className="status-message error-message" role="alert">{error}</p>}
     </section>
