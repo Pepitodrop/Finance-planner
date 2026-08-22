@@ -87,6 +87,41 @@ test('provider errors do not expose upstream response bodies', async () => {
   }
 })
 
+// Complements the test above: a field the *client* never sees (classifyError
+// always returns the fixed generic message) may still be attached to the
+// thrown Error for server-side logging, so a genuine provider-contract
+// rejection is diagnosable instead of indistinguishable from an internal
+// crash -- found and fixed 2026-08-21 investigating a live "Internal server
+// error" on Enable Banking's POST /auth. Only known, string-typed,
+// length-capped fields are ever pulled from the provider body -- an
+// unrecognized field shape (`detail` in the test above) attaches nothing.
+test('captures a safe, bounded provider error code/message on the thrown error for server-side diagnostics only', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'invalid_request', message: 'access.valid_until exceeds maximum_consent_validity' }), { status: 400 })
+  try {
+    await assert.rejects(
+      jsonFetch('https://provider.invalid/test', {}, { retries: 0, timeoutMs: 1_000 }),
+      (error) => error.status === 400 && error.providerCode === 'invalid_request' && error.providerMessage === 'access.valid_until exceeds maximum_consent_validity',
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('truncates an oversized provider error message before attaching it, and never attaches a non-string field', async () => {
+  const originalFetch = globalThis.fetch
+  const longMessage = 'x'.repeat(1_000)
+  globalThis.fetch = async () => new Response(JSON.stringify({ code: { nested: 'not a string' }, message: longMessage }), { status: 400 })
+  try {
+    await assert.rejects(
+      jsonFetch('https://provider.invalid/test', {}, { retries: 0, timeoutMs: 1_000 }),
+      (error) => error.providerCode === undefined && error.providerMessage.length === 300,
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('rejects expired or revoked GoCardless consent through COBOL policy before account synchronization', async () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = async () => new Response(JSON.stringify({ status: 'EX', accounts: ['account-1'] }), { status: 200 })
@@ -315,4 +350,28 @@ test('bank connectors enforce consent, minimal reporting fields and no payment A
   assert.doesNotMatch(source, /\/v1\/payments\/payouts/)
   assert.match(source, /MAX_PAYPAL_PAGES/)
   assert.match(source, /normalizeProviderAccountType/)
+})
+
+// Regression coverage for the redirect_uri architecture fix (2026-08-21):
+// Enable Banking's Control Panel rejects any redirect_url carrying extra
+// query parameters, so it now gets a bare, server-config-derived callback
+// URI (canonicalCallbackUrl()) instead of the query-stringed callbackUrl()
+// every provider previously shared. GoCardless and PayPal are deliberately
+// UNCHANGED -- neither has been proven to reject (or shown to need) the
+// query-stringed form, and GoCardless in particular redirects back to its
+// configured URI verbatim with no echo of its own, so embedding state
+// directly in the URL is how its round trip actually works today. This
+// test locks in that only Enable Banking moved, nothing else did.
+test('only Enable Banking\'s redirect_url moved to the canonical, query-parameter-free callback URI -- GoCardless and PayPal still use the original query-stringed form', async () => {
+  const source = await readFile(new URL('../src/providers.js', import.meta.url), 'utf8')
+  assert.match(source, /function canonicalCallbackUrl\(appOrigin\)/)
+  assert.match(source, /redirect_url: canonicalCallbackUrl\(this\.env\.APP_ORIGIN/, 'Enable Banking must use the canonical, bare callback URI')
+
+  const gocardlessSection = source.slice(source.indexOf('class GoCardlessProvider'), source.indexOf('class EnableBankingProvider'))
+  assert.match(gocardlessSection, /callbackUrl\(redirectUri, 'gocardless', state\)/, 'GoCardless must still use the original query-stringed callbackUrl()')
+  assert.doesNotMatch(gocardlessSection, /canonicalCallbackUrl/)
+
+  const paypalSection = source.slice(source.indexOf('class PayPalProvider'), source.indexOf('class UnavailableProvider'))
+  assert.match(paypalSection, /callbackUrl\(redirectUri, 'paypal', state\)/, 'PayPal must still use the original query-stringed callbackUrl()')
+  assert.doesNotMatch(paypalSection, /canonicalCallbackUrl/)
 })

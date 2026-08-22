@@ -4,6 +4,23 @@ import test from 'node:test'
 
 const serverSource = await readFile(new URL('../src/server.js', import.meta.url), 'utf8')
 
+test('rate limiting dispatches through the shared rateLimitTier() classifier, not a locally re-implemented pattern', () => {
+  // Regression guard for the live production defect (2026-08-21): a
+  // second, drifted copy of the sensitive-route regex living directly in
+  // server.js (rather than importing the single classifier from
+  // runtime-security.js, which server/src/runtime-security.test.js unit
+  // tests directly) is exactly how the logo-vs-sensitive bug could
+  // silently reappear.
+  assert.match(serverSource, /import \{[^}]*rateLimitTier[^}]*\} from '\.\/runtime-security\.js'/)
+  const rateLimitFunction = serverSource.slice(
+    serverSource.indexOf('async function rateLimit(request, response, pathname)'),
+    serverSource.indexOf('function providerAdapter'),
+  )
+  assert.ok(rateLimitFunction.length > 0, 'rateLimit() was not found')
+  assert.match(rateLimitFunction, /const tier = rateLimitTier\(pathname\)/)
+  assert.doesNotMatch(rateLimitFunction, /\/\^\\\/api\\\/\(auth\|session\|connectors/, 'must not re-implement the sensitive-route pattern locally')
+})
+
 test('connector setup authenticates and authorizes before provider capability disclosure', () => {
   const startFunction = serverSource.slice(
     serverSource.indexOf('async function start(provider, request, response)'),
@@ -17,6 +34,27 @@ test('connector setup authenticates and authorizes before provider capability di
   assert.ok(authentication < providerLookup)
   assert.ok(providerLookup < authorization)
   assert.ok(authorization < availabilityCheck)
+})
+
+// Regression guard for the Enable Banking Auth Flow widget descriptor
+// (2026-08-22): the /start response must explicitly whitelist exactly
+// {provider, authorizationId, origin, sandbox} from result.authFlow, never
+// spread it (or the whole `result` object, which also carries `credential`
+// -- signed state, institutionId, aspspName/country, accessValidUntil --
+// destined only for server-side pending-setup storage, never the browser).
+test('the /start response whitelists exactly four authFlow fields and never spreads the raw provider result', () => {
+  const startFunction = serverSource.slice(
+    serverSource.indexOf('async function start(provider, request, response)'),
+    serverSource.indexOf('async function buildSyncPayload'),
+  )
+  assert.match(startFunction, /result\.authFlow\.provider/)
+  assert.match(startFunction, /result\.authFlow\.authorizationId/)
+  assert.match(startFunction, /result\.authFlow\.origin/)
+  assert.match(startFunction, /result\.authFlow\.sandbox/)
+  assert.doesNotMatch(startFunction, /\.\.\.result(?!\.)/, 'must never spread the whole provider result object itself (as opposed to its nested .credential, used only for server-side pending-setup storage) into the client response')
+  assert.doesNotMatch(startFunction, /\.\.\.result\.authFlow\b/, 'must whitelist authFlow fields explicitly, never forward the object verbatim')
+  const sendCall = startFunction.slice(startFunction.indexOf('send(response, 200'))
+  assert.doesNotMatch(sendCall, /credential/i, 'the client-facing /start response must never mention credential (signed state, institutionId, aspspName/country, accessValidUntil live server-side only)')
 })
 
 test('every stored owner-account connection is re-authorized before synchronization', () => {
@@ -36,13 +74,18 @@ test('the provider callback route redirects every failure back into the app inst
     callbackStart,
     serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
   )
-  // Provider lookup and state verification must be wrapped in a try/catch
+  // State verification and provider lookup must be wrapped in a try/catch
   // that redirects (never throws out to the generic JSON error handler).
+  // State is verified FIRST (2026-08-21 redirect_uri architecture fix) --
+  // the provider identity is derived FROM the verified state's own payload,
+  // never from an external, unauthenticated query parameter, so there is
+  // nothing to look up until the state itself is known to be genuine.
   const tryStart = callbackRoute.indexOf('try {')
-  const providerLookup = callbackRoute.indexOf('providerAdapter(provider)')
   const stateVerify = callbackRoute.indexOf('verifyState(url.searchParams.get')
+  const providerLookup = callbackRoute.indexOf('providerAdapter(provider)')
   const catchBlock = callbackRoute.indexOf('} catch {')
-  assert.ok(tryStart >= 0 && tryStart < providerLookup && providerLookup < stateVerify && stateVerify < catchBlock)
+  assert.ok(tryStart >= 0 && tryStart < stateVerify && stateVerify < providerLookup && providerLookup < catchBlock)
+  assert.match(callbackRoute.slice(tryStart, catchBlock), /provider = state\.provider/, 'provider must be derived from the verified state, not a query parameter')
   assert.match(callbackRoute.slice(catchBlock), /redirectWithError\(origin\)/, 'a state that fails to parse must redirect to the app origin, never to unverified input')
 
   const missingClaims = callbackRoute.indexOf('!state.consentId || !state.redirectUri')
@@ -73,6 +116,15 @@ test('the provider callback route redirects instead of throwing raw JSON when co
   const consumeCatch = callbackRoute.indexOf('} catch {', consumeTry)
   assert.ok(consumeCatch > consumeTry)
   assert.match(callbackRoute.slice(consumeCatch, consumeCatch + 200), /redirectWithError\(state\.redirectUri\)/)
+})
+
+test('the provider callback route never reads a client-supplied ?provider= query parameter -- the source no longer contains that pattern at all', () => {
+  const callbackStart = serverSource.indexOf("if (request.method === 'GET' && url.pathname === '/api/connectors/callback')")
+  const callbackRoute = serverSource.slice(
+    callbackStart,
+    serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
+  )
+  assert.doesNotMatch(callbackRoute, /searchParams\.get\('provider'\)/, 'provider must be derived from the verified state, never trusted from an unauthenticated query parameter (fixed 2026-08-21 after a live REDIRECT_URI_NOT_ALLOWED rejection)')
 })
 
 test('the provider callback route runs completeCallback() only after the nonce has been consumed, and redirects on failure without exposing raw JSON', () => {
@@ -206,6 +258,23 @@ test('the institution directory endpoint applies the same owner-mode authorizati
   const directoryCall = institutionsHandler.indexOf('adapter.institutionDirectory(')
   assert.ok(authentication >= 0 && authorization >= 0 && directoryCall >= 0)
   assert.ok(authentication < authorization && authorization < directoryCall, 'must authenticate, then authorize (owner-mode gate), then disclose institutions -- in that order')
+})
+
+test('the institution logo endpoint authenticates and authorizes before ever resolving/fetching a logo', () => {
+  const logoHandler = serverSource.slice(
+    serverSource.indexOf("const logoMatch = url.pathname.match(/^\\/api\\/connectors\\/([a-z0-9][a-z0-9-]{1,39})\\/logo$/)"),
+    serverSource.indexOf("const match = url.pathname.match(/^\\/api\\/connectors\\/([a-z0-9][a-z0-9-]{1,39})\\/start$/)"),
+  )
+  const authentication = logoHandler.indexOf('const user = userId(request)')
+  const authorization = logoHandler.indexOf('authorizeProviderUser(adapter, user, env)')
+  const logoCall = logoHandler.indexOf('adapter.fetchInstitutionLogo(')
+  assert.ok(authentication >= 0 && authorization >= 0 && logoCall >= 0)
+  assert.ok(authentication < authorization && authorization < logoCall, 'must authenticate, then authorize (owner-mode gate), then resolve/fetch a logo -- in that order, same as the institution directory endpoint')
+  // The client only ever supplies an institutionId (bounded, trimmed) --
+  // never a URL. There is no code path here that could take an
+  // arbitrary/attacker-supplied URL as input.
+  assert.match(logoHandler, /searchParams\.get\('institutionId'\)\.trim\(\)\.slice\(0, 128\)/)
+  assert.doesNotMatch(logoHandler, /searchParams\.get\('url'\)|searchParams\.get\('logo'\)/)
 })
 
 test('connector start validates the country code the same way the institution directory endpoint already does', () => {

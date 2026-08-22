@@ -24,7 +24,12 @@ vi.mock('../../connectors', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../connectors')>()
   return {
     ...actual,
-    startConnector: vi.fn(async () => {}),
+    // 'redirect' by default -- matches every existing provider's real
+    // behavior (the browser is already navigating away by the time this
+    // resolves) and keeps every pre-existing test in this file unaffected.
+    // The Enable-Banking-embedded-widget describe block below overrides
+    // this per-test with an 'embedded-auth' result.
+    startConnector: vi.fn(async () => ({ mode: 'redirect' as const })),
     synchronizeConnections: vi.fn(async () => []),
     disconnectConnector: vi.fn(async () => ({ disconnected: true, providerRevoked: true, providerRevokeReason: 'confirmed' as const })),
     fetchProviderStatus: vi.fn(async () => DEFAULT_PROVIDER_STATUS),
@@ -186,7 +191,7 @@ describe('GoCardless institution resolution (never guesses a real bank)', () => 
     expect(screen.getByRole('button', { name: /Sparkasse KoelnBonn/ })).toBeInTheDocument()
     expect(startConnector).not.toHaveBeenCalled()
 
-    const liveSearchInput = screen.getByPlaceholderText('Search by bank name or BIC')
+    const liveSearchInput = screen.getByPlaceholderText('Search bank, city or BIC')
     await user.clear(liveSearchInput)
     await user.type(liveSearchInput, 'Koeln')
     expect(screen.queryByRole('button', { name: /Aachener Sparkasse/ })).not.toBeInTheDocument()
@@ -253,7 +258,7 @@ describe('GoCardless institution resolution (never guesses a real bank)', () => 
     await user.click(screen.getByRole('button', { name: /^Sparkasse$/ }))
     await screen.findByRole('button', { name: /Aachener Sparkasse/ })
 
-    const liveSearchInput = screen.getByPlaceholderText('Search by bank name or BIC')
+    const liveSearchInput = screen.getByPlaceholderText('Search bank, city or BIC')
     await user.type(liveSearchInput, 'zzz-no-such-bank')
     expect(screen.queryByRole('button', { name: /Aachener Sparkasse/ })).not.toBeInTheDocument()
     expect(screen.getByText('No bank matches your search. Try a different name or BIC.')).toBeInTheDocument()
@@ -271,6 +276,173 @@ describe('GoCardless institution resolution (never guesses a real bank)', () => 
 
     await user.click(screen.getByRole('button', { name: 'Back' }))
     expect(screen.getByRole('heading', { name: 'Choose your institution' })).toBeInTheDocument()
+  })
+})
+
+// Regression coverage for the reported UX defect: choosing the "Volksbank /
+// Raiffeisenbank" picker tile opened a branch search prefilled with that
+// entire literal label ("Volksbank / Raiffeisenbank"), which never matched a
+// real ASPSP name ("Volksbank Demmin", "Raiffeisenbank Grävenwiesbach", ...)
+// -- see FinancePlanner/Providers/Enable Banking.md and connectionsModel.ts's
+// familyFilteredInstitutions().
+describe('bank-family resolution (institutions.ts directoryTerms, never the literal picker label)', () => {
+  it('opens the branch search with a blank query and shows real branches immediately, never a dead "no results" for the exact bug report', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([
+      { id: 'DE:Volksbank Demmin', name: 'Volksbank Demmin' },
+      { id: 'DE:Raiffeisenbank Grävenwiesbach', name: 'Raiffeisenbank Grävenwiesbach' },
+    ])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    await screen.findByRole('heading', { name: /Find your Volksbank \/ Raiffeisenbank branch/ })
+
+    const liveSearchInput = screen.getByPlaceholderText('Search bank, city or BIC')
+    expect(liveSearchInput).toHaveValue('')
+    expect(await screen.findByRole('button', { name: /Volksbank Demmin/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Raiffeisenbank Grävenwiesbach/ })).toBeInTheDocument()
+    expect(screen.queryByText(/No bank matches your search/)).not.toBeInTheDocument()
+  })
+
+  it('renders each live branch row with the same-origin logo proxy, never a direct link to a provider-controlled host, and falls back to the lettermark on image error', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:Volksbank Demmin', name: 'Volksbank Demmin' }])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+
+    const row = await screen.findByRole('button', { name: /Volksbank Demmin/ })
+    const image = row.querySelector('img')
+    expect(image).toBeTruthy()
+    expect(image).toHaveAttribute('src', '/api/connectors/enablebanking/logo?institutionId=DE%3AVolksbank%20Demmin')
+
+    fireEvent.error(image!)
+    expect(row.querySelector('img')).not.toBeInTheDocument()
+    expect(row.querySelector('.connections-mark--lettermark')).toBeInTheDocument()
+  })
+
+  it('narrows to real cooperative-network branches via Enable Banking group.name, filtering out an unrelated bank in the same directory', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([
+      { id: 'DE:Semper Bank AG', name: 'Semper Bank AG', group: { name: 'Volksbanken Raiffeisenbanken' } },
+      { id: 'DE:ING-DiBa', name: 'ING-DiBa' },
+    ])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    expect(await screen.findByRole('button', { name: /Semper Bank AG/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /ING-DiBa/ })).not.toBeInTheDocument()
+  })
+
+  it('tells the user when the family narrowing found nothing and fell back to the whole directory, instead of silently showing unrelated banks', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:ING-DiBa', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    expect(await screen.findByRole('button', { name: /ING-DiBa/ })).toBeInTheDocument()
+    expect(screen.getByText(/Volksbank \/ Raiffeisenbank wasn.t found under this connection method/)).toBeInTheDocument()
+  })
+
+  it('does not show the unnarrowed notice once real family matches are found', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:Volksbank Demmin', name: 'Volksbank Demmin' }])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    expect(await screen.findByRole('button', { name: /Volksbank Demmin/ })).toBeInTheDocument()
+    expect(screen.queryByText(/wasn.t found under this connection method/)).not.toBeInTheDocument()
+  })
+
+  it('lets Retry re-fetch the live directory after a load failure, without leaving the resolution step', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions)
+      .mockRejectedValueOnce(new Error('The bank directory could not be loaded.'))
+      .mockResolvedValueOnce([{ id: 'DE:Volksbank Demmin', name: 'Volksbank Demmin' }])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('The bank directory could not be loaded.')
+
+    await user.click(within(alert).getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByRole('button', { name: /Volksbank Demmin/ })).toBeInTheDocument()
+    expect(fetchProviderInstitutions).toHaveBeenCalledTimes(2)
+  })
+
+  it('lets the user clear the search and add a manual account from the empty-results state, and never implies the bank is unsupported', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:Volksbank Demmin', name: 'Volksbank Demmin' }])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    await screen.findByRole('button', { name: /Volksbank Demmin/ })
+
+    const liveSearchInput = screen.getByPlaceholderText('Search bank, city or BIC')
+    await user.type(liveSearchInput, 'zzz-no-such-bank')
+    await screen.findByText('No bank matches your search. Try a different name or BIC.')
+
+    await user.click(screen.getByRole('button', { name: 'Clear search' }))
+    expect(liveSearchInput).toHaveValue('')
+    expect(await screen.findByRole('button', { name: /Volksbank Demmin/ })).toBeInTheDocument()
+
+    await user.type(liveSearchInput, 'zzz-no-such-bank')
+    await screen.findByText('No bank matches your search. Try a different name or BIC.')
+    await user.click(screen.getByRole('button', { name: 'Add a manual account instead' }))
+    expect(screen.getByRole('heading', { name: 'Add manual account' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Account name')).toHaveValue('Volksbank / Raiffeisenbank')
+  })
+})
+
+describe('top-level search reaching a concrete live bank the static catalogue does not list', () => {
+  it('offers an explicit "search the full bank directory" action only once the static list comes up empty, and resolving a match skips straight to confirmation', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:Berliner Volksbank', name: 'Berliner Volksbank', bic: 'BEVODEBBXXX' }])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    expect(screen.queryByRole('button', { name: /Search the full bank directory/ })).not.toBeInTheDocument()
+
+    await user.type(screen.getByPlaceholderText('Search institutions'), 'Berliner Volksbank')
+    const searchAction = await screen.findByRole('button', { name: /Search the full bank directory for "Berliner Volksbank"/ })
+    await user.click(searchAction)
+
+    expect(fetchProviderInstitutions).toHaveBeenCalledWith('gocardless', 'DE')
+    await user.click(await screen.findByRole('button', { name: /Berliner Volksbank/ }))
+    expect(screen.getByRole('heading', { name: 'Continue to your provider' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+    expect(startConnector).toHaveBeenCalledWith('gocardless', { institutionId: 'DE:Berliner Volksbank', institutionName: 'Berliner Volksbank', accountType: 'checking' })
+  })
+
+  it('does not offer the live-directory search action when no AIS provider is available', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (
+      provider.id === 'gocardless' || provider.id === 'enablebanking' ? { ...provider, available: false, configured: false } : provider
+    )))
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.type(screen.getByPlaceholderText('Search institutions'), 'Berliner Volksbank')
+    expect(screen.queryByRole('button', { name: /Search the full bank directory/ })).not.toBeInTheDocument()
+  })
+
+  it('shows an error with Retry when the live directory fails to load via this entry point too, distinct from the family-tile path', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderInstitutions)
+      .mockRejectedValueOnce(new Error('The bank directory could not be loaded.'))
+      .mockResolvedValueOnce([{ id: 'DE:Berliner Volksbank', name: 'Berliner Volksbank' }])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.type(screen.getByPlaceholderText('Search institutions'), 'Berliner Volksbank')
+    await user.click(await screen.findByRole('button', { name: /Search the full bank directory for "Berliner Volksbank"/ }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('The bank directory could not be loaded.')
+
+    await user.click(within(alert).getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByRole('button', { name: /Berliner Volksbank/ })).toBeInTheDocument()
+    expect(fetchProviderInstitutions).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -377,6 +549,47 @@ describe('redirect confirmation', () => {
     expect(startConnector).toHaveBeenCalledWith('finapi', { institutionId: 'trade-republic', institutionName: 'Trade Republic', accountType: 'investment' })
   })
 
+  it('shows the resolved live bank\'s own logo (via the same-origin proxy) on the Step 3 confirmation header, not the family tile\'s generic icon', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:Volksbank Köln Bonn', name: 'Volksbank Köln Bonn' }])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    await user.click(await screen.findByRole('button', { name: /Volksbank Köln Bonn/ }))
+    await screen.findByRole('heading', { name: 'Continue to your provider' })
+
+    const image = document.querySelector('.connections-institution-banner img')
+    expect(image).toHaveAttribute('src', '/api/connectors/enablebanking/logo?institutionId=DE%3AVolksbank%20K%C3%B6ln%20Bonn')
+  })
+
+  it('shows the newly resolved bank\'s own logo on the confirmation header after backing out and resolving a different bank, never the previous bank\'s (failed) image', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    // One directory fetch covering both banks -- the live-directory cache
+    // persists for the rest of the setup session by design, so a second
+    // resolution of the same family tile reuses it rather than refetching.
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([
+      { id: 'DE:Volksbank Köln Bonn', name: 'Volksbank Köln Bonn' },
+      { id: 'DE:Volksbank Demmin', name: 'Volksbank Demmin' },
+    ])
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    await user.click(await screen.findByRole('button', { name: /Volksbank Köln Bonn/ }))
+    await screen.findByRole('heading', { name: 'Continue to your provider' })
+    fireEvent.error(document.querySelector('.connections-institution-banner img')!)
+    expect(document.querySelector('.connections-institution-banner img')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    await user.click(screen.getByRole('button', { name: /^Volksbank \/ Raiffeisenbank$/ }))
+    await user.click(await screen.findByRole('button', { name: /Volksbank Demmin/ }))
+    await screen.findByRole('heading', { name: 'Continue to your provider' })
+
+    const secondImage = document.querySelector('.connections-institution-banner img')
+    expect(secondImage).toHaveAttribute('src', '/api/connectors/enablebanking/logo?institutionId=DE%3AVolksbank%20Demmin')
+  })
+
   it('uses owner-mode PayPal confirmation copy and starts the paypal provider', async () => {
     const user = userEvent.setup()
     renderConnections()
@@ -442,6 +655,163 @@ describe('redirect confirmation', () => {
     expect(screen.getByRole('heading', { name: 'Add manual account' })).toBeInTheDocument()
     expect(screen.getByLabelText('Account type')).toHaveValue('credit-card')
     expect(startConnector).not.toHaveBeenCalled()
+  })
+})
+
+describe('Enable Banking Auth Flow widget', () => {
+  it('1. stays on the setup modal and shows the secure-authorization loading state instead of navigating away when a valid embedded-auth descriptor is returned', async () => {
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:ING-DiBa', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }])
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: 'https://auth.enablebanking.com/ais/auth-1', authorizationId: 'auth-1', origin: 'https://auth.enablebanking.com', sandbox: false })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^ING/ }))
+    await user.click(await screen.findByRole('button', { name: /ING-DiBa/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+
+    expect(await screen.findByRole('heading', { name: 'Secure bank authorization' })).toBeInTheDocument()
+    expect(screen.getByText('Finance Planner never receives your online-banking credentials.')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Continue to your provider' })).not.toBeInTheDocument()
+    expect(screen.getByText('Preparing secure bank authorization…')).toBeInTheDocument()
+  })
+
+  it('does not disable the widget view behind a permanently-busy Continue button -- busy is cleared once the embedded-auth result lands', async () => {
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:ING-DiBa', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }])
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: 'https://auth.enablebanking.com/ais/auth-1', authorizationId: 'auth-1', origin: 'https://auth.enablebanking.com', sandbox: false })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^ING/ }))
+    await user.click(await screen.findByRole('button', { name: /ING-DiBa/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+    await screen.findByRole('heading', { name: 'Secure bank authorization' })
+    // The widget view's own Cancel button must be interactable, not stuck
+    // disabled by a `busy` flag that was never cleared.
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled()
+  })
+
+  it('13. backing out of the widget view and choosing a different institution shows the plain confirmation view again, never a stale widget', async () => {
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValue([{ id: 'DE:ING-DiBa', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }])
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: 'https://auth.enablebanking.com/ais/auth-1', authorizationId: 'auth-1', origin: 'https://auth.enablebanking.com', sandbox: false })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^ING/ }))
+    await user.click(await screen.findByRole('button', { name: /ING-DiBa/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+    await screen.findByRole('heading', { name: 'Secure bank authorization' })
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('heading', { name: 'Secure bank authorization' })).not.toBeInTheDocument()
+  })
+
+  it('12. closing and reopening the setup dialog never reuses a previous attempt\'s widget -- reopening starts at the institution picker', async () => {
+    vi.mocked(fetchProviderStatus).mockResolvedValue(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:ING-DiBa', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }])
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: 'https://auth.enablebanking.com/ais/auth-1', authorizationId: 'auth-1', origin: 'https://auth.enablebanking.com', sandbox: false })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^ING/ }))
+    await user.click(await screen.findByRole('button', { name: /ING-DiBa/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+    await screen.findByRole('heading', { name: 'Secure bank authorization' })
+
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    expect(screen.queryByRole('heading', { name: 'Secure bank authorization' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Choose your institution' })).toBeInTheDocument()
+  })
+
+  it('11. shows no credential-shaped input anywhere in the setup modal while the widget view is active', async () => {
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:ING-DiBa', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }])
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: 'https://auth.enablebanking.com/ais/auth-1', authorizationId: 'auth-1', origin: 'https://auth.enablebanking.com', sandbox: false })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^ING/ }))
+    await user.click(await screen.findByRole('button', { name: /ING-DiBa/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+    await screen.findByRole('heading', { name: 'Secure bank authorization' })
+
+    expect(document.querySelectorAll('.connections-setup-modal input')).toHaveLength(0)
+  })
+
+  it('15. the widget frame is a live region and the Cancel action stays a real, keyboard-reachable button', async () => {
+    vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
+    vi.mocked(fetchProviderInstitutions).mockResolvedValueOnce([{ id: 'DE:ING-DiBa', name: 'ING-DiBa', bic: 'INGDDEFFXXX' }])
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: 'https://auth.enablebanking.com/ais/auth-1', authorizationId: 'auth-1', origin: 'https://auth.enablebanking.com', sandbox: false })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^ING/ }))
+    await user.click(await screen.findByRole('button', { name: /ING-DiBa/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+    await screen.findByRole('heading', { name: 'Secure bank authorization' })
+
+    expect(document.querySelector('.connections-auth-flow-frame')).toHaveAttribute('aria-live', 'polite')
+    const cancelButton = screen.getByRole('button', { name: 'Cancel' })
+    expect(cancelButton.tagName).toBe('BUTTON')
+    cancelButton.focus()
+    expect(cancelButton).toHaveFocus()
+  })
+
+  describe('deterministic fixture states (acceptanceMode, never contacting the real widget script)', () => {
+    it('7. renders the loading shell via the enablebanking-auth-flow-loading fixture', () => {
+      renderConnections({ acceptanceMode: 'enablebanking-auth-flow-loading' })
+      expect(screen.getByRole('heading', { name: 'Secure bank authorization' })).toBeInTheDocument()
+      expect(screen.getByText('Preparing secure bank authorization…')).toBeInTheDocument()
+    })
+
+    it('8/10. renders the error fallback via the enablebanking-auth-flow-error fixture, and its fallback button redirects only to the validated redirectUrl from /start', () => {
+      const assignSpy = vi.fn()
+      const originalLocation = window.location
+      Object.defineProperty(window, 'location', { value: { ...originalLocation, assign: assignSpy }, writable: true })
+      try {
+        renderConnections({ acceptanceMode: 'enablebanking-auth-flow-error' })
+        expect(screen.getByText(/couldn.t load/)).toBeInTheDocument()
+        const fallbackButton = screen.getByRole('button', { name: 'Open secure provider page' })
+        fireEvent.click(fallbackButton)
+        expect(assignSpy).toHaveBeenCalledWith('https://tilisy-sandbox.enablebanking.com/ais/00000000-0000-0000-0000-000000000000')
+        // Never automatically redirected without this explicit user action.
+        expect(assignSpy).toHaveBeenCalledTimes(1)
+      } finally {
+        Object.defineProperty(window, 'location', { value: originalLocation, writable: true })
+      }
+    })
+
+    it('the error fixture also offers Try again, without ever calling the fallback redirect on its own', () => {
+      renderConnections({ acceptanceMode: 'enablebanking-auth-flow-error' })
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+    })
+
+    // Regression coverage (correctness review, 2026-08-22): the Back-arrow
+    // collapse handler used to clear embeddedAuthFlow but not
+    // authFlowFixtureStatus, so backing out of a fixture-error widget view
+    // and then starting a REAL Enable Banking attempt right after left the
+    // real widget permanently short-circuited into the stale fixture's
+    // 'error' status -- it would never even attempt to load. Only reachable
+    // in a VITE_ACCEPTANCE_FIXTURES=true build, but a genuine state leak.
+    it('backing out of the error fixture and then starting a real attempt does not leave the real widget stuck in the fixture\'s error status', async () => {
+      const user = userEvent.setup()
+      vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: 'https://auth.enablebanking.com/ais/real-auth', authorizationId: 'real-auth', origin: 'https://auth.enablebanking.com', sandbox: false })
+      renderConnections({ acceptanceMode: 'enablebanking-auth-flow-error' })
+      expect(screen.getByText(/couldn.t load/)).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: 'Back' }))
+      expect(screen.queryByText(/couldn.t load/)).not.toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Continue securely' }))
+
+      await screen.findByRole('heading', { name: 'Secure bank authorization' })
+      // Must show the real widget's own initial loading state, never the
+      // stale fixture's error state carried over from before Back.
+      expect(screen.getByText('Preparing secure bank authorization…')).toBeInTheDocument()
+      expect(screen.queryByText(/couldn.t load/)).not.toBeInTheDocument()
+    })
   })
 })
 

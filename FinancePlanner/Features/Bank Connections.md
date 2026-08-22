@@ -52,4 +52,12 @@ Verification state: **implemented / not runtime or production verified — no ev
 
 [[GoCardless]] (in [[Providers Index]]) holds the atomic verification-status breakdown; [[Bank Connection Flow]], [[Bank Consent Flow]], [[Bank Sync Flow]], [[Bank Disconnect Flow]] (in [[Flows Index]]) hold the step-by-step sequences; [[Banking Core Module]] and its responsibility nodes (in [[COBOL Index]]) hold the deterministic validation detail.
 
-Related: [[Enable Banking]], [[GoCardless]], [[PayPal]], [[COBOL Domain Core]], [[Provider Status]], [[Architecture Decisions]], [[Providers Index]], [[Flows Index]], [[Provider Institution Selection Contract]], [[Connections Page]]
+## Bank-family picker tiles vs. exact ASPSP (2026-08-21)
+
+See [[Bank Family Directory Resolution]] for the full fix: a "Volksbank / Raiffeisenbank"/"Sparkasse"-style picker tile is a Finance Planner UX grouping, not a real bank identity, and the resolution step that follows it now opens on a real, family-scoped subset of the live provider directory rather than a broken literal-label search.
+
+## Enable Banking transaction-contract fixes (2026-08-22)
+
+Ahead of a planned real Enable Banking Mock ASPSP sandbox test (no real bank credentials — see [[Enable Banking]]), review found three provider-contract bugs in `EnableBankingProvider.sync()`'s transaction mapping, all confirmed against current official documentation: `transaction_amount.amount` is absolute, not signed (`credit_debit_indicator`'s `CRDT`/`DBIT` carries direction); `entry_reference`, not `transaction_id`, is the documented ASPSP transaction identifier (now namespaced by `account.uid` since cross-account uniqueness isn't documented); and the pending status value is `PDNG`, not `PEND`. Full detail and fix rationale in [[Enable Banking]]. **Implemented / locally verified only** — not yet exercised against a real Enable Banking session of any kind.
+
+Related: [[Enable Banking]], [[GoCardless]], [[PayPal]], [[COBOL Domain Core]], [[Provider Status]], [[Architecture Decisions]], [[Providers Index]], [[Flows Index]], [[Provider Institution Selection Contract]], [[Connections Page]], [[Bank Family Directory Resolution]]

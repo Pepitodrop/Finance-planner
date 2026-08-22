@@ -18,26 +18,48 @@ export interface Institution {
   kind: InstitutionKind
   aliases?: string[]
   accountTypeRequired?: boolean
+  // Only used to compute the *initial* (blank-query) view of a live AIS
+  // provider directory once this tile is chosen -- never sent to a provider
+  // as a search query, and never used to validate/guess the institution id
+  // that actually gets submitted (see connectionsModel.ts's
+  // familyFilteredInstitutions()). A tile with several real ASPSPs behind it
+  // (a cooperative banking group like Sparkasse or Volksbank/Raiffeisenbank)
+  // lists the terms that identify that family in a live directory entry's
+  // name or `group.name` (e.g. Enable Banking's ASPSPGroup.name); a tile for
+  // one concrete bank lists that bank's own real, curated name so the
+  // directory view opens already narrowed to it instead of showing the
+  // entire country's bank list.
+  directoryTerms?: string[]
 }
 
 export const commonInstitutions: Institution[] = [
-  { id: 'sparkasse', name: 'Sparkasse', provider: 'ais', popular: true, kind: 'bank', aliases: ['Kreissparkasse', 'Stadtsparkasse'] },
-  { id: 'volksbank', name: 'Volksbank / Raiffeisenbank', provider: 'ais', popular: true, kind: 'bank', aliases: ['VR Bank', 'Raiffeisen'] },
-  { id: 'ing', name: 'ING', bic: 'INGDDEFFXXX', blz: '50010517', provider: 'ais', popular: true, kind: 'bank', aliases: ['ING-DiBa'] },
-  { id: 'dkb', name: 'DKB', bic: 'BYLADEM1001', blz: '12030000', provider: 'ais', popular: true, kind: 'bank', aliases: ['Deutsche Kreditbank'] },
-  { id: 'comdirect', name: 'Comdirect', bic: 'COBADEHDXXX', blz: '20041111', provider: 'ais', popular: true, kind: 'bank' },
-  { id: 'deutsche-bank', name: 'Deutsche Bank', bic: 'DEUTDEFFXXX', provider: 'ais', popular: true, kind: 'bank' },
-  { id: 'postbank', name: 'Postbank', bic: 'PBNKDEFFXXX', provider: 'ais', popular: true, kind: 'bank' },
-  { id: 'commerzbank', name: 'Commerzbank', bic: 'COBADEFFXXX', provider: 'ais', popular: true, kind: 'bank' },
-  { id: 'n26', name: 'N26', bic: 'NTSBDEB1XXX', provider: 'ais', popular: true, kind: 'bank' },
-  { id: 'hypovereinsbank', name: 'UniCredit Bank – HypoVereinsbank', bic: 'HYVEDEMMXXX', provider: 'ais', popular: true, kind: 'bank', aliases: ['HVB', 'Hypovereinsbank', 'UniCredit'] },
+  { id: 'sparkasse', name: 'Sparkasse', provider: 'ais', popular: true, kind: 'bank', aliases: ['Kreissparkasse', 'Stadtsparkasse'], directoryTerms: ['sparkasse'] },
+  { id: 'volksbank', name: 'Volksbank / Raiffeisenbank', provider: 'ais', popular: true, kind: 'bank', aliases: ['VR Bank', 'Raiffeisen'], directoryTerms: ['volksbank', 'raiffeisenbank', 'vr bank'] },
+  // directoryTerms deliberately excludes a bare "ing" term: German city names
+  // ending "-ingen" (Reutlingen, Esslingen, Tübingen, ...) are common in
+  // Sparkasse/Volksbank branch names, so a 3-letter substring would pull in
+  // many unrelated banks -- the same noisy-list failure mode this field
+  // exists to avoid. familyFilteredInstitutions() already falls back to the
+  // full directory if "ing-diba" matches nothing, so nothing is hidden.
+  { id: 'ing', name: 'ING', bic: 'INGDDEFFXXX', blz: '50010517', provider: 'ais', popular: true, kind: 'bank', aliases: ['ING-DiBa'], directoryTerms: ['ing-diba'] },
+  { id: 'dkb', name: 'DKB', bic: 'BYLADEM1001', blz: '12030000', provider: 'ais', popular: true, kind: 'bank', aliases: ['Deutsche Kreditbank'], directoryTerms: ['dkb', 'deutsche kreditbank'] },
+  { id: 'comdirect', name: 'Comdirect', bic: 'COBADEHDXXX', blz: '20041111', provider: 'ais', popular: true, kind: 'bank', directoryTerms: ['comdirect'] },
+  { id: 'deutsche-bank', name: 'Deutsche Bank', bic: 'DEUTDEFFXXX', provider: 'ais', popular: true, kind: 'bank', directoryTerms: ['deutsche bank'] },
+  { id: 'postbank', name: 'Postbank', bic: 'PBNKDEFFXXX', provider: 'ais', popular: true, kind: 'bank', directoryTerms: ['postbank'] },
+  { id: 'commerzbank', name: 'Commerzbank', bic: 'COBADEFFXXX', provider: 'ais', popular: true, kind: 'bank', directoryTerms: ['commerzbank'] },
+  { id: 'n26', name: 'N26', bic: 'NTSBDEB1XXX', provider: 'ais', popular: true, kind: 'bank', directoryTerms: ['n26'] },
+  { id: 'hypovereinsbank', name: 'UniCredit Bank – HypoVereinsbank', bic: 'HYVEDEMMXXX', provider: 'ais', popular: true, kind: 'bank', aliases: ['HVB', 'Hypovereinsbank', 'UniCredit'], directoryTerms: ['hypovereinsbank', 'unicredit bank'] },
   { id: 'paypal', name: 'PayPal', provider: 'paypal', popular: true, kind: 'wallet', aliases: ['Wallet'] },
   { id: 'trade-republic', name: 'Trade Republic', provider: 'finapi', popular: true, kind: 'broker', accountTypeRequired: true, aliases: ['Depot', 'Broker'] },
   { id: 'credit-card', name: 'Kreditkarte manuell', provider: 'manual', kind: 'card', accountTypeRequired: true, aliases: ['Visa', 'Mastercard', 'Amex', 'American Express'] },
   { id: 'manual', name: 'Virtuelles / manuelles Konto', provider: 'manual', kind: 'manual', accountTypeRequired: true, aliases: ['Bargeld', 'Offline', 'Virtuell'] },
 ]
 
-function normalize(value: string): string {
+// Exported so connectionsModel.ts can apply the identical normalization to
+// live provider-directory entries (name/BIC/group name) -- one definition of
+// "forgiving" search for the whole institution-selection surface, not two
+// that could quietly drift apart.
+export function normalize(value: string): string {
   return value
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')

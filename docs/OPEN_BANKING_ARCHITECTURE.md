@@ -25,6 +25,8 @@ A replacement licensed PSD2 AISP can be added as another adapter without changin
 
 **Implemented, not provider or production verified.** The flow below is correct for GoCardless, PayPal, and Google subscriptions alike — the choreography and the security invariant (credentials/tokens only ever touch the server) are real and code-reviewed, but no completed live consent→sync→disconnect cycle against a real provider is evidenced in-repo; see `docs/issue-105-live-verification.md` and the project's Provider Status notes.
 
+**Enable Banking's redirect_url differs from the diagram below in one respect** (fixed 2026-08-21 after a live `REDIRECT_URI_NOT_ALLOWED` rejection from the real sandbox): its Control Panel validates the submitted redirect_url as an exact, bare string with no query parameters, so it receives a canonical `{APP_ORIGIN}/api/connectors/callback` with no `?provider=`/`?state=` baked in (`providers.js`'s `canonicalCallbackUrl()`) — the server derives which provider a callback belongs to from the verified `state` payload itself instead. GoCardless, PayPal, and Google subscriptions are unaffected and still match the diagram exactly.
+
 ```mermaid
 sequenceDiagram
   participant B as Browser

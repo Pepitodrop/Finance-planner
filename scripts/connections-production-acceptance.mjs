@@ -27,6 +27,15 @@ const MODES = [
   ['attention', 'Connection needs attention'],
   ['manual', 'Add manual account'],
   ['statement-preview', 'finance_statement_march.csv'],
+  // Deterministic Enable Banking Auth Flow widget shell states -- never
+  // contact the real auth.enablebanking.com script or a real authorization
+  // id (see EnableBankingAuthFlow's fixtureStatus prop). Widget `ready` (the
+  // actual third-party custom element rendering interactively) is
+  // intentionally not covered here -- exercising it for real requires the
+  // live script and a live authorization id, which this harness must not
+  // depend on.
+  ['enablebanking-auth-flow-loading', 'Secure bank authorization'],
+  ['enablebanking-auth-flow-error', 'Secure bank authorization'],
 ]
 
 async function firstExecutable(candidates) {
@@ -288,13 +297,13 @@ async function capture(client, sessionId, mode, expectedText, width, height, suf
   assert.equal(assertions.finalScrollReached, true)
   assert.equal(assertions.dialogContained, true)
 
-  const setupModes = new Set(['institution-selector', 'institution-search', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'manual', 'provider-unavailable', 'paypal-unconfigured'])
+  const setupModes = new Set(['institution-selector', 'institution-search', 'account-type', 'bank-confirmation', 'paypal-confirmation', 'manual', 'provider-unavailable', 'paypal-unconfigured', 'enablebanking-auth-flow-loading', 'enablebanking-auth-flow-error'])
   assert.equal(assertions.dialogOpen, setupModes.has(mode))
   if (mode === 'institution-search') assert.equal(assertions.searchValue, 'bank')
   if (mode === 'sync-selection') assert.equal(assertions.selectedAccounts, 3)
   if (mode === 'institution-selector' || mode === 'institution-search' || mode === 'provider-unavailable') assert.equal(assertions.setupStep, 'Step 1 of 3')
   if (mode === 'account-type') assert.equal(assertions.setupStep, 'Step 2 of 3')
-  if (mode === 'bank-confirmation' || mode === 'paypal-confirmation' || mode === 'paypal-unconfigured') assert.equal(assertions.setupStep, 'Step 3 of 3')
+  if (mode === 'bank-confirmation' || mode === 'paypal-confirmation' || mode === 'paypal-unconfigured' || mode === 'enablebanking-auth-flow-loading' || mode === 'enablebanking-auth-flow-error') assert.equal(assertions.setupStep, 'Step 3 of 3')
   if (mode === 'institution-selector' || mode === 'institution-search' || mode === 'provider-unavailable') {
     assert.equal(assertions.categoryPillsFullyReachable, true, `category pills clipped at ${mode} ${width}x${height}`)
     assert.equal(assertions.touchTargetsOk, true, `touch target under 44px at ${mode} ${width}x${height}`)

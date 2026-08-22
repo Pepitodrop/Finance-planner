@@ -1,0 +1,253 @@
+/*
+ * Finance Planner presentation layer for Enable Banking's official Auth Flow
+ * widget. Enable Banking documents that the auth-flow widget's default CSS can
+ * be overridden by the host page. These rules are deliberately scoped to the
+ * widget shell and only change presentation: Finance Planner never reads,
+ * mutates or logs credential values or provider event payloads.
+ */
+.connections-auth-flow-widget-shell {
+  display: grid;
+  gap: var(--fp-space-3);
+  width: 100%;
+  min-width: 0;
+}
+
+.connections-auth-flow-sandbox-note {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: .2rem var(--fp-space-2);
+  align-items: start;
+  padding: var(--fp-space-3);
+  border: 1px solid var(--fp-color-warning);
+  border-radius: var(--fp-radius-control);
+  background: var(--fp-color-warning-muted);
+  color: var(--fp-color-text-primary);
+  font-size: var(--fp-font-size-supporting);
+  line-height: var(--fp-line-height-body);
+}
+
+.connections-auth-flow-sandbox-note::before {
+  content: 'TEST';
+  grid-row: 1 / span 2;
+  align-self: center;
+  padding: .2rem .45rem;
+  border-radius: 999px;
+  background: var(--fp-color-warning);
+  color: #111827;
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .05em;
+}
+
+.connections-auth-flow-sandbox-note strong,
+.connections-auth-flow-sandbox-note span {
+  min-width: 0;
+}
+
+.connections-auth-flow-sandbox-note span {
+  color: var(--fp-color-text-secondary);
+}
+
+/* The shared Connections stylesheet owns the modal shell. This feature-level
+   layer only tightens the provider surface so it feels native without hiding
+   or replacing any provider-owned content. */
+.connections-auth-flow-step .connections-auth-flow-frame {
+  place-items: stretch;
+  min-height: 0;
+  padding: var(--fp-space-3);
+  overflow: visible;
+}
+
+.connections-auth-flow-widget {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.connections-auth-flow-widget enablebanking-auth-flow {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  color: var(--fp-color-text-primary);
+  font: inherit;
+  line-height: var(--fp-line-height-body);
+}
+
+/* Enable Banking exposes semantic classes for the auth-flow UI and states
+   that the widget CSS may be overridden. Keep the styling broad enough to
+   cover the consent/auth/OTP/account-selection stages, but strictly scoped
+   to the official custom element. */
+.connections-auth-flow-widget enablebanking-auth-flow *,
+.connections-auth-flow-widget enablebanking-auth-flow *::before,
+.connections-auth-flow-widget enablebanking-auth-flow *::after {
+  box-sizing: border-box;
+}
+
+.connections-auth-flow-widget enablebanking-auth-flow form,
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-auth-form,
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-otp-form,
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-account-selection-form {
+  display: grid;
+  gap: var(--fp-space-3);
+  width: 100%;
+  margin: 0;
+}
+
+.connections-auth-flow-widget enablebanking-auth-flow label,
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-auth-credential-row,
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-auth-credential-col {
+  display: grid;
+  gap: var(--fp-space-1);
+  color: var(--fp-color-text-secondary);
+  font: inherit;
+}
+
+.connections-auth-flow-widget enablebanking-auth-flow input,
+.connections-auth-flow-widget enablebanking-auth-flow select,
+.connections-auth-flow-widget enablebanking-auth-flow textarea,
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-auth-credential-input,
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-auth-method-select,
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-otp-input {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--fp-touch-target);
+  padding: .7rem .8rem;
+  border: 1px solid var(--fp-color-border);
+  border-radius: var(--fp-radius-control);
+  outline: none;
+  background: var(--fp-color-surface-interactive);
+  color: var(--fp-color-text-primary);
+  font: inherit;
+  transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
+}
+
+.connections-auth-flow-widget enablebanking-auth-flow input:focus,
+.connections-auth-flow-widget enablebanking-auth-flow select:focus,
+.connections-auth-flow-widget enablebanking-auth-flow textarea:focus,
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-auth-credential-input:focus,
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-auth-method-select:focus,
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-otp-input:focus {
+  border-color: var(--fp-color-accent);
+  box-shadow: 0 0 0 3px var(--fp-color-accent-muted);
+}
+
+/* Firefox/Chromium autofill should not turn banking fields into a visually
+   unrelated bright/olive block. This changes paint only; it does not inspect
+   the field value. */
+.connections-auth-flow-widget enablebanking-auth-flow input:autofill,
+.connections-auth-flow-widget enablebanking-auth-flow input:-webkit-autofill {
+  -webkit-text-fill-color: var(--fp-color-text-primary);
+  caret-color: var(--fp-color-text-primary);
+  box-shadow: 0 0 0 1000px var(--fp-color-surface-interactive) inset;
+}
+
+.connections-auth-flow-widget enablebanking-auth-flow button,
+.connections-auth-flow-widget enablebanking-auth-flow input[type='submit'] {
+  min-height: var(--fp-touch-target);
+  padding: .65rem 1rem;
+  border: 1px solid var(--fp-color-border-strong);
+  border-radius: var(--fp-radius-control);
+  background: var(--fp-color-surface-interactive);
+  color: var(--fp-color-text-primary);
+  font: inherit;
+  font-weight: var(--fp-font-weight-semibold);
+  cursor: pointer;
+}
+
+.connections-auth-flow-widget enablebanking-auth-flow button:hover:not(:disabled),
+.connections-auth-flow-widget enablebanking-auth-flow input[type='submit']:hover:not(:disabled) {
+  background: var(--fp-color-surface-hover);
+}
+
+.connections-auth-flow-widget enablebanking-auth-flow button:focus-visible,
+.connections-auth-flow-widget enablebanking-auth-flow input[type='submit']:focus-visible {
+  outline: 2px solid var(--fp-color-accent);
+  outline-offset: 2px;
+}
+
+.connections-auth-flow-widget enablebanking-auth-flow button:disabled,
+.connections-auth-flow-widget enablebanking-auth-flow input[type='submit']:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.connections-auth-flow-widget enablebanking-auth-flow button[type='submit'],
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-auth-submit-button,
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-otp-submit-button,
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-account-selection-submit-button {
+  border-color: var(--fp-color-accent);
+  background: var(--fp-color-accent);
+  color: #fff;
+  box-shadow: 0 8px 24px var(--fp-color-accent-muted);
+}
+
+.connections-auth-flow-widget enablebanking-auth-flow button[type='submit']:hover:not(:disabled),
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-auth-submit-button:hover:not(:disabled),
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-otp-submit-button:hover:not(:disabled),
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-account-selection-submit-button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-cancel-button {
+  border-color: var(--fp-color-border);
+  background: transparent;
+  color: var(--fp-color-text-secondary);
+  box-shadow: none;
+}
+
+.connections-auth-flow-widget enablebanking-auth-flow a {
+  color: var(--fp-color-accent);
+  text-underline-offset: .16em;
+}
+
+.connections-auth-flow-widget enablebanking-auth-flow p,
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-auth-credential-description,
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-status-info,
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-status-message {
+  overflow-wrap: anywhere;
+  color: var(--fp-color-text-secondary);
+}
+
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-status-error {
+  padding: var(--fp-space-3);
+  border: 1px solid var(--fp-color-expense);
+  border-radius: var(--fp-radius-control);
+  background: var(--fp-color-expense-muted);
+  color: var(--fp-color-text-primary);
+}
+
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-qrcode-container {
+  display: grid;
+  place-items: center;
+  padding: var(--fp-space-3);
+  border-radius: var(--fp-radius-panel);
+  background: #fff;
+}
+
+.connections-auth-flow-widget enablebanking-auth-flow .enablebanking-qrcode-image {
+  max-width: min(100%, 20rem);
+  height: auto;
+}
+
+@media (max-width: 520px) {
+  .connections-auth-flow-sandbox-note {
+    grid-template-columns: 1fr;
+  }
+
+  .connections-auth-flow-sandbox-note::before {
+    grid-row: auto;
+    justify-self: start;
+  }
+
+  .connections-auth-flow-step .connections-auth-flow-frame {
+    padding: var(--fp-space-2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connections-auth-flow-widget enablebanking-auth-flow input,
+  .connections-auth-flow-widget enablebanking-auth-flow select,
+  .connections-auth-flow-widget enablebanking-auth-flow textarea {
+    transition: none;
+  }
+}

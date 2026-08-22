@@ -1,0 +1,80 @@
+{
+  "_purpose": "Deterministic, entirely synthetic EUR test data for Enable Banking's Mock ASPSP sandbox (https://enablebanking.com/docs -- Mock ASPSP is available in all countries, requires no credentials, and is configurable through the Enable Banking Control Panel). Enable Banking's own official sample dataset is DKK; Finance Planner imports EUR, so this dataset was built fresh rather than adapted from it. Contains no real personal or bank information -- every name, IBAN-shaped value, and identifier below is fabricated for this test only.",
+  "_shape": "Shaped as Enable Banking account-information API response objects (account, balance, transaction) using the field names confirmed against the current official API reference during this pass: transaction_amount.amount is an ABSOLUTE decimal string, credit_debit_indicator (CRDT/DBIT) carries direction, entry_reference is the ASPSP transaction identifier, status is BOOK (booked) or PDNG (pending). This is NOT a confirmed Enable Banking Control Panel bulk-import format -- no such schema was available to derive from -- it is a manual-configuration reference and a reusable fixture shape for tests.",
+  "account": {
+    "uid": "mock-aspsp-test-girokonto-001",
+    "name": "Finance Planner Test Girokonto",
+    "currency": "EUR",
+    "cash_account_type": "CACC"
+  },
+  "balance": {
+    "balance_amount": { "currency": "EUR", "amount": "6959.50" },
+    "balance_type": "CLBD"
+  },
+  "transactions": [
+    {
+      "entry_reference": "mock-tx-001",
+      "status": "BOOK",
+      "credit_debit_indicator": "CRDT",
+      "transaction_amount": { "currency": "EUR", "amount": "2500.00" },
+      "booking_date": "2026-08-01",
+      "remittance_information": ["Salary"]
+    },
+    {
+      "entry_reference": "mock-tx-002",
+      "status": "BOOK",
+      "credit_debit_indicator": "DBIT",
+      "transaction_amount": { "currency": "EUR", "amount": "90.00" },
+      "booking_date": "2026-08-03",
+      "remittance_information": ["REWE"]
+    },
+    {
+      "entry_reference": "mock-tx-003",
+      "status": "BOOK",
+      "credit_debit_indicator": "DBIT",
+      "transaction_amount": { "currency": "EUR", "amount": "49.99" },
+      "booking_date": "2026-08-05",
+      "remittance_information": ["Internet"]
+    },
+    {
+      "entry_reference": "mock-tx-004",
+      "status": "BOOK",
+      "credit_debit_indicator": "DBIT",
+      "transaction_amount": { "currency": "EUR", "amount": "120.00" },
+      "booking_date": "2026-08-08",
+      "remittance_information": ["Restaurant"]
+    },
+    {
+      "entry_reference": "mock-tx-005",
+      "status": "BOOK",
+      "credit_debit_indicator": "CRDT",
+      "transaction_amount": { "currency": "EUR", "amount": "50.00" },
+      "booking_date": "2026-08-10",
+      "remittance_information": ["Refund"]
+    },
+    {
+      "entry_reference": "mock-tx-006-pending",
+      "status": "PDNG",
+      "credit_debit_indicator": "DBIT",
+      "transaction_amount": { "currency": "EUR", "amount": "15.00" },
+      "booking_date": "2026-08-12",
+      "remittance_information": ["Pending card authorization"]
+    }
+  ],
+  "_expected_normalized_amountsCents": {
+    "mock-tx-001": 250000,
+    "mock-tx-002": -9000,
+    "mock-tx-003": -4999,
+    "mock-tx-004": -12000,
+    "mock-tx-005": 5000,
+    "mock-tx-006-pending": -1500
+  },
+  "_expected_pending": {
+    "mock-tx-001": false,
+    "mock-tx-002": false,
+    "mock-tx-003": false,
+    "mock-tx-004": false,
+    "mock-tx-005": false,
+    "mock-tx-006-pending": true
+  }
+}

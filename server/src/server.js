@@ -13,8 +13,9 @@ import { createFinanceRouter } from './finance-router.js'
 import { createGoogleSubscriptionsRouter } from './google-subscriptions-router.js'
 import { OperationalMetrics } from './operational-metrics.js'
 import { authorizeProviderUser, describeProviderForUser } from './provider-access.js'
+import { callbackHasCompletionSignal, completedConnectionMatchesState } from './provider-callback.js'
 import { createOpenBankingProviderRegistry } from './providers.js'
-import { HttpError, SlidingWindowRateLimiter, classifyError, clientIp, requestId, validateProductionConfig } from './runtime-security.js'
+import { HttpError, SlidingWindowRateLimiter, classifyError, clientIp, rateLimitTier, requestId, validateProductionConfig } from './runtime-security.js'
 import { bearerToken, createSession, issueState, verifySessionClaims, verifyState } from './security.js'
 import { SessionRevocationRegistry } from './session-revocation.js'
 import { PostgresUserStateStore } from './user-state-store.js'
@@ -50,15 +51,28 @@ let ready = true
 let shuttingDown = false
 const generalLimit = Number(env.RATE_LIMIT_PER_MINUTE || 120)
 const sensitiveLimit = Number(env.SENSITIVE_RATE_LIMIT_PER_MINUTE || 20)
+// Dedicated tier for the institution-logo proxy (found live 2026-08-21):
+// every route under /api/connectors/ -- including this decorative,
+// non-sensitive image endpoint -- was sharing the *sensitive* bucket with
+// POST /start, sync and disconnect. The production sensitive limit (20/min)
+// is sized for those genuinely security-relevant operations; a normal user
+// scrolling a real bank directory can trigger dozens of logo fetches well
+// within a minute and starve /start for everyone sharing that client key,
+// exactly as observed. A generous but still real limit -- high enough that
+// ordinary browsing never trips it, low enough to still bound abuse/DoS
+// amplification against Enable Banking's own CDN through this proxy.
+const assetLimit = Number(env.ASSET_RATE_LIMIT_PER_MINUTE || 240)
 const distributedLimiters = createRateLimiters({
   persistence,
   generalLimit,
   sensitiveLimit,
+  assetLimit,
   windowMs: 60_000,
   requireDistributed: env.NODE_ENV === 'production' && env.PUBLIC_DEPLOYMENT === 'true',
 })
 const generalLimiter = distributedLimiters?.general || new SlidingWindowRateLimiter({ limit: generalLimit, windowMs: 60_000 })
 const sensitiveLimiter = distributedLimiters?.sensitive || new SlidingWindowRateLimiter({ limit: sensitiveLimit, windowMs: 60_000 })
+const assetLimiter = distributedLimiters?.assets || new SlidingWindowRateLimiter({ limit: assetLimit, windowMs: 60_000 })
 const activeSyncs = new Map()
 const syncReplayCache = new Map()
 const SYNC_REPLAY_TTL_MS = 2 * 60_000
@@ -153,9 +167,9 @@ function cors(request, response) {
 
 async function rateLimit(request, response, pathname) {
   const remote = env.TRUST_PROXY === 'true' ? clientIp(request) : request.socket?.remoteAddress || 'unknown'
-  const sensitive = /^\/api\/(auth|session|connectors|subscriptions|finance|ai)/.test(pathname)
-  const limiter = sensitive ? sensitiveLimiter : generalLimiter
-  const result = await limiter.consume(`${remote}:${sensitive ? 'sensitive' : 'general'}`)
+  const tier = rateLimitTier(pathname)
+  const limiter = tier === 'asset' ? assetLimiter : tier === 'sensitive' ? sensitiveLimiter : generalLimiter
+  const result = await limiter.consume(`${remote}:${tier}`)
   response.setHeader('RateLimit-Limit', limiter.limit)
   response.setHeader('RateLimit-Remaining', result.remaining)
   response.setHeader('RateLimit-Reset', Math.ceil(result.resetAt / 1000))
@@ -207,7 +221,11 @@ async function start(provider, request, response) {
   if (!/^[A-Z]{2}$/.test(country)) throw new HttpError(400, 'invalid_country', 'Invalid country code.')
   const consentId = randomUUID()
   const state = issueState(user, provider, sessionSecret, { consentId, redirectUri: redirect.toString() })
-  const claims = verifyState(state, provider, sessionSecret)
+  // Self-check that what was just issued round-trips and is bound to this
+  // exact provider -- verifyState() itself no longer takes an expected
+  // provider (see security.js), so the binding is asserted explicitly here.
+  const claims = verifyState(state, sessionSecret)
+  if (claims.provider !== provider) throw new Error('Issued consent state is not bound to the requested provider.')
   const result = await adapter.start({ state, redirectUri: redirect.toString(), country, institutionId })
   // Pending, not yet live -- a currently-working connection for this
   // provider (reconnect case) must not be overwritten until the callback
@@ -222,7 +240,17 @@ async function start(provider, request, response) {
     expiresAt: claims.exp * 1000,
     connection: { ...result.credential, consentId, redirectUri: redirect.toString(), state, createdAt: new Date().toISOString() },
   })
-  send(response, 200, { redirectUrl: result.redirectUrl })
+  // result.authFlow is only ever set by EnableBankingProvider.start(), and
+  // only after its own validation against the trusted provider response
+  // (see providers.js) -- GoCardless/PayPal never set it, so this never
+  // changes their response shape. Explicitly whitelists the four fields
+  // rather than spreading result.authFlow verbatim, so a future field added
+  // to that object can never reach the client without a deliberate change
+  // here too.
+  const authFlow = result.authFlow
+    ? { provider: result.authFlow.provider, authorizationId: result.authFlow.authorizationId, origin: result.authFlow.origin, sandbox: Boolean(result.authFlow.sandbox) }
+    : undefined
+  send(response, 200, { redirectUrl: result.redirectUrl, ...(authFlow ? { authFlow } : {}) })
 }
 
 async function buildSyncPayload(user) {
@@ -388,6 +416,26 @@ const server = createServer(async (request, response) => {
       const institutions = await adapter.institutionDirectory(country)
       return send(response, 200, { institutions })
     }
+    // Same-origin institution-logo proxy: the browser never names a logo
+    // URL directly, only an institutionId, which the adapter re-resolves
+    // against its own live directory before ever fetching anything (see
+    // EnableBankingProvider.institutionLogoUrl()/fetchInstitutionLogo() --
+    // HTTPS-only, exact provider hostname allowlist, bounded size/timeout/
+    // redirects, raster-image-only Content-Type allowlist). Lets the
+    // frontend render real bank logos without ever needing `img-src` to
+    // allow an arbitrary provider-controlled host.
+    const logoMatch = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})\/logo$/)
+    if (request.method === 'GET' && logoMatch) {
+      const user = userId(request)
+      const adapter = providerAdapter(logoMatch[1])
+      authorizeProviderUser(adapter, user, env)
+      const institutionId = typeof url.searchParams.get('institutionId') === 'string' ? url.searchParams.get('institutionId').trim().slice(0, 128) : ''
+      if (!institutionId) throw new HttpError(400, 'institution_required', 'Select a bank before requesting its logo.')
+      const image = await adapter.fetchInstitutionLogo(institutionId)
+      if (!image) throw new HttpError(404, 'logo_unavailable', 'No logo is available for this institution.')
+      response.writeHead(200, { ...securityHeaders(image.contentType), 'Cache-Control': 'public, max-age=86400, immutable' })
+      return response.end(image.body)
+    }
     const match = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})\/start$/)
     if (request.method === 'POST' && match) return await start(match[1], request, response)
     if (request.method === 'POST' && url.pathname === '/api/connectors/sync') return await sync(request, response)
@@ -416,15 +464,15 @@ const server = createServer(async (request, response) => {
       return send(response, 200, { disconnected: true, providerRevoked, providerRevokeReason })
     }
     if (request.method === 'GET' && url.pathname === '/api/connectors/callback') {
-      // A real provider return (or a forged/expired/replayed/malformed hit on
-      // this URL) must never dead-end in raw JSON -- the user is mid-flow in
-      // their browser, not calling an API client. Every failure here redirects
-      // back into the app with a fixed, safe error code/description (never a
-      // caller-supplied string) so ConnectionsPage's existing error handling
-      // can show it. Redirect to state.redirectUri when it's known and
-      // cryptographically verified (state parsed successfully); otherwise fall
-      // back to the app origin.
-      const provider = String(url.searchParams.get('provider') || '')
+      // Provider completion is represented by OAuth-compatible query signals:
+      // a code on success, or an error on denial/failure. The embedded Enable
+      // Banking widget can also navigate to the registered callback without
+      // either signal; that auxiliary navigation must not consume the nonce.
+      const hasCompletionSignal = callbackHasCompletionSignal(url)
+      const redirectWithoutError = (target) => {
+        response.writeHead(302, { Location: new URL(target).toString(), 'Cache-Control': 'no-store', 'X-Request-ID': id })
+        response.end()
+      }
       const redirectWithError = (target, errorCode = 'invalid_state') => {
         const location = new URL(target)
         location.searchParams.set('error', errorCode)
@@ -433,15 +481,29 @@ const server = createServer(async (request, response) => {
         response.end()
       }
       let state
+      let provider
       try {
+        state = verifyState(url.searchParams.get('state'), sessionSecret)
+        provider = state.provider
         providerAdapter(provider)
-        state = verifyState(url.searchParams.get('state'), provider, sessionSecret)
       } catch {
+        // A navigation with no code/error is not a completion attempt. It is
+        // safe to return to the application without surfacing an error, and
+        // crucially it never reaches nonce consumption. A callback carrying a
+        // code/error still requires a valid signed state and fails closed.
+        if (!hasCompletionSignal) {
+          redirectWithoutError(origin)
+          return
+        }
         redirectWithError(origin)
         return
       }
       if (!state.consentId || !state.redirectUri) {
         redirectWithError(origin)
+        return
+      }
+      if (!hasCompletionSignal) {
+        redirectWithoutError(state.redirectUri)
         return
       }
       // Two provider-agnostic steps, never one -- see providers.js's
@@ -463,8 +525,16 @@ const server = createServer(async (request, response) => {
         return
       }
       if (!pending) {
-        redirectWithError(state.redirectUri)
-        return
+        let replayed = false
+        try {
+          const stored = await store.get(state.sub, provider)
+          replayed = completedConnectionMatchesState(stored, state, provider)
+        } catch {}
+        if (!replayed) { redirectWithError(state.redirectUri); return }
+        const success = new URL(state.redirectUri)
+        success.searchParams.set('provider', provider)
+        response.writeHead(302, { Location: success.toString(), 'Cache-Control': 'no-store', 'X-Request-ID': id })
+        return response.end()
       }
       let completed
       try {
@@ -503,7 +573,23 @@ const server = createServer(async (request, response) => {
     send(response, 404, { error: { code: 'not_found', message: 'Not found.' }, requestId: id })
   } catch (error) {
     const failure = classifyError(error)
-    if (failure.status >= 500) console.error(JSON.stringify({ level: 'error', requestId: id, error: error instanceof Error ? error.stack : String(error) }))
+    if (failure.status >= 500) {
+      // providerStatus/providerCode/providerMessage (see jsonFetch() in
+      // providers.js) are the upstream provider's own returned HTTP status
+      // and error payload -- never anything Finance Planner sent, so safe
+      // to log even though the client only ever sees the generic message
+      // above. This is what makes a provider-contract rejection (e.g. an
+      // invalid POST /auth body) diagnosable from logs instead of
+      // indistinguishable from an actual internal crash.
+      console.error(JSON.stringify({
+        level: 'error',
+        requestId: id,
+        error: error instanceof Error ? error.stack : String(error),
+        ...(typeof error?.status === 'number' ? { providerStatus: error.status } : {}),
+        ...(error?.providerCode ? { providerCode: error.providerCode } : {}),
+        ...(error?.providerMessage ? { providerMessage: error.providerMessage } : {}),
+      }))
+    }
     send(response, failure.status, { error: { code: failure.code, message: failure.message }, requestId: id })
   } finally {
     const durationMs = Date.now() - startedAt

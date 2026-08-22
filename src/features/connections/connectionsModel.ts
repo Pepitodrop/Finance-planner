@@ -1,6 +1,6 @@
-import type { ConnectorAccountType, ConnectorConnection, ConnectorProvider, ProviderDescriptor } from '../../connectors'
+import type { ConnectorAccountType, ConnectorConnection, ConnectorProvider, ProviderDescriptor, ProviderInstitution } from '../../connectors'
 import { consentDaysRemaining } from '../../connectors'
-import { commonInstitutions, institutionById, searchInstitutions, type Institution, type InstitutionKind } from '../../institutions'
+import { commonInstitutions, institutionById, normalize, searchInstitutions, type Institution, type InstitutionKind } from '../../institutions'
 
 export type InstitutionCategory = 'popular' | InstitutionKind
 export type SetupStep = 1 | 2 | 3
@@ -176,6 +176,102 @@ export function institutionIcon(institution: Institution): 'bank' | 'wallet' | '
   if (institution.kind === 'card') return 'card'
   if (institution.kind === 'manual') return 'manual'
   return 'bank'
+}
+
+function liveInstitutionHaystack(candidate: ProviderInstitution): string {
+  return normalize([candidate.name, candidate.bic, candidate.group?.name].filter(Boolean).join(' '))
+}
+
+// The *initial* (blank-query) view of a live AIS directory once a picker
+// tile has been chosen. A tile with `directoryTerms` (every 'ais' tile has
+// them -- see institutions.ts) narrows the huge country-wide directory down
+// to the real ASPSPs belonging to that bank/family, checked against each
+// candidate's name/BIC/group.name so it works whether or not the resolved
+// provider actually exposes `group` (Enable Banking does; GoCardless
+// doesn't -- a concrete bank's own name still matches directly). If the
+// narrowed result is empty -- the terms genuinely matched nothing in this
+// country's directory -- falls back to the full directory rather than
+// asserting the bank is unsupported when the provider data hasn't proven
+// that (see "never imply the user's real bank is unsupported" in the
+// Connections empty-state contract).
+export function familyFilteredInstitutions(institution: Pick<Institution, 'directoryTerms'>, liveInstitutions: ProviderInstitution[]): ProviderInstitution[] {
+  const terms = institution.directoryTerms
+  if (!terms || terms.length === 0) return liveInstitutions
+  const filtered = liveInstitutions.filter((candidate) => {
+    const haystack = liveInstitutionHaystack(candidate)
+    return terms.some((term) => haystack.includes(normalize(term)))
+  })
+  return filtered.length > 0 ? filtered : liveInstitutions
+}
+
+// Companion to familyFilteredInstitutions(): true once the tile's own
+// directoryTerms matched at least one real directory entry, false when it
+// silently fell back to the whole, unnarrowed country directory (no
+// directoryTerms at all, or a country/provider gap where the family
+// genuinely isn't present in what's loaded). The resolution step uses this
+// to tell the user their bank's family wasn't found under this provider
+// instead of quietly showing an unrelated full list under the tile's name --
+// see the "never imply the user's real bank is unsupported" empty-state
+// contract, which applies just as much to a silent scope-widening as to a
+// blank result.
+export function familyFilterNarrowed(institution: Pick<Institution, 'directoryTerms'>, liveInstitutions: ProviderInstitution[]): boolean {
+  const terms = institution.directoryTerms
+  if (!terms || terms.length === 0) return false
+  return liveInstitutions.some((candidate) => {
+    const haystack = liveInstitutionHaystack(candidate)
+    return terms.some((term) => haystack.includes(normalize(term)))
+  })
+}
+
+// Forgiving, non-fuzzy search over a live AIS directory: normalized,
+// tokenized, every term must appear somewhere in name/BIC/group.name --
+// same shape as searchInstitutions() over the static catalogue, so search
+// behaves consistently whether the results come from Finance Planner's own
+// picker or a live provider directory. Never edit-distance/fuzzy: a
+// near-miss must not silently surface the wrong bank.
+export function searchLiveInstitutions(liveInstitutions: ProviderInstitution[], query: string): ProviderInstitution[] {
+  const terms = normalize(query).split(' ').filter(Boolean)
+  if (!terms.length) return liveInstitutions
+  return liveInstitutions.filter((candidate) => {
+    const haystack = liveInstitutionHaystack(candidate)
+    return terms.every((term) => haystack.includes(term))
+  })
+}
+
+// What the institution-resolution step actually renders: a blank query
+// shows the family-scoped view (immediate, no typing required, mirroring
+// the "many concrete branches immediately visible" structure); a non-blank
+// query searches the *entire* loaded directory, not just the family-scoped
+// subset -- typing a real bank name that happens to sit outside the chosen
+// family must still find it rather than hiding a genuine provider result.
+export function visibleLiveInstitutions(institution: Pick<Institution, 'directoryTerms'>, liveInstitutions: ProviderInstitution[], query: string): ProviderInstitution[] {
+  const trimmed = query.trim()
+  if (!trimmed) return familyFilteredInstitutions(institution, liveInstitutions)
+  return searchLiveInstitutions(liveInstitutions, trimmed)
+}
+
+// A minimal, valid Institution built from a live provider-directory result
+// picked directly at the top-level "Choose your institution" search (see
+// ConnectionsPage's searchLiveDirectory()) -- lets a user who typed a
+// concrete bank Finance Planner's static catalogue doesn't list reach the
+// same account-type/confirmation steps as a catalogue tile would, without
+// inventing any catalogue entry for it. `kind: 'bank'` and no
+// `accountTypeRequired` match every other real-bank catalogue tile.
+//
+// Called with two different shapes of `match`, both valid, deliberately:
+//  1. a real ProviderInstitution the user tapped in the resolution step
+//     (id/name from the live directory) -- the common case.
+//  2. `searchLiveDirectory()`'s own placeholder `{ id: 'live-search', name:
+//     searchTerm }` when a resolution attempt is *starting*, before the
+//     directory has even loaded and before anything has been tapped -- this
+//     only ever drives local UI framing (the "Find your X" heading, the
+//     manual-account name hint); it is never the value that reaches
+//     startConnector(). See connectorContext(): for every 'ais' institution,
+//     including a synthetic one, the submitted institutionId always comes
+//     from `resolvedProviderInstitution`, set only once a real directory row
+//     is tapped (finalizeInstitutionResolution()) -- never from this id.
+export function syntheticAisInstitution(match: Pick<ProviderInstitution, 'id' | 'name'>): Institution {
+  return { id: `live:${match.id}`, name: match.name, provider: 'ais', kind: 'bank' }
 }
 
 export { institutionById }

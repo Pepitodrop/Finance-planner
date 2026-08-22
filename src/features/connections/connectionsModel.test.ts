@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import type { ConnectorConnection, ProviderDescriptor } from '../../connectors'
+import type { ConnectorConnection, ProviderDescriptor, ProviderInstitution } from '../../connectors'
+import { institutionById as catalogueInstitutionById } from '../../institutions'
 import {
   AIS_PROVIDER_PREFERENCE,
   connectionAttentionReason,
   connectionNeedsAttention,
   defaultAccountTypeForInstitution,
+  familyFilterNarrowed,
+  familyFilteredInstitutions,
   filterInstitutions,
   institutionAvailability,
   institutionById,
@@ -12,8 +15,11 @@ import {
   previousSetupStepFromConfirmation,
   providerDescriptorFor,
   resolveAisProvider,
+  searchLiveInstitutions,
   summarizeAccountSelection,
+  syntheticAisInstitution,
   validateManualAccount,
+  visibleLiveInstitutions,
   type ProviderStatus,
 } from './connectionsModel'
 
@@ -240,5 +246,131 @@ describe('validateManualAccount', () => {
   it('never produces a non-finite balance', () => {
     const result = validateManualAccount({ name: 'Cash', accountType: 'checking', balanceInput: 'Infinity', creditLimitInput: '' })
     expect(result.error).toMatch(/current balance/)
+  })
+})
+
+// Regression coverage for the reported defect: choosing "Volksbank /
+// Raiffeisenbank" opened a branch search prefilled with that entire literal
+// label, which never matches a real ASPSP name ("Volksbank Demmin",
+// "Raiffeisenbank Grävenwiesbach", ...) -- see institutions.ts's
+// directoryTerms and ConnectionsPage.tsx's chooseInstitution().
+describe('familyFilteredInstitutions (bank-family -> live directory, never a literal label search)', () => {
+  const volksbank = catalogueInstitutionById('volksbank')!
+  const sparkasse = catalogueInstitutionById('sparkasse')!
+
+  const DIRECTORY: ProviderInstitution[] = [
+    { id: 'DE:Volksbank Demmin', name: 'Volksbank Demmin', country: 'DE' },
+    { id: 'DE:Raiffeisenbank Grävenwiesbach', name: 'Raiffeisenbank Grävenwiesbach', country: 'DE' },
+    // Only reachable via Enable Banking's `group.name` -- the bank's own
+    // name shares no keyword with the family at all.
+    { id: 'DE:Semper Bank AG', name: 'Semper Bank AG', country: 'DE', group: { name: 'Volksbanken Raiffeisenbanken' } },
+    { id: 'DE:Aachener Sparkasse', name: 'Aachener Sparkasse', country: 'DE' },
+    { id: 'DE:ING-DiBa', name: 'ING-DiBa', country: 'DE' },
+  ]
+
+  it('never searches for the literal multi-word picker label -- it matches real branch names by keyword', () => {
+    const results = familyFilteredInstitutions(volksbank, DIRECTORY)
+    expect(results.map((institution) => institution.id)).toEqual(
+      expect.arrayContaining(['DE:Volksbank Demmin', 'DE:Raiffeisenbank Grävenwiesbach']),
+    )
+    expect(results.map((institution) => institution.id)).not.toContain('DE:Aachener Sparkasse')
+    expect(results.map((institution) => institution.id)).not.toContain('DE:ING-DiBa')
+  })
+
+  it('matches a cooperative-network member through Enable Banking group.name even when its own name shares no keyword', () => {
+    const results = familyFilteredInstitutions(volksbank, DIRECTORY)
+    expect(results.map((institution) => institution.id)).toContain('DE:Semper Bank AG')
+  })
+
+  it('narrows to a different family independently', () => {
+    const results = familyFilteredInstitutions(sparkasse, DIRECTORY)
+    expect(results.map((institution) => institution.id)).toEqual(['DE:Aachener Sparkasse'])
+  })
+
+  it('falls back to the full directory, never an unsupported dead end, when the family terms match nothing in this country', () => {
+    const results = familyFilteredInstitutions(volksbank, [{ id: 'DE:ING-DiBa', name: 'ING-DiBa', country: 'DE' }])
+    expect(results).toEqual([{ id: 'DE:ING-DiBa', name: 'ING-DiBa', country: 'DE' }])
+  })
+
+  it('returns the full directory unchanged for an institution with no directoryTerms', () => {
+    expect(familyFilteredInstitutions({}, DIRECTORY)).toBe(DIRECTORY)
+  })
+})
+
+describe('familyFilterNarrowed (signals a silent full-directory fallback instead of hiding it)', () => {
+  const volksbank = catalogueInstitutionById('volksbank')!
+  const sparkasse = catalogueInstitutionById('sparkasse')!
+
+  it('is true once at least one real entry matched the family terms', () => {
+    const directory: ProviderInstitution[] = [{ id: 'DE:Volksbank Demmin', name: 'Volksbank Demmin', country: 'DE' }]
+    expect(familyFilterNarrowed(volksbank, directory)).toBe(true)
+  })
+
+  it('is false when the terms matched nothing -- the caller fell back to the unnarrowed directory', () => {
+    const directory: ProviderInstitution[] = [{ id: 'DE:ING-DiBa', name: 'ING-DiBa', country: 'DE' }]
+    expect(familyFilterNarrowed(sparkasse, directory)).toBe(false)
+  })
+
+  it('is false for an institution with no directoryTerms -- nothing to narrow, so nothing to signal', () => {
+    expect(familyFilterNarrowed({}, [{ id: 'DE:ING-DiBa', name: 'ING-DiBa', country: 'DE' }])).toBe(false)
+  })
+})
+
+describe('searchLiveInstitutions (forgiving, non-fuzzy live-directory search)', () => {
+  const DIRECTORY: ProviderInstitution[] = [
+    { id: 'DE:Sparkasse KoelnBonn', name: 'Sparkasse KoelnBonn', country: 'DE', bic: 'COKSDE33' },
+    { id: 'DE:Volksbank Wolfenbüttel', name: 'Volksbank Wolfenbüttel', country: 'DE' },
+    { id: 'DE:Aachener Sparkasse', name: 'Aachener Sparkasse', country: 'DE', bic: 'AACSDE33' },
+  ]
+
+  it('matches by BIC', () => {
+    expect(searchLiveInstitutions(DIRECTORY, 'AACSDE33').map((i) => i.id)).toEqual(['DE:Aachener Sparkasse'])
+  })
+
+  it('is forgiving of case and diacritics (typing an ASCII "u" still finds a name spelled with "ü")', () => {
+    expect(searchLiveInstitutions(DIRECTORY, 'koeln').map((i) => i.id)).toEqual(['DE:Sparkasse KoelnBonn'])
+    expect(searchLiveInstitutions(DIRECTORY, 'WOLFENBUTTEL').map((i) => i.id)).toEqual(['DE:Volksbank Wolfenbüttel'])
+  })
+
+  it('requires every search term to match, never a near-miss that could select the wrong bank', () => {
+    expect(searchLiveInstitutions(DIRECTORY, 'aachener koeln')).toEqual([])
+  })
+
+  it('a blank query returns every institution unfiltered', () => {
+    expect(searchLiveInstitutions(DIRECTORY, '   ')).toBe(DIRECTORY)
+  })
+})
+
+describe('visibleLiveInstitutions (what the resolution step actually renders)', () => {
+  const volksbank = catalogueInstitutionById('volksbank')!
+  const DIRECTORY: ProviderInstitution[] = [
+    { id: 'DE:Volksbank Demmin', name: 'Volksbank Demmin', country: 'DE' },
+    { id: 'DE:Aachener Sparkasse', name: 'Aachener Sparkasse', country: 'DE' },
+  ]
+
+  it('a blank query shows the family-scoped view immediately, with no typing required', () => {
+    expect(visibleLiveInstitutions(volksbank, DIRECTORY, '').map((i) => i.id)).toEqual(['DE:Volksbank Demmin'])
+  })
+
+  it('a typed query searches the whole loaded directory, not just the family-scoped subset -- a real result outside the family must never be hidden', () => {
+    expect(visibleLiveInstitutions(volksbank, DIRECTORY, 'Aachener').map((i) => i.id)).toEqual(['DE:Aachener Sparkasse'])
+  })
+})
+
+describe('syntheticAisInstitution (top-level live-directory search result -> a valid Institution)', () => {
+  it('builds a real-bank-shaped Institution from a live match, never claiming a required account type it cannot know', () => {
+    const match: ProviderInstitution = { id: 'DE:Berliner Volksbank', name: 'Berliner Volksbank', country: 'DE' }
+    const institution = syntheticAisInstitution(match)
+    expect(institution).toEqual({ id: 'live:DE:Berliner Volksbank', name: 'Berliner Volksbank', provider: 'ais', kind: 'bank' })
+    expect(nextSetupStepAfterInstitution(institution)).toBe(3)
+  })
+
+  // ConnectionsPage's searchLiveDirectory() calls this with its own
+  // placeholder { id: 'live-search', name: searchTerm } while a resolution
+  // attempt is starting, before any real directory row has been tapped --
+  // only {id, name} are required, no other ProviderInstitution field.
+  it('also accepts a bare {id, name} placeholder, since only those two fields drive local UI framing before a real match is tapped', () => {
+    const institution = syntheticAisInstitution({ id: 'live-search', name: 'Berliner Volksbank' })
+    expect(institution).toEqual({ id: 'live:live-search', name: 'Berliner Volksbank', provider: 'ais', kind: 'bank' })
   })
 })

@@ -32,6 +32,7 @@ import {
   disconnectConnector,
   fetchProviderInstitutions,
   fetchProviderStatus,
+  providerInstitutionLogoUrl,
   selectSyncPreviewAccounts,
   startConnector,
   synchronizeConnections,
@@ -39,10 +40,12 @@ import {
   type ConnectorConnection,
   type ConnectorProvider,
   type ConnectorStartContext,
+  type ConnectorStartResult,
   type ProviderDescriptor,
   type ProviderInstitution,
   type SyncPreview,
 } from '../../connectors'
+import { EnableBankingAuthFlow, type EnableBankingAuthFlowStatus } from './EnableBankingAuthFlow'
 import { institutionLettermark, institutionLogoUrl } from '../../institution-logos'
 import { normalizeManualCreditCard } from '../../manualCreditCard'
 import { applyStatementImport, buildStatementPreview, parseStatement, type StatementPreview } from '../../statementImport'
@@ -64,9 +67,12 @@ import {
   nextSetupStepAfterInstitution,
   previousSetupStepFromConfirmation,
   providerDescriptorFor,
+  familyFilterNarrowed,
   resolveAisProvider,
   summarizeAccountSelection,
+  syntheticAisInstitution,
   validateManualAccount,
+  visibleLiveInstitutions,
   type InstitutionCategory,
   type ProviderStatus,
   type SetupStep,
@@ -93,23 +99,40 @@ function formatEuro(cents: number): string {
   return new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' }).format(cents / 100)
 }
 
-function InstitutionMark({ id, name, size = 20 }: { id: string; name: string; size?: number }) {
-  const [imageFailed, setImageFailed] = useState(false)
-  const logoUrl = institutionLogoUrl(id)
-  if (logoUrl && !imageFailed) {
+// Fallback order (never a broken-image icon, each stage caught by the
+// previous image's onError): 1. the real bank's own logo, or its
+// cooperative-network group logo, served through Finance Planner's
+// same-origin logo proxy (providerLogoUrl -- see connectors.ts's
+// providerInstitutionLogoUrl(), never a direct provider-controlled URL);
+// 2. Finance Planner's existing reviewed/static institution logo (a small,
+// hand-reviewed Simple Icons allowlist); 3. an original Finance Planner
+// lettermark. `providerLogoUrl` is only ever passed for a concrete live
+// bank the resolution step or confirmation step actually resolved -- never
+// for a static picker tile, which has no live directory entry to derive one
+// from.
+type InstitutionMarkStage = 'provider' | 'static' | 'lettermark'
+function InstitutionMark({ id, name, size = 20, providerLogoUrl }: { id: string; name: string; size?: number; providerLogoUrl?: string }) {
+  const [stage, setStage] = useState<InstitutionMarkStage>(providerLogoUrl ? 'provider' : 'static')
+  if (stage === 'provider' && providerLogoUrl) {
     return <span className="connections-mark connections-mark--logo">
-      <img src={logoUrl} alt="" width={size} height={size} loading="lazy" onError={() => setImageFailed(true)}/>
+      <img src={providerLogoUrl} alt="" width={size} height={size} loading="lazy" onError={() => setStage('static')}/>
+    </span>
+  }
+  const staticLogoUrl = stage !== 'lettermark' ? institutionLogoUrl(id) : null
+  if (staticLogoUrl) {
+    return <span className="connections-mark connections-mark--logo">
+      <img src={staticLogoUrl} alt="" width={size} height={size} loading="lazy" onError={() => setStage('lettermark')}/>
     </span>
   }
   const { letters, color } = institutionLettermark(id, name)
   return <span className="connections-mark connections-mark--lettermark" style={{ '--connections-mark-color': color } as CSSProperties} aria-hidden="true">{letters}</span>
 }
 
-function InstitutionIcon({ institution, size = 20 }: { institution: { id?: string; name?: string; kind: string }; size?: number }) {
+function InstitutionIcon({ institution, size = 20, providerLogoUrl }: { institution: { id?: string; name?: string; kind: string }; size?: number; providerLogoUrl?: string }) {
   const kind = institutionIcon(institution as Parameters<typeof institutionIcon>[0])
   if (kind === 'card') return <CreditCard size={size}/>
   if (kind === 'manual') return <Pencil size={size}/>
-  if (institution.id && institution.name) return <InstitutionMark id={institution.id} name={institution.name} size={size}/>
+  if (institution.id && institution.name) return <InstitutionMark id={institution.id} name={institution.name} size={size} providerLogoUrl={providerLogoUrl}/>
   if (kind === 'wallet') return <Wallet size={size}/>
   if (kind === 'broker') return <TrendingUp size={size}/>
   return <Landmark size={size}/>
@@ -130,9 +153,26 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   const [setupOpen, setSetupOpen] = useState(false)
   const [setupStep, setSetupStep] = useState<SetupStep>(1)
   const [setupError, setSetupError] = useState('')
+  // Set only when startProvider() got back an 'embedded-auth' result --
+  // Step 3 renders the official Enable Banking Auth Flow widget instead of
+  // navigating away. Cleared everywhere a fresh/different attempt begins
+  // (openSetup, closeSetup, and the Step 3 back button) so a stale
+  // authorizationId from a previous bank/attempt can never be reused.
+  const [embeddedAuthFlow, setEmbeddedAuthFlow] = useState<Extract<ConnectorStartResult, { mode: 'embedded-auth' }> | null>(null)
+  // Acceptance-fixture-only override forwarded to EnableBankingAuthFlow's
+  // fixtureStatus prop -- see the acceptanceMode effect below. Always null
+  // outside VITE_ACCEPTANCE_FIXTURES=true fixture wiring.
+  const [authFlowFixtureStatus, setAuthFlowFixtureStatus] = useState<EnableBankingAuthFlowStatus | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [category, setCategory] = useState<InstitutionCategory>('popular')
   const [selectedInstitutionId, setSelectedInstitutionId] = useState<string | null>(null)
+  // Set only for a bank picked directly from a live provider directory
+  // (top-level "search the full bank directory" -- see searchLiveDirectory())
+  // rather than one of the static catalogue tiles institutionById() knows
+  // about. Always cleared together with selectedInstitutionId (openSetup,
+  // chooseInstitution, cancelInstitutionResolution) so the two can never
+  // point at different institutions.
+  const [syntheticInstitution, setSyntheticInstitution] = useState<Institution | null>(null)
   const [accountType, setAccountType] = useState<ConnectorAccountType>('checking')
   const [providerStatus, setProviderStatus] = useState<ProviderStatus>({ status: 'loading' })
 
@@ -186,7 +226,19 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     if (acceptanceMode === 'manual') { setManualOpen(true); return }
     if (acceptanceMode === 'statement-preview') { setStatementFileName('finance_statement_march.csv'); setStatementPreview(ACCEPTANCE_STATEMENT_PREVIEW); setScreen('statement-preview'); return }
     if (acceptanceMode === 'provider-unavailable') { setConnections(ACCEPTANCE_CONNECTIONS); setProviderStatus({ status: 'ready', providers: ACCEPTANCE_PROVIDER_STATUS_UNAVAILABLE }); setSetupStep(1); setCategory('popular'); setSearchTerm(''); setSetupOpen(true); return }
-    if (acceptanceMode === 'paypal-unconfigured') { setSelectedInstitutionId('paypal'); setProviderStatus({ status: 'ready', providers: ACCEPTANCE_PROVIDER_STATUS_PAYPAL_UNCONFIGURED }); setSetupStep(3); setSetupOpen(true) }
+    if (acceptanceMode === 'paypal-unconfigured') { setSelectedInstitutionId('paypal'); setProviderStatus({ status: 'ready', providers: ACCEPTANCE_PROVIDER_STATUS_PAYPAL_UNCONFIGURED }); setSetupStep(3); setSetupOpen(true); return }
+    // Deterministic Auth Flow widget shell states -- fixtureStatus on
+    // EnableBankingAuthFlow means neither of these ever contacts the real
+    // auth.enablebanking.com script or uses a real authorization id.
+    if (acceptanceMode === 'enablebanking-auth-flow-loading' || acceptanceMode === 'enablebanking-auth-flow-error') {
+      setSelectedInstitutionId('ing')
+      setResolvingProvider('enablebanking')
+      setResolvedProviderInstitution({ id: 'AACSDE33XXX_DE', name: 'Aachener Bank' })
+      setEmbeddedAuthFlow({ mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: 'https://tilisy-sandbox.enablebanking.com/ais/00000000-0000-0000-0000-000000000000', authorizationId: '00000000-0000-0000-0000-000000000000', origin: 'https://tilisy-sandbox.enablebanking.com', sandbox: true })
+      setAuthFlowFixtureStatus(acceptanceMode === 'enablebanking-auth-flow-loading' ? 'loading' : 'error')
+      setSetupStep(3)
+      setSetupOpen(true)
+    }
   }, [acceptanceMode])
 
   // Provider status gates whether an external (gocardless/paypal/finapi)
@@ -227,6 +279,18 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per mount; a fresh acceptanceMode always gets a fresh mount (see the `key` prop where ConnectionsPage is used)
   }, [])
 
+  // Same generation-counter contract as loadProviderStatus above: four
+  // separate call sites can now trigger a fetch (chooseInstitution,
+  // searchLiveDirectory, useGoCardlessFallback, retryLiveInstitutions), so a
+  // slow fetch for a provider/attempt the user has since moved away from
+  // (switched provider via fallback, or backed out and started a new
+  // resolution) must never land afterward and silently overwrite state that
+  // belongs to a newer attempt. Only the most recently issued call may
+  // commit. (Even so, this only affects which rows are *displayed* --
+  // start() on both providers re-validates the submitted institutionId
+  // against their own live directory and rejects a mismatch, so a stale
+  // result could never connect the wrong bank, only show a confusing error.)
+  const liveInstitutionsGeneration = useRef(0)
   const loadLiveInstitutions = useCallback(async (provider: ConnectorProvider, options: { force?: boolean } = {}) => {
     // `liveInstitutions` is the whole per-country directory (filtered
     // client-side, see filteredLiveInstitutions below), so an empty array is
@@ -237,14 +301,17 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     // fallback action, where a stale result from the *previous* provider
     // must never be shown as if it belonged to the new one.
     if (!options.force && (liveInstitutions || liveInstitutionsLoading)) return
+    const generation = (liveInstitutionsGeneration.current += 1)
     setLiveInstitutionsLoading(true)
     try {
       const institutions = await fetchProviderInstitutions(provider, 'DE')
+      if (liveInstitutionsGeneration.current !== generation) return
       setLiveInstitutions(institutions)
     } catch (reason) {
+      if (liveInstitutionsGeneration.current !== generation) return
       setLiveInstitutionsError(reason instanceof Error ? reason.message : 'The bank directory could not be loaded.')
     } finally {
-      setLiveInstitutionsLoading(false)
+      if (liveInstitutionsGeneration.current === generation) setLiveInstitutionsLoading(false)
     }
   }, [liveInstitutions, liveInstitutionsLoading])
 
@@ -270,11 +337,19 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   }
 
   const filteredLiveInstitutions = useMemo(() => {
-    if (!liveInstitutions) return []
-    const query = liveInstitutionQuery.trim().toLocaleLowerCase('de-DE')
-    if (!query) return liveInstitutions
-    return liveInstitutions.filter((institution) => institution.name.toLocaleLowerCase('de-DE').includes(query) || institution.bic?.toLocaleLowerCase('de-DE').includes(query))
-  }, [liveInstitutions, liveInstitutionQuery])
+    if (!liveInstitutions || !resolvingInstitution) return []
+    return visibleLiveInstitutions(resolvingInstitution, liveInstitutions, liveInstitutionQuery)
+  }, [liveInstitutions, liveInstitutionQuery, resolvingInstitution])
+
+  // Only meaningful for the blank-query family view (see visibleLiveInstitutions):
+  // once the user types, filteredLiveInstitutions searches the whole
+  // directory and this framing no longer applies. True (nothing to warn
+  // about) until proven otherwise, so it never flashes a false warning
+  // before the directory has loaded.
+  const familyDirectoryUnnarrowed = Boolean(
+    !liveInstitutionQuery.trim() && liveInstitutions && resolvingInstitution
+    && resolvingInstitution.directoryTerms?.length && !familyFilterNarrowed(resolvingInstitution, liveInstitutions),
+  )
 
   // A real, independently-available fallback exists only when the fallback
   // provider itself reports available+configured -- offering the fallback
@@ -282,7 +357,17 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   // relevant while actively resolving through the preferred provider.
   const gocardlessFallbackAvailable = resolvingProvider === aisPrimaryProvider && Boolean(aisFallbackProvider) && Boolean(providerDescriptorFor(aisFallbackProvider, providerStatus)?.available && providerDescriptorFor(aisFallbackProvider, providerStatus)?.configured)
 
-  const selectedInstitution = selectedInstitutionId ? institutionById(selectedInstitutionId) : undefined
+  // Gates the top-level "search the full bank directory" action (see
+  // searchLiveDirectory() and InstitutionStep's empty state) -- there is
+  // nothing to search against while neither AIS provider resolves.
+  const aisProviderAvailable = resolveAisProvider(providerStatus) !== null
+
+  // Retries the live-directory fetch itself (network/provider error), unlike
+  // useGoCardlessFallback which switches to a different provider entirely.
+  // Only meaningful once a resolution attempt is underway.
+  const retryLiveInstitutions = () => { if (resolvingProvider) { setLiveInstitutionsError(''); void loadLiveInstitutions(resolvingProvider, { force: true }) } }
+
+  const selectedInstitution = syntheticInstitution ?? (selectedInstitutionId ? institutionById(selectedInstitutionId) : undefined)
   const filteredInstitutions = useMemo(() => filterInstitutions(searchTerm, category), [searchTerm, category])
   const discoveredAccounts = useMemo(() => previews.flatMap((preview) => preview.accountsToCreate), [previews])
   const selection = summarizeAccountSelection(discoveredAccounts.map((account) => account.id), selectedAccountIds)
@@ -362,7 +447,16 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setBusy(true)
     onError('')
     try {
-      await startConnector(provider, context)
+      const result = await startConnector(provider, context)
+      if (result.mode === 'embedded-auth') {
+        // Enable Banking only: stay on Step 3 and render the official Auth
+        // Flow widget instead of leaving Finance Planner. Every other
+        // provider's 'redirect' result means the browser is already
+        // navigating away by the time this resolves, so busy correctly
+        // stays true for it (there's nothing left to interact with here).
+        setEmbeddedAuthFlow(result)
+        setBusy(false)
+      }
     } catch (reason) {
       onError(reason instanceof Error ? reason.message : 'The connection could not be started.')
       setBusy(false)
@@ -418,13 +512,29 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setSearchTerm('')
     setCategory('popular')
     setSelectedInstitutionId(null)
+    setSyntheticInstitution(null)
     setAccountType('checking')
     setResolvingInstitution(null)
+    setResolvingProvider(null)
     setResolvedProviderInstitution(null)
+    // A previous resolution attempt's directory (and any fetch still in
+    // flight for it) must never leak into a fresh setup session -- bump the
+    // generation so a slow in-flight response from before can't land and get
+    // treated as current, and clear the cached directory so the next
+    // resolution fetches fresh rather than reusing possibly-stale data.
+    liveInstitutionsGeneration.current += 1
+    setLiveInstitutions(null)
+    setLiveInstitutionQuery('')
+    setLiveInstitutionsError('')
+    setLiveInstitutionsLoading(false)
     setSetupError('')
+    // A stale authorizationId from a previous attempt (this bank or a
+    // different one) must never be reused for a fresh setup session.
+    setEmbeddedAuthFlow(null)
+    setAuthFlowFixtureStatus(null)
     setSetupOpen(true)
   }
-  const closeSetup = useCallback(() => { if (!busy) { setSetupOpen(false); setSetupError('') } }, [busy])
+  const closeSetup = useCallback(() => { if (!busy) { setSetupOpen(false); setSetupError(''); setEmbeddedAuthFlow(null); setAuthFlowFixtureStatus(null) } }, [busy])
 
   const openManualAccount = (hintedType: ConnectorAccountType = 'checking', hintedName = '') => {
     setManualName(hintedName)
@@ -441,7 +551,17 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setResolvingInstitution(null)
     setResolvingProvider(null)
     setSelectedInstitutionId(null)
+    setSyntheticInstitution(null)
     setResolvedProviderInstitution(null)
+    // Abandoning this attempt must invalidate any fetch still in flight for
+    // it (see loadLiveInstitutions' generation guard) and drop its directory
+    // so re-entering resolution -- for the same or a different institution --
+    // always fetches fresh rather than silently reusing this attempt's data.
+    liveInstitutionsGeneration.current += 1
+    setLiveInstitutions(null)
+    setLiveInstitutionQuery('')
+    setLiveInstitutionsError('')
+    setLiveInstitutionsLoading(false)
   }
 
   const finalizeInstitutionResolution = (match: ProviderInstitution) => {
@@ -449,6 +569,10 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setResolvedProviderInstitution(match)
     setSetupStep(nextSetupStepAfterInstitution(resolvingInstitution))
     setResolvingInstitution(null)
+    // A different bank than whatever a previous attempt's widget was showing
+    // -- never let a stale authorizationId survive a re-resolution.
+    setEmbeddedAuthFlow(null)
+    setAuthFlowFixtureStatus(null)
   }
 
   const chooseInstitution = (id: string) => {
@@ -456,11 +580,14 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     if (!institution) return
     if (institutionAvailability(institution, providerStatus).unavailable) return
     setSetupError('')
+    setEmbeddedAuthFlow(null)
+    setAuthFlowFixtureStatus(null)
     if (institution.provider === 'manual') {
       openManualAccount(defaultAccountTypeForInstitution(institution), institution.name === 'Virtuelles / manuelles Konto' ? '' : institution.name)
       return
     }
     setSelectedInstitutionId(id)
+    setSyntheticInstitution(null)
     setAccountType(defaultAccountTypeForInstitution(institution))
     // Always clear a previous resolution here, not just when re-entering the
     // 'ais' branch below -- otherwise picking a bank, resolving it, going
@@ -488,7 +615,15 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
       if (providerChanged) { setLiveInstitutions(null); setLiveInstitutionsError('') }
       setResolvingProvider(resolved)
       setResolvingInstitution(institution)
-      setLiveInstitutionQuery(institution.name)
+      // Blank, not prefilled with institution.name: a group tile's name
+      // ("Volksbank / Raiffeisenbank") is a Finance Planner UX label, not a
+      // real ASPSP name -- searching for it literally never matches a real
+      // bank ("Volksbank Demmin", "Raiffeisenbank Grävenwiesbach", ...). The
+      // resolution step instead opens on familyFilteredInstitutions()'s
+      // family-scoped view (institution.directoryTerms), computed in
+      // filteredLiveInstitutions below -- immediately visible with no typing
+      // required, exactly like a real bank-family branch picker.
+      setLiveInstitutionQuery('')
       // force: true when the resolved provider changed since the last
       // resolution -- liveInstitutions may still hold a truthy (even if
       // empty) result from the *previous* provider at this point (state
@@ -498,6 +633,33 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
       return
     }
     setSetupStep(nextSetupStepAfterInstitution(institution))
+  }
+
+  // Top-level "search the full bank directory" action (InstitutionStep's
+  // empty state) -- lets a user who typed a concrete bank Finance Planner's
+  // static catalogue doesn't list (e.g. "Berliner Volksbank") reach it
+  // directly, without first knowing which picker tile/family it belongs to.
+  // Reuses the exact same resolution UI and anti-guessing contract as a
+  // catalogue tile: the free-text query the user already typed is real,
+  // user-authored search input (not a synthetic UX label), so prefilling the
+  // live search box with it is correct here, unlike chooseInstitution()
+  // above. A concrete match still requires an explicit tap before it can be
+  // submitted -- see finalizeInstitutionResolution().
+  const searchLiveDirectory = () => {
+    const resolved = resolveAisProvider(providerStatus)
+    if (!resolved) return
+    const synthetic = syntheticAisInstitution({ id: 'live-search', name: searchTerm })
+    setSetupError('')
+    setSelectedInstitutionId(synthetic.id)
+    setSyntheticInstitution(synthetic)
+    setAccountType(defaultAccountTypeForInstitution(synthetic))
+    setResolvedProviderInstitution(null)
+    const providerChanged = resolvingProvider !== resolved
+    if (providerChanged) { setLiveInstitutions(null); setLiveInstitutionsError('') }
+    setResolvingProvider(resolved)
+    setResolvingInstitution(synthetic)
+    setLiveInstitutionQuery(searchTerm)
+    void loadLiveInstitutions(resolved, { force: providerChanged })
   }
 
   const saveManualAccount = async () => {
@@ -660,8 +822,12 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
                 error={liveInstitutionsError}
                 onBack={cancelInstitutionResolution}
                 onChoose={finalizeInstitutionResolution}
+                onRetry={retryLiveInstitutions}
+                onManualAccount={() => openManualAccount('checking', resolvingInstitution.name)}
+                unnarrowed={familyDirectoryUnnarrowed}
                 gocardlessFallbackAvailable={gocardlessFallbackAvailable}
                 onUseGoCardlessFallback={useGoCardlessFallback}
+                provider={resolvingProvider ?? undefined}
               />
             : <InstitutionStep
                 searchTerm={searchTerm}
@@ -672,6 +838,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
                 providerStatus={providerStatus}
                 onRetryProviderStatus={loadProviderStatus}
                 onChoose={chooseInstitution}
+                onSearchLiveDirectory={aisProviderAvailable ? searchLiveDirectory : undefined}
               />)}
 
           {setupStep === 2 && selectedInstitution && <AccountTypeStep
@@ -681,21 +848,43 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
             onChoose={(next) => { setAccountType(next); setSetupStep(3) }}
           />}
 
-          {setupStep === 3 && selectedInstitution && <RedirectConfirmationStep
-            institution={selectedInstitution}
-            resolvedInstitutionName={resolvedProviderInstitution?.name}
-            busy={busy}
-            error={setupError}
-            providerDescriptor={(() => { const provider = effectiveProvider(); return provider ? providerDescriptorFor(provider, providerStatus) : undefined })()}
-            onCancel={closeSetup}
-            onConfirm={() => { const provider = effectiveProvider(); if (provider) void startProvider(provider, connectorContext(), setSetupError) }}
-          />}
+          {setupStep === 3 && selectedInstitution && (embeddedAuthFlow
+            ? <EnableBankingAuthorizationStep
+                institution={selectedInstitution}
+                resolvedInstitutionName={resolvedProviderInstitution?.name}
+                resolvedInstitutionId={resolvedProviderInstitution?.id}
+                authFlow={embeddedAuthFlow}
+                fixtureStatus={authFlowFixtureStatus}
+                onCancel={closeSetup}
+              />
+            : <RedirectConfirmationStep
+                institution={selectedInstitution}
+                resolvedInstitutionName={resolvedProviderInstitution?.name}
+                resolvedInstitutionId={resolvedProviderInstitution?.id}
+                resolvedProvider={effectiveProvider()}
+                busy={busy}
+                error={setupError}
+                providerDescriptor={(() => { const provider = effectiveProvider(); return provider ? providerDescriptorFor(provider, providerStatus) : undefined })()}
+                onCancel={closeSetup}
+                onConfirm={() => { const provider = effectiveProvider(); if (provider) void startProvider(provider, connectorContext(), setSetupError) }}
+              />)}
         </div>
 
         <div className="connections-setup-header">
           <button type="button" className="connections-icon-button" aria-label="Back" disabled={(setupStep === 1 && !resolvingInstitution) || busy} onClick={() => {
             setSetupError('')
             if (setupStep === 1 && resolvingInstitution) { cancelInstitutionResolution(); return }
+            // On the widget sub-view, Back collapses one level (back to the
+            // plain confirmation view, same Step 3) rather than leaving
+            // Step 3 entirely -- an in-flight pending setup and its
+            // authorizationId are left alone either way (see the widget
+            // lifecycle note on EnableBankingAuthorizationStep/embeddedAuthFlow).
+            // Both embeddedAuthFlow AND authFlowFixtureStatus must clear here,
+            // not just the former: found by review (2026-08-22) that clearing
+            // only embeddedAuthFlow let a stale acceptance-fixture status
+            // survive into a real widget attempt started right afterward,
+            // permanently short-circuiting it into a fake error/loading state.
+            if (setupStep === 3 && embeddedAuthFlow) { setEmbeddedAuthFlow(null); setAuthFlowFixtureStatus(null); return }
             setSetupStep(setupStep === 3 ? previousSetupStepFromConfirmation(selectedInstitution) : 1)
           }}><ArrowLeft size={18}/></button>
           <p className="connections-step-label">Step {setupStep} of 3</p>
@@ -819,9 +1008,12 @@ interface InstitutionStepProps {
   providerStatus: ProviderStatus
   onRetryProviderStatus: () => void
   onChoose: (id: string) => void
+  // undefined when no AIS provider currently resolves -- there is nothing
+  // for the "search the full bank directory" action to search against.
+  onSearchLiveDirectory?: () => void
 }
 
-function InstitutionStep({ searchTerm, onSearch, category, onCategory, institutions, providerStatus, onRetryProviderStatus, onChoose }: InstitutionStepProps) {
+function InstitutionStep({ searchTerm, onSearch, category, onCategory, institutions, providerStatus, onRetryProviderStatus, onChoose, onSearchLiveDirectory }: InstitutionStepProps) {
   return <>
     <h2 id="connections-setup-title" className="connections-setup-title">Choose your institution</h2>
     {providerStatus.status === 'error' && <p className="status-message error-message" role="alert">
@@ -844,7 +1036,10 @@ function InstitutionStep({ searchTerm, onSearch, category, onCategory, instituti
           {!availability.unavailable && <ChevronRight size={18}/>}
         </button>
       })}
-      {institutions.length === 0 && <p className="connections-empty-copy">No institution matches your search. Try a different name, BIC or bank code, or use a manual account.</p>}
+      {institutions.length === 0 && <div className="connections-empty-state">
+        <p className="connections-empty-copy">No institution matches your search. Try a different name, BIC or bank code, or use a manual account.</p>
+        {onSearchLiveDirectory && searchTerm.trim() && <button type="button" className="connections-text-button connections-empty-action" onClick={onSearchLiveDirectory}>Search the full bank directory for &quot;{searchTerm.trim()}&quot;</button>}
+      </div>}
     </div>
     <p className="connections-footnote"><Info size={15}/> Provider availability depends on your institution and region.</p>
   </>
@@ -859,11 +1054,24 @@ interface InstitutionResolutionStepProps {
   error: string
   onBack: () => void
   onChoose: (match: ProviderInstitution) => void
+  onRetry: () => void
+  onManualAccount: () => void
+  // True when the bank-family narrowing found nothing in the loaded
+  // directory and silently fell back to showing every institution --
+  // surfaced to the user instead of a silent scope change (see
+  // familyFilterNarrowed()). Never true while a query is active.
+  unnarrowed: boolean
   gocardlessFallbackAvailable: boolean
   onUseGoCardlessFallback: () => void
+  // The AIS provider this resolution attempt is actually searching against
+  // -- needed to build each row's same-origin logo-proxy URL (see
+  // providerInstitutionLogoUrl()). Undefined only in the acceptance-fixture
+  // path that never really resolves a provider; rows just show a lettermark
+  // in that case.
+  provider?: ConnectorProvider
 }
 
-function InstitutionResolutionStep({ institution, query, onQuery, results, loading, error, onBack, onChoose, gocardlessFallbackAvailable, onUseGoCardlessFallback }: InstitutionResolutionStepProps) {
+function InstitutionResolutionStep({ institution, query, onQuery, results, loading, error, onBack, onChoose, onRetry, onManualAccount, unnarrowed, gocardlessFallbackAvailable, onUseGoCardlessFallback, provider }: InstitutionResolutionStepProps) {
   // Never names the aggregator to the user -- bank-centric copy throughout,
   // matching how the rest of the picker never says "GoCardless"/"Enable
   // Banking" either. The fallback affordance below is the one place a
@@ -874,16 +1082,40 @@ function InstitutionResolutionStep({ institution, query, onQuery, results, loadi
     <button type="button" className="connections-back connections-live-search-back" onClick={onBack}><ArrowLeft size={18}/> All institutions</button>
     <h2 id="connections-setup-title" className="connections-setup-title">Find your {institution.name} branch</h2>
     <p className="connections-setup-subtitle">Finance Planner connects to the exact bank on file — never a guess. Search and select it below.</p>
-    <label className="connections-search connections-live-search"><Search size={18}/><input autoFocus value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search by bank name or BIC"/>{query && <button type="button" aria-label="Clear search" onClick={() => onQuery('')}><X size={16}/></button>}</label>
-    <div className="connections-institution-list" aria-live="polite">
-      {loading && <p className="connections-empty-copy">Loading banks…</p>}
-      {!loading && error && <p className="status-message error-message" role="alert">{error}</p>}
+    {unnarrowed && !loading && !error && <p className="connections-footnote">
+      <Info size={15}/> {institution.name} wasn&apos;t found under this connection method — showing every institution instead.
+    </p>}
+    <label className="connections-search connections-live-search"><Search size={18}/><input autoFocus value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search bank, city or BIC"/>{query && <button type="button" aria-label="Clear search" onClick={() => onQuery('')}><X size={16}/></button>}</label>
+    {/* aria-live lives on this always-present container, not on the
+        conditionally-inserted children below -- a live region only reliably
+        announces *changes* to a node already in the accessibility tree; a
+        fresh node inserted with content already in it (e.g. a loading div
+        that only exists while loading===true) is not guaranteed to announce
+        in every screen reader. One persistent region covers loading, error,
+        result-count and empty-state transitions uniformly. */}
+    <div className="connections-institution-list" role="status" aria-live="polite">
+      {loading && <div className="connections-institution-list-loading">
+        <p className="connections-empty-copy">Loading banks…</p>
+        <div className="connections-institution-skeleton" aria-hidden="true">
+          <span/><span/><span/><span/><span/>
+        </div>
+      </div>}
+      {!loading && error && <p className="status-message error-message" role="alert">
+        {error}
+        <button type="button" className="connections-text-button connections-retry-button" onClick={onRetry}>Retry</button>
+      </p>}
+      {!loading && !error && results.length > 0 && <p className="connections-live-search-meta">{results.length} bank{results.length === 1 ? '' : 's'}</p>}
       {!loading && !error && results.map((match) => <button type="button" key={match.id} className="connections-institution-row" onClick={() => onChoose(match)}>
-        <span className="connections-row-icon"><InstitutionMark id={match.id} name={match.name} size={20}/></span>
+        <span className="connections-row-icon"><InstitutionMark id={match.id} name={match.name} size={20} providerLogoUrl={provider ? providerInstitutionLogoUrl(provider, match.id) : undefined}/></span>
         <span className="connections-institution-name">{match.name}{match.bic && <small className="connections-institution-bic">{match.bic}</small>}</span>
         <ChevronRight size={18}/>
       </button>)}
-      {!loading && !error && results.length === 0 && <p className="connections-empty-copy">No bank matches your search. Try a different name or BIC.</p>}
+      {!loading && !error && results.length === 0 && <div className="connections-empty-state">
+        <p className="connections-empty-copy">No bank matches your search. Try a different name or BIC.</p>
+        <div className="connections-empty-actions">
+          <button type="button" className="connections-text-button" onClick={onManualAccount}>Add a manual account instead</button>
+        </div>
+      </div>}
     </div>
     {showFallback && <p className="status-message connections-fallback-message">
       Connection through the preferred bank interface is currently unavailable.{' '}
@@ -922,9 +1154,76 @@ function AccountTypeStep({ institution, resolvedInstitutionName, accountType, on
   </>
 }
 
+interface EnableBankingAuthorizationStepProps {
+  institution: { id: string; name: string; provider: string; kind: string }
+  resolvedInstitutionName?: string
+  resolvedInstitutionId?: string
+  authFlow: Extract<ConnectorStartResult, { mode: 'embedded-auth' }>
+  // Acceptance/browser-QA fixture escape hatch, forwarded straight to
+  // EnableBankingAuthFlow -- see that component's own fixtureStatus doc.
+  fixtureStatus?: EnableBankingAuthFlowStatus | null
+  onCancel: () => void
+}
+
+// Renders once startProvider() has already confirmed Enable Banking's
+// official Auth Flow widget can be embedded (see ConnectionsPage's
+// embeddedAuthFlow state) -- this replaces RedirectConfirmationStep's
+// post-confirm view for Enable Banking only, on the same Step 3, so the
+// modal transitions into a secure-authorization state rather than
+// disappearing behind a full-page redirect. GoCardless/PayPal never reach
+// this component; they still redirect exactly as before.
+function EnableBankingAuthorizationStep({ institution, resolvedInstitutionName, resolvedInstitutionId, authFlow, fixtureStatus, onCancel }: EnableBankingAuthorizationStepProps) {
+  const [status, setStatus] = useState<EnableBankingAuthFlowStatus>(fixtureStatus ?? 'loading')
+  // Bumped on "Try again" to force EnableBankingAuthFlow (keyed on this) to
+  // unmount and remount a fresh widget element, rather than trying to
+  // recover a possibly-broken existing one in place.
+  const [attempt, setAttempt] = useState(0)
+
+  return <div className="connections-confirmation connections-auth-flow-step">
+    <div className="connections-institution-banner">
+      <span className="connections-row-icon"><InstitutionIcon key={resolvedInstitutionId ?? institution.id} institution={institution}/></span>
+      <span className="connections-row-body"><strong>{institution.name}</strong>{resolvedInstitutionName && resolvedInstitutionName !== institution.name && <small>{resolvedInstitutionName}</small>}</span>
+    </div>
+    <h2 id="connections-setup-title" className="connections-setup-title">Secure bank authorization</h2>
+    <p className="connections-setup-subtitle">Finance Planner never receives your online-banking credentials.</p>
+
+    <div className="connections-auth-flow-frame" aria-live="polite">
+      {status === 'loading' && <p className="connections-auth-flow-loading">Preparing secure bank authorization…</p>}
+      {status === 'error'
+        ? <div className="connections-auth-flow-error" role="alert">
+            <AlertTriangle size={18}/>
+            <p>The secure authorization widget couldn&apos;t load. You can still continue on the provider&apos;s own page.</p>
+            <div className="connections-modal-actions">
+              <button type="button" className="secondary" onClick={() => { setStatus('loading'); setAttempt((count) => count + 1) }}>Try again</button>
+              <button type="button" className="primary" onClick={() => window.location.assign(authFlow.redirectUrl)}>Open secure provider page</button>
+            </div>
+          </div>
+        : <EnableBankingAuthFlow
+            key={attempt}
+            authorizationId={authFlow.authorizationId}
+            origin={authFlow.origin}
+            sandbox={authFlow.sandbox}
+            onStatusChange={setStatus}
+            fixtureStatus={fixtureStatus ?? undefined}
+          />}
+    </div>
+
+    <p className="connections-footnote connections-auth-flow-footer"><ShieldCheck size={14}/> Protected by your bank and Enable Banking.</p>
+    <div className="connections-modal-actions">
+      <button type="button" className="secondary" onClick={onCancel}>Cancel</button>
+    </div>
+  </div>
+}
+
 interface RedirectConfirmationStepProps {
   institution: { id: string; name: string; provider: string; kind: string }
   resolvedInstitutionName?: string
+  // The exact live-directory id/provider actually resolved for this attempt
+  // (see resolvedProviderInstitution/effectiveProvider in ConnectionsPage) --
+  // used only to build the same-origin logo-proxy URL for the confirmation
+  // header, never for anything submitted to the server.
+  resolvedInstitutionId?: string
+  resolvedProvider?: ConnectorProvider
   busy: boolean
   error: string
   providerDescriptor?: ProviderDescriptor
@@ -932,7 +1231,7 @@ interface RedirectConfirmationStepProps {
   onConfirm: () => void
 }
 
-function RedirectConfirmationStep({ institution, resolvedInstitutionName, busy, error, providerDescriptor, onCancel, onConfirm }: RedirectConfirmationStepProps) {
+function RedirectConfirmationStep({ institution, resolvedInstitutionName, resolvedInstitutionId, resolvedProvider, busy, error, providerDescriptor, onCancel, onConfirm }: RedirectConfirmationStepProps) {
   if (institution.provider === 'paypal') {
     const mode = providerDescriptor?.mode
     const unavailable = providerDescriptor ? !providerDescriptor.available || !providerDescriptor.configured : false
@@ -981,7 +1280,17 @@ function RedirectConfirmationStep({ institution, resolvedInstitutionName, busy, 
 
   return <div className="connections-confirmation">
     <div className="connections-institution-banner">
-      <span className="connections-row-icon"><InstitutionIcon institution={institution}/></span>
+      {/* Keyed on the resolved bank (falling back to the tile id): this step
+          only ever renders via `setupStep === 3 && ... && <RedirectConfirmationStep/>`,
+          which already unmounts/remounts the whole subtree on any step
+          change, so InstitutionMark's fallback-stage state can't currently
+          go stale across a re-resolution -- but keying explicitly on
+          identity here is the correct, resilient pattern regardless (a
+          prior bank's failed-image state must never silently apply to a
+          newly resolved bank), and stops a future refactor that keeps this
+          step mounted across a re-pick from silently reintroducing exactly
+          that bug. */}
+      <span className="connections-row-icon"><InstitutionIcon key={resolvedInstitutionId ?? institution.id} institution={institution} providerLogoUrl={resolvedInstitutionId && resolvedProvider ? providerInstitutionLogoUrl(resolvedProvider, resolvedInstitutionId) : undefined}/></span>
       <span className="connections-row-body"><strong>{institution.name}</strong>{resolvedInstitutionName && resolvedInstitutionName !== institution.name && <small>{resolvedInstitutionName}</small>}</span>
     </div>
     <h2 id="connections-setup-title" className="connections-setup-title">Continue to your provider</h2>

@@ -21,6 +21,14 @@ export type ConnectionsAcceptanceMode =
   | 'statement-preview'
   | 'provider-unavailable'
   | 'paypal-unconfigured'
+  // Deterministic shell states for the Enable Banking Auth Flow widget --
+  // never contact the real auth.enablebanking.com script or a real
+  // authorization id (see EnableBankingAuthFlow's fixtureStatus prop).
+  // Widget `ready` (the actual third-party custom element rendering
+  // interactively) is intentionally not fixtureable this way -- exercising
+  // it for real requires the live script and a live authorization id.
+  | 'enablebanking-auth-flow-loading'
+  | 'enablebanking-auth-flow-error'
 
 export const ACCEPTANCE_CONNECTIONS: ConnectorConnection[] = [
   { id: 'accept-sparkasse', provider: 'gocardless', displayName: 'Sparkasse', status: 'connected', lastSyncAt: '2026-08-05T09:15:00.000Z', institutionId: 'SPARKASSE_AACHEN_AACSDE33' },

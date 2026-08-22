@@ -12,7 +12,13 @@ export interface ConnectorStartContext {
 }
 
 export interface ConnectorConnection { id: string; provider: ConnectorProvider; displayName: string; status: ConnectorStatus; lastSyncAt?: string; consentExpiresAt?: string; institutionId?: string; error?: string }
-export interface ProviderInstitution { id: string; name: string; bic?: string; logo?: string; country?: string }
+// `group` is Enable Banking-specific (ASPSPGroup: cooperative banking
+// networks like "Volksbanken Raiffeisenbanken" or "Sparkassen-Finanzgruppe"
+// share one group.name across many concrete ASPSPs) -- sanitized the same
+// way as every other field here, never more than {name, logo?}. GoCardless
+// institutions never carry it. UX-only: never part of the institutionId
+// contract, never used to validate a selection server-side.
+export interface ProviderInstitution { id: string; name: string; bic?: string; logo?: string; country?: string; group?: { name: string; logo?: string } }
 export interface ProviderDescriptor { id: ConnectorProvider; displayName: string; kind: string; available: boolean; configured: boolean; mode?: 'owner' | 'partner'; reason?: string }
 export interface ExternalAccount {
   externalId: string
@@ -32,6 +38,21 @@ export interface ExternalAccount {
 export interface ExternalTransaction { externalId: string; externalAccountId: string; description: string; category?: string; amountCents: number; currency: 'EUR'; bookingDate: string; pending?: boolean }
 export interface SyncPayload { connection: ConnectorConnection; accounts: ExternalAccount[]; transactions: ExternalTransaction[] }
 export interface SyncPreview { accountsToCreate: Account[]; transactionsToImport: Transaction[]; duplicateCount: number; pendingCount: number; quality: BankImportQuality }
+
+// startConnector()'s result. Every provider except Enable Banking always
+// gets 'redirect' (the browser is already navigating away by the time this
+// resolves -- see startConnector() below, unchanged behavior). Enable
+// Banking gets 'embedded-auth' only when the server's /start response
+// included a validated authFlow descriptor (see server/src/providers.js's
+// validateEnableBankingAuthOrigin()/validEnableBankingAuthorizationId()) --
+// the caller must keep the setup modal open and render the official Auth
+// Flow widget instead of navigating, and `redirectUrl` is kept on this
+// result specifically so the widget's own error-fallback UI has an
+// already-validated plain-redirect URL to fall back to without a second
+// network round trip.
+export type ConnectorStartResult =
+  | { mode: 'redirect' }
+  | { mode: 'embedded-auth'; provider: 'enablebanking'; redirectUrl: string; authorizationId: string; origin: string; sandbox: boolean }
 
 const REQUEST_TIMEOUT_MS = 15_000
 const RETRY_DELAYS_MS = [350, 900]
@@ -144,6 +165,14 @@ async function requestJson<T>(url: string, init: RequestInit, options: { retry?:
 }
 
 export function connectorReturnUrl(): string { const url = new URL(window.location.href); for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'institution']) url.searchParams.delete(key); url.hash = ''; return url.toString() }
+// Same-origin logo proxy, never a direct link to a provider-controlled URL:
+// the server re-resolves institutionId against its own live directory and
+// re-validates the logo URL it finds there before ever fetching it (see
+// server.js's /logo route and EnableBankingProvider.fetchInstitutionLogo()).
+// The browser never learns, and never needs, the provider's real logo host.
+export function providerInstitutionLogoUrl(provider: ConnectorProvider, institutionId: string): string {
+  return `/api/connectors/${provider}/logo?institutionId=${encodeURIComponent(institutionId)}`
+}
 export async function fetchProviderStatus(): Promise<ProviderDescriptor[]> {
   const result = await requestJson<{ providers?: ProviderDescriptor[] }>('/api/connectors', { method: 'GET' }, { retry: true })
   if (!Array.isArray(result.providers)) throw new Error('The provider status response was invalid.')
@@ -154,14 +183,29 @@ export async function fetchProviderInstitutions(provider: ConnectorProvider, cou
   if (!Array.isArray(result.institutions)) throw new Error('The bank directory response was invalid.')
   return result.institutions
 }
-export async function startConnector(provider: ConnectorProvider, context: ConnectorStartContext = {}): Promise<void> {
-  const result = await requestJson<{ redirectUrl?: string }>(`/api/connectors/${provider}/start`, {
+export async function startConnector(provider: ConnectorProvider, context: ConnectorStartContext = {}): Promise<ConnectorStartResult> {
+  const result = await requestJson<{ redirectUrl?: string; authFlow?: { provider?: string; authorizationId?: string; origin?: string; sandbox?: boolean } }>(`/api/connectors/${provider}/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ redirectUri: connectorReturnUrl(), country: 'DE', institutionId: context.institutionId, institutionName: context.institutionName, accountType: context.accountType }),
   }, { idempotent: true })
   if (!result.redirectUrl || !result.redirectUrl.startsWith('https://')) throw new Error('The connector did not return a secure redirect address.')
+  const authFlow = result.authFlow
+  // Every field is re-validated here, client-side, even though the server
+  // already validated them -- this function's contract must never hand the
+  // widget a value it can't itself vouch for, regardless of what the network
+  // layer in between claims the response shape was.
+  if (
+    provider === 'enablebanking' &&
+    authFlow &&
+    authFlow.provider === 'enablebanking' &&
+    typeof authFlow.authorizationId === 'string' && authFlow.authorizationId.length > 0 &&
+    typeof authFlow.origin === 'string' && authFlow.origin.startsWith('https://')
+  ) {
+    return { mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: result.redirectUrl, authorizationId: authFlow.authorizationId, origin: authFlow.origin, sandbox: Boolean(authFlow.sandbox) }
+  }
   window.location.assign(result.redirectUrl)
+  return { mode: 'redirect' }
 }
 export async function synchronizeConnections(): Promise<SyncPayload[]> { if (activeSynchronization) return activeSynchronization; const operation = (async () => { const result = await requestJson<{ connections?: SyncPayload[] }>('/api/connectors/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } }, { retry: true, idempotent: true }); if (!Array.isArray(result.connections)) throw new Error('The sync service returned an invalid result.'); return result.connections })(); activeSynchronization = operation; try { return await operation } finally { if (activeSynchronization === operation) activeSynchronization = null } }
 export type DisconnectResult = { disconnected: boolean; providerRevoked: boolean; providerRevokeReason: 'confirmed' | 'not_applicable' | 'not_supported' | 'provider_error' }

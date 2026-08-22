@@ -49,6 +49,53 @@ test('lists an authenticated GET /aspsps request and returns only sanitized fiel
   }
 }))
 
+// Enable Banking's real ASPSP schema carries a `group` field for cooperative
+// banking networks (ASPSPGroup: {name, logo}) -- e.g. every Volksbank/
+// Raiffeisenbank branch shares one group.name ("Volksbanken Raiffeisenbanken"),
+// confirmed against the current official API reference at implementation
+// time. The frontend uses it to open a bank-family picker tile already
+// narrowed to the real ASPSPs behind it (see src/institutions.ts's
+// directoryTerms and connectionsModel.ts's familyFilteredInstitutions()).
+test('passes through group.name/logo sanitized, and strips anything else the upstream group object might carry', () => withRestoredFetch(async () => {
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    aspsps: [{
+      name: 'Semper Bank AG',
+      country: 'DE',
+      group: { name: 'Volksbanken Raiffeisenbanken', logo: 'https://enablebanking.example/brands/DE/vr.svg', id: 'should-never-leak', beta: true },
+    }],
+  }), { status: 200 })
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  const institutions = await adapter.institutionDirectory('DE')
+
+  assert.deepEqual(institutions, [{
+    id: 'DE:Semper Bank AG',
+    name: 'Semper Bank AG',
+    country: 'DE',
+    group: { name: 'Volksbanken Raiffeisenbanken', logo: 'https://enablebanking.example/brands/DE/vr.svg' },
+  }])
+  assert.ok(!('id' in institutions[0].group))
+  assert.ok(!('beta' in institutions[0].group))
+}))
+
+test('omits group entirely when the upstream ASPSP has no group, never inventing an empty object', () => withRestoredFetch(async () => {
+  globalThis.fetch = async () => new Response(JSON.stringify({ aspsps: [{ name: 'Trade Republic Bank', country: 'DE' }] }), { status: 200 })
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  const institutions = await adapter.institutionDirectory('DE')
+
+  assert.ok(!('group' in institutions[0]))
+}))
+
+test('omits group when the upstream group object has no name -- a group without an identifying name is not useful to sanitize through', () => withRestoredFetch(async () => {
+  globalThis.fetch = async () => new Response(JSON.stringify({ aspsps: [{ name: 'Trade Republic Bank', country: 'DE', group: { logo: 'https://enablebanking.example/x.svg' } }] }), { status: 200 })
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  const institutions = await adapter.institutionDirectory('DE')
+
+  assert.ok(!('group' in institutions[0]))
+}))
+
 test('omits bic/logo when the upstream ASPSP does not provide them, never inventing empty strings', () => withRestoredFetch(async () => {
   globalThis.fetch = async () => new Response(JSON.stringify({ aspsps: [{ name: 'Trade Republic Bank', country: 'DE' }] }), { status: 200 })
   const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')

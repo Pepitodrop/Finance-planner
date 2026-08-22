@@ -124,6 +124,7 @@ services:
       DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
       RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
       SENSITIVE_RATE_LIMIT_PER_MINUTE: ${SENSITIVE_RATE_LIMIT_PER_MINUTE:-20}
+      ASSET_RATE_LIMIT_PER_MINUTE: ${ASSET_RATE_LIMIT_PER_MINUTE:-240}
       SESSION_REVOCATION_REFRESH_MS: ${SESSION_REVOCATION_REFRESH_MS:-30000}
       RETENTION_INTERVAL_MS: ${RETENTION_INTERVAL_MS:-21600000}
       WEBHOOK_RETENTION_DAYS: ${WEBHOOK_RETENTION_DAYS:-90}
@@ -160,6 +161,11 @@ services:
       # Enable Banking is actually usable is the application id above and
       # whatever the read-only mount below actually contains, not this path.
       ENABLE_BANKING_PRIVATE_KEY_FILE: /run/secrets/enable-banking-private-key.pem
+      # Controls the official Auth Flow widget's `sandbox` attribute. Empty
+      # by default (falls back to hostname-based inference from Enable
+      # Banking's own POST /auth response -- see providers.js and
+      # .env.example); set explicitly for a production deployment.
+      ENABLE_BANKING_SANDBOX: ${ENABLE_BANKING_SANDBOX:-}
     ports:
       - "127.0.0.1:${CONNECTOR_PORT:-8787}:8787"
     volumes:

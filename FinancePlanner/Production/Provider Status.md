@@ -15,13 +15,69 @@ For first-party internal flows with no external provider (for example Finance Pl
 Implementation: **implemented** (real Enable Banking API client, `server/src/providers.js` `EnableBankingProvider`, `server/src/enable-banking-jwt.js`)
 Configuration: **optional** (requires `ENABLE_BANKING_APPLICATION_ID` + `ENABLE_BANKING_PRIVATE_KEY_FILE` or `ENABLE_BANKING_PRIVATE_KEY`)
 Provider-dependent: yes
-Runtime verified: **no** — no dated execution evidence, no Enable Banking sandbox credentials configured anywhere in this environment
-Production verified: **no evidence found**
-Last evidence: **evidence checked 2026-08-20** — implementation added this session, verified against current official Enable Banking docs (`enablebanking.com/docs/api/quick-start/`, `/docs/api/reference/`) at implementation time, not from memory. Every server-side test mocks `fetch`; none has ever reached the real Enable Banking API.
-Current limitations: same class of gap as GoCardless below — no completed end-to-end consent→sync→disconnect cycle evidenced against a live sandbox. Requires Control Panel setup (sandbox application, allowed callback URL `{APP_ORIGIN}/api/connectors/callback`, application id, RSA private key) before any real verification can begin — see [[Enable Banking]].
+Runtime verified: **partial — see live verification matrix (2026-08-22, third pass)**. Institution discovery, logos, and `/auth` acceptance are genuinely live-verified; the browser has reached both Enable Banking's pre-auth page and a real bank authentication page; authorization completion, callback, sync, and disconnect are not yet verified. The Auth Flow widget embedding this pass added is code-complete and locally verified only, not yet redeployed.
+Production verified: **no evidence found** for the authorization-completion/callback/sync/disconnect path. Institution discovery, logos, `/auth` acceptance, and reaching real bank authentication screens WERE exercised against three sequential temporary production deployments (`finance.luisbenedikt.de`) of PR #144, against the real configured Enable Banking sandbox application — see matrix below.
+
+### Live verification matrix (PR #144, three sequential temporary deployments against finance.luisbenedikt.de, 2026-08-21/22)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Enable Banking configured/available | **LIVE VERIFIED = YES** | Connections UI showed it selectable |
+| `GET /aspsps` (live directory) | **LIVE VERIFIED = YES** | Real response, 592 institutions returned for DE |
+| Bank family discovery / institution filtering/search | **LIVE VERIFIED = YES** | "Volksbank / Raiffeisenbank" opened blank and showed real branches (Aachener Bank, Berliner Volksbank, Volksbank Köln Bonn, Volksbank Rhein-Erft-Köln, ...) with real BICs; "Berlin" and "Köln" searches worked |
+| Exact-bank selection reaching Step 3 confirmation | **LIVE VERIFIED = YES** | Selecting a real bank reached the redirect-confirmation screen |
+| Real bank logos | **LIVE VERIFIED = YES** | Screenshot showed real cooperative-bank logos rendering |
+| Logo proxy (`GET /api/connectors/:provider/logo`) | **LIVE VERIFIED = YES** | Server logs: `GET /api/connectors/enablebanking/logo -> 200` |
+| `POST /auth` request reaches Enable Banking | **LIVE VERIFIED = YES** (second pass) | A real, structured 400 response was received from the provider (see below), proving the request got there |
+| `POST /auth` accepted | **LIVE VERIFIED = YES** (third pass, 2026-08-22) | No more `REDIRECT_URI_NOT_ALLOWED`; the browser reached `tilisy-sandbox.enablebanking.com/ais/` |
+| Enable Banking pre-auth page reached | **LIVE VERIFIED = YES** (third pass) | "Authentication is initiated by Finance Planner" shown on the real sandbox host |
+| Bank authentication page reached | **LIVE VERIFIED = YES** (third pass) | Real authentication-method selector (VR NetKey, PIN fields) for Volksbank Köln Bonn |
+| Authorization successfully completed | **NO** | A credential attempt returned "Invalid credentials" from the external bank sandbox -- not a Finance Planner defect; see [[Enable Banking]] for the recommended next test bank |
+| Consent (user completes bank-side auth) | **NO** | Blocked pending a successful credential attempt |
+| Callback (`GET /api/connectors/callback`) | **NO** | Never reached |
+| `POST /sessions` (session exchange) | **NO** | Never reached |
+| Balance sync | **NO** | Never reached |
+| Transaction sync | **NO** | Never reached |
+| Disconnect | **NO** | Never reached |
+| Official Auth Flow widget (`<enablebanking-auth-flow>`) | **IMPLEMENTED / LOCALLY VERIFIED only** | See [[Enable Banking Auth Flow Widget]] -- not yet redeployed/re-tested live |
+
+**First live pass** failed with a generic "Internal server error" pressing "Continue securely" for Volksbank Köln Bonn. Root-caused (not confirmed via production logs on that pass — none were available — but confirmed against current official Enable Banking API docs and unit-tested): `EnableBankingProvider.start()` treated `match.maximum_consent_validity` (documented as **seconds**) as if it were already **days**, so the per-ASPSP consent-duration clamp never actually fired. Fixed (seconds→ms conversion) plus `access.balances`/`transactions: true` added, plus improved server-side (never client-facing) provider-error logging.
+
+**Second live pass** (after redeploying the fix above, and after separately fixing a rate-limiter interaction where ordinary logo traffic could exhaust the sensitive bucket and starve `/start` — see [[Rate Limiting]]): the request now reached Enable Banking and received a **real, structured provider response** — `providerStatus: 400`, `providerCode: REDIRECT_URI_NOT_ALLOWED`, `providerMessage: "Redirect URI not allowed"` (request `d7eabbcb-e605-447c-920e-a6c1c6a1932f`). Root cause (confirmed from the real provider error, not guessed): `redirect_url` was built by appending `?provider=enablebanking&state=...` on top of the origin, which Enable Banking's Control Panel does not accept — its two registered redirect URLs (`https://finance.luisbenedikt.de/api/connectors/callback`, `http://localhost:5173/api/connectors/callback`) are validated as exact, bare strings. Fixed by deriving `redirect_url` independently from trusted server config (`canonicalCallbackUrl()`) instead of the browser-supplied return destination, and deriving the callback route's provider identity from the verified `state` payload instead of a client-supplied `?provider=` query parameter — full detail in [[Provider Callback Binding]]'s 2026-08-21 entry.
+
+Both the redirect_uri fix and the rate-limit tier fix are **IMPLEMENTED / LOCALLY VERIFIED only** (full server+frontend test suites, `tsc -b --noEmit`, `eslint .`, `npm run build`, `git diff --check` clean; two independent gstack review subagents — security and correctness — found zero exploitable issues) **until we redeploy and repeat the real sandbox test.**
+
+**Third live pass (2026-08-22):** after redeploying the two fixes above, `POST /auth` was **accepted** — the redirect_uri fix works end to end against the real provider. The browser reached `tilisy-sandbox.enablebanking.com/ais/` ("Authentication is initiated by Finance Planner") and progressed to a real bank authentication-method selector (VR NetKey, PIN) for Volksbank Köln Bonn. A credential attempt returned "Invalid credentials" from the external bank sandbox itself — not a Finance Planner code path, not evidence of any defect here. This pass motivated embedding Enable Banking's **official Auth Flow widget** so this pre-auth step happens inside Finance Planner's own modal instead of a full-page redirect to a generic Enable Banking-hosted page — see [[Enable Banking Auth Flow Widget]] for the full architecture, security review, and CSP change (IMPLEMENTED / LOCALLY VERIFIED only, including a real-browser-QA pass on the widget's loading/error shell states at all 5 required viewports — not yet exercised against the real widget script/live authorization).
+
+**Mock ASPSP sandbox prep (2026-08-22), before any real Mock ASPSP test:** review ahead of the next real E2E pass (Enable Banking's Mock ASPSP — no real bank credentials, available in all countries) found and fixed three provider-contract bugs in `EnableBankingProvider.sync()` that would otherwise have surfaced as corrupted financial data on the very first successful sync: `transaction_amount.amount` is absolute (sign comes from `credit_debit_indicator`, previously ignored), `entry_reference` (not `transaction_id`) is the documented transaction identifier, and `PDNG` (not `PEND`) is the documented pending status. Full detail in [[Enable Banking]]'s 2026-08-22 entry. **IMPLEMENTED / LOCALLY VERIFIED only** — confirmed against current official documentation and covered by 29 tests against mocked responses (including a new synthetic EUR fixture run end-to-end through the real `sync()` pipeline), but no sync has ever run against a real Enable Banking session, mock or otherwise. **Do not mark Mock ASPSP E2E as LIVE VERIFIED until an actual Mock ASPSP sync has been observed.** Also confirmed (code-reading only, not yet live-observed): Finance Planner's existing live-directory top-level search (`searchLiveInstitutions`, matches on institution `name`/`bic`/`group.name`, queried with `country: 'DE'`) requires no new code to surface a real "Mock ASPSP" `/aspsps` directory entry if Enable Banking's sandbox actually returns one — no dedicated sandbox UI was added.
+
+Current exact matrix as of this pass:
+
+```
+Enable Banking configuration: LIVE VERIFIED = YES
+/aspsps: LIVE VERIFIED = YES
+Bank family discovery: LIVE VERIFIED = YES
+Search: LIVE VERIFIED = YES
+Exact bank selection: LIVE VERIFIED = YES
+Real bank logos: LIVE VERIFIED = YES
+Logo proxy: LIVE VERIFIED = YES
+POST /auth request reaches Enable Banking: LIVE VERIFIED = YES
+POST /auth accepted: LIVE VERIFIED = YES
+Enable Banking pre-auth page reached: LIVE VERIFIED = YES
+Bank authentication page reached: LIVE VERIFIED = YES
+Authorization successfully completed: NO
+Callback: NO
+POST /sessions: NO
+Balances: NO
+Transactions: NO
+Disconnect: NO
+Official Auth Flow widget: IMPLEMENTED / LOCALLY VERIFIED only after this task until redeployed and actually tested.
+```
+
+Current limitations: same class of gap as GoCardless below — no completed end-to-end consent→sync→disconnect cycle evidenced against a live sandbox, and the redirect_uri fix above is **not yet re-verified live**. Do not mark the consent-duration fix LIVE VERIFIED either — the provider currently rejects on redirect_uri first, so another contract problem could still surface once that's corrected. Control Panel setup itself is confirmed already correct (discovery/JWT auth succeed live; both required redirect URLs are registered). See [[Enable Banking]], [[Bank Family Directory Resolution]], [[Institution Logo Proxy]], and [[Provider Callback Binding]].
 Architecture note (2026-08-20): implementing Enable Banking required generalizing PR #138's callback contract — `OpenBankingProvider` gained a `completeCallback()` lifecycle step (a no-op pass-through for GoCardless/PayPal) because Enable Banking's session isn't known until after a server-side code exchange that happens *after* the callback lands, and `activateConnection()` was split into `consumePendingConnectionSetup()` + `finalizeConnection()` so that exchange's network call never happens inside an open DB transaction. This is a structural change to the callback path all three bank/wallet providers now share; see [[Provider Callback Binding]] for why none of its existing guarantees (atomic single-use nonce, working-connection-preserved-until-verified) were weakened by the split.
 Confirmed during implementation (2026-08-20): GnuCOBOL's `VALIDATE-PROVIDER-CONSENT`, `NORMALIZE-PROVIDER-ACCOUNT-TYPE`, and `NORMALIZE-PROVIDER-AMOUNT` COBOL operations were already provider-agnostic where it mattered (a generic non-`gocardless` status-mapping branch already existed) — Enable Banking required zero COBOL source changes. Read directly from `core/cobol/banking/banking-core.cob` before relying on this, not inferred.
-Deployment wiring (added 2026-08-20): **implemented, not yet runtime verified**. `compose.yaml`'s connector service now sources `ENABLE_BANKING_APPLICATION_ID` from the host environment and bind-mounts the RSA private key read-only from `ENABLE_BANKING_PRIVATE_KEY_HOST_FILE` (defaulting to a committed, non-secret placeholder so deployments without Enable Banking still start cleanly). Verified with `docker compose config`/`create` in both the unconfigured and dummy-key-configured cases; actual container boot with the real key was not exercised — see [[Enable Banking]] for the full verification detail.
+Deployment wiring (added 2026-08-20, **runtime-verified 2026-08-21**): `compose.yaml`'s connector service now sources `ENABLE_BANKING_APPLICATION_ID` from the host environment and bind-mounts the RSA private key read-only from `ENABLE_BANKING_PRIVATE_KEY_HOST_FILE` (defaulting to a committed, non-secret placeholder so deployments without Enable Banking still start cleanly). Originally verified only with `docker compose config`/`create`; PR #144's temporary live deployment has since exercised actual container boot with the real key (JWT signing and `GET /aspsps` succeeded live) — see [[Enable Banking]] for the full verification detail.
 Relevant code/docs: `server/src/providers.js`, `server/src/enable-banking-jwt.js`, `server/migrations/009_enable_banking_provider.sql`, `.env.example`, `compose.yaml`
 
 ---
@@ -141,4 +197,4 @@ Relevant code/docs: `src/aiModels.ts`, `README.md` ("AI architecture")
 
 [[Providers Index]] mirrors this note's verification table as individually-linkable atomic nodes (one per provider, each with its own implementation/config/test/verification-state breakdown) so a specific provider can be reached directly from [[Pages Index]], [[Flows Index]], or [[Security Index]] without returning here first.
 
-Related: [[Authentication]], [[Bank Connections]], [[Enable Banking]], [[PayPal]], [[AI System]], [[Known Issues and Limitations]], [[Rejected Approaches]], [[Providers Index]], [[Provider Callback Binding]], [[Bank Disconnect Flow]]
+Related: [[Authentication]], [[Bank Connections]], [[Enable Banking]], [[PayPal]], [[AI System]], [[Known Issues and Limitations]], [[Rejected Approaches]], [[Providers Index]], [[Provider Callback Binding]], [[Bank Disconnect Flow]], [[Rate Limiting]], [[Institution Logo Proxy]], [[Enable Banking Auth Flow Widget]]
