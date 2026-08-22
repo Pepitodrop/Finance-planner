@@ -54,7 +54,7 @@ test('test-account COBOL seed and clear workflow round-trips against PostgreSQL 
     pool = createDatabase(databaseUrl, { max: 3 })
     await migrateDatabase(pool)
 
-    await execFileAsync('cobc', ['-Wall', '-Wextra', '-x', '-o', binary, cobolSource], { timeout: 10_000 })
+    await execFileAsync('cobc', ['-free', '-Wall', '-Wextra', '-x', '-o', binary, cobolSource], { timeout: 10_000 })
 
     const scriptEnv = {
       ...process.env,

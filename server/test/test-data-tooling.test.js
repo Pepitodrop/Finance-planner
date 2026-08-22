@@ -22,7 +22,7 @@ test('server package exposes only isolated test-account seed/reset commands, not
   assert.equal(packageJson.scripts['database:reset-demo'], undefined)
   assert.equal(packageJson.scripts['database:reset-demo:dry-run'], undefined)
   assert.equal(packageJson.scripts['test-account:provision'], 'node scripts/create-test-account.mjs')
-  assert.match(packageJson.scripts['test-account:build-seed'], /cobc .*test_seed_generator\.cob/)
+  assert.match(packageJson.scripts['test-account:build-seed'], /cobc -free .*test_seed_generator\.cob/)
   assert.equal(packageJson.scripts['test-account:seed'], 'npm run test-account:build-seed && node scripts/create-test-account.mjs --seed-cobol')
   assert.equal(packageJson.scripts['test-account:clear-data'], 'node scripts/clear-test-account-data.mjs')
 })
@@ -63,6 +63,7 @@ test('test-account clear command is confirmation-gated, refuses non-test account
 })
 
 test('COBOL seed contains deterministic finance fixtures only and no credentials', () => {
+  assert.match(cobolSource, />>SOURCE FORMAT IS FREE/)
   assert.match(cobolSource, /Finance Planner Test Girokonto/)
   assert.match(cobolSource, /balanceCents":695950/)
   assert.match(cobolSource, /amountCents":250000/)
@@ -77,7 +78,7 @@ test('compiled COBOL seed emits valid deterministic JSON', { skip: !cobcAvailabl
   const tempDirectory = await mkdtemp(join(tmpdir(), 'finance-planner-test-seed-'))
   const binary = join(tempDirectory, 'test-seed')
   try {
-    await execFileAsync('cobc', ['-Wall', '-Wextra', '-x', '-o', binary, cobolSourcePath], { timeout: 10_000 })
+    await execFileAsync('cobc', ['-free', '-Wall', '-Wextra', '-x', '-o', binary, cobolSourcePath], { timeout: 10_000 })
     const { stdout, stderr } = await execFileAsync(binary, [], { encoding: 'utf8', timeout: 10_000 })
     assert.equal(stderr, '')
     const payload = JSON.parse(stdout)
