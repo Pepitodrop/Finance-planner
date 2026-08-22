@@ -13,6 +13,7 @@ import { createFinanceRouter } from './finance-router.js'
 import { createGoogleSubscriptionsRouter } from './google-subscriptions-router.js'
 import { OperationalMetrics } from './operational-metrics.js'
 import { authorizeProviderUser, describeProviderForUser } from './provider-access.js'
+import { callbackHasCompletionSignal, completedConnectionMatchesState } from './provider-callback.js'
 import { createOpenBankingProviderRegistry } from './providers.js'
 import { HttpError, SlidingWindowRateLimiter, classifyError, clientIp, rateLimitTier, requestId, validateProductionConfig } from './runtime-security.js'
 import { bearerToken, createSession, issueState, verifySessionClaims, verifyState } from './security.js'
@@ -463,25 +464,15 @@ const server = createServer(async (request, response) => {
       return send(response, 200, { disconnected: true, providerRevoked, providerRevokeReason })
     }
     if (request.method === 'GET' && url.pathname === '/api/connectors/callback') {
-      // A real provider return (or a forged/expired/replayed/malformed hit on
-      // this URL) must never dead-end in raw JSON -- the user is mid-flow in
-      // their browser, not calling an API client. Every failure here redirects
-      // back into the app with a fixed, safe error code/description (never a
-      // caller-supplied string) so ConnectionsPage's existing error handling
-      // can show it. Redirect to state.redirectUri when it's known and
-      // cryptographically verified (state parsed successfully); otherwise fall
-      // back to the app origin.
-      //
-      // The provider identity is derived from the verified `state` payload
-      // itself (`state.provider`), never from a `?provider=` query
-      // parameter (fixed 2026-08-21, see the redirect_uri architecture
-      // note in providers.js's canonicalCallbackUrl()) -- Enable Banking's
-      // own redirect never carries one (its Control Panel validates the
-      // submitted redirect_url as an exact, bare string with no extra query
-      // parameters at all), so relying on it would break that provider's
-      // callback outright. GoCardless/PayPal's redirects still happen to
-      // carry `?provider=` too (their own redirect_url still embeds it,
-      // unchanged), but it is now purely redundant, never trusted.
+      // Provider completion is represented by OAuth-compatible query signals:
+      // a code on success, or an error on denial/failure. The embedded Enable
+      // Banking widget can also navigate to the registered callback without
+      // either signal; that auxiliary navigation must not consume the nonce.
+      const hasCompletionSignal = callbackHasCompletionSignal(url)
+      const redirectWithoutError = (target) => {
+        response.writeHead(302, { Location: new URL(target).toString(), 'Cache-Control': 'no-store', 'X-Request-ID': id })
+        response.end()
+      }
       const redirectWithError = (target, errorCode = 'invalid_state') => {
         const location = new URL(target)
         location.searchParams.set('error', errorCode)
@@ -496,11 +487,23 @@ const server = createServer(async (request, response) => {
         provider = state.provider
         providerAdapter(provider)
       } catch {
+        // A navigation with no code/error is not a completion attempt. It is
+        // safe to return to the application without surfacing an error, and
+        // crucially it never reaches nonce consumption. A callback carrying a
+        // code/error still requires a valid signed state and fails closed.
+        if (!hasCompletionSignal) {
+          redirectWithoutError(origin)
+          return
+        }
         redirectWithError(origin)
         return
       }
       if (!state.consentId || !state.redirectUri) {
         redirectWithError(origin)
+        return
+      }
+      if (!hasCompletionSignal) {
+        redirectWithoutError(state.redirectUri)
         return
       }
       // Two provider-agnostic steps, never one -- see providers.js's
@@ -522,8 +525,16 @@ const server = createServer(async (request, response) => {
         return
       }
       if (!pending) {
-        redirectWithError(state.redirectUri)
-        return
+        let replayed = false
+        try {
+          const stored = await store.get(state.sub, provider)
+          replayed = completedConnectionMatchesState(stored, state, provider)
+        } catch {}
+        if (!replayed) { redirectWithError(state.redirectUri); return }
+        const success = new URL(state.redirectUri)
+        success.searchParams.set('provider', provider)
+        response.writeHead(302, { Location: success.toString(), 'Cache-Control': 'no-store', 'X-Request-ID': id })
+        return response.end()
       }
       let completed
       try {
