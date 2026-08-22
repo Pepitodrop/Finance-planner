@@ -8,7 +8,7 @@ import { MobileExperience } from '../MobileExperience'
 
 function TestShell() {
   const [destination, setDestination] = useState<DestinationId>('dashboard')
-  return <ApplicationShell activeDestination={destination} onNavigate={setDestination}>
+  return <ApplicationShell activeDestination={destination} onNavigate={setDestination} onLogout={vi.fn().mockResolvedValue(undefined)}>
     <h1>{destination}</h1>
   </ApplicationShell>
 }
@@ -21,6 +21,7 @@ describe('ApplicationShell navigation', () => {
     const desktop = screen.getByRole('navigation', { name: 'Primary navigation' })
     expect(within(desktop).getAllByRole('button')).toHaveLength(12)
     expect(within(desktop).getByRole('button', { name: 'Dashboard' })).toHaveAttribute('aria-current', 'page')
+    expect(within(screen.getByRole('complementary')).getByRole('button', { name: 'Log out of Finance Planner' })).toBeInTheDocument()
 
     const mobile = screen.getByRole('navigation', { name: 'Mobile primary navigation' })
     expect(screen.getAllByRole('navigation', { name: 'Mobile primary navigation' })).toHaveLength(1)
@@ -56,7 +57,9 @@ describe('ApplicationShell navigation', () => {
       'Receipt review',
       'Data and backup',
       'Account and session',
+      null,
     ])
+    expect(within(dialog).getByRole('button', { name: 'Log out of Finance Planner' })).toBeInTheDocument()
     expect([...dialog.querySelectorAll('.app-more-sheet__group-label')].map((el) => el.textContent)).toEqual([
       'Planning', 'Connections', 'Intelligence', 'Data & account',
     ])
@@ -87,11 +90,25 @@ describe('ApplicationShell navigation', () => {
   it('keeps vault locking in the shell and exposes it through More on mobile', async () => {
     const user = userEvent.setup()
     const onLockVault = vi.fn()
-    render(<ApplicationShell activeDestination="dashboard" onNavigate={vi.fn()} onLockVault={onLockVault}><h1>dashboard</h1></ApplicationShell>)
+    const onLogout = vi.fn().mockResolvedValue(undefined)
+    render(<ApplicationShell activeDestination="dashboard" onNavigate={vi.fn()} onLockVault={onLockVault} onLogout={onLogout}><h1>dashboard</h1></ApplicationShell>)
     expect(within(screen.getByRole('complementary')).getByRole('button', { name: 'Lock encrypted finance vault' })).toBeInTheDocument()
 
     await user.click(within(screen.getByRole('navigation', { name: 'Mobile primary navigation' })).getByRole('button', { name: 'More' }))
     await user.click(within(screen.getByRole('dialog', { name: 'More destinations' })).getByRole('button', { name: 'Lock encrypted finance vault' }))
     expect(onLockVault).toHaveBeenCalledOnce()
+  })
+
+  it('logs out directly from both the desktop shell and mobile More menu', async () => {
+    const user = userEvent.setup()
+    const onLogout = vi.fn().mockResolvedValue(undefined)
+    render(<ApplicationShell activeDestination="dashboard" onNavigate={vi.fn()} onLogout={onLogout}><h1>dashboard</h1></ApplicationShell>)
+
+    await user.click(within(screen.getByRole('complementary')).getByRole('button', { name: 'Log out of Finance Planner' }))
+    expect(onLogout).toHaveBeenCalledTimes(1)
+
+    await user.click(within(screen.getByRole('navigation', { name: 'Mobile primary navigation' })).getByRole('button', { name: 'More' }))
+    await user.click(within(screen.getByRole('dialog', { name: 'More destinations' })).getByRole('button', { name: 'Log out of Finance Planner' }))
+    expect(onLogout).toHaveBeenCalledTimes(2)
   })
 })
