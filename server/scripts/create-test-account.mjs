@@ -1,4 +1,7 @@
+import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 import { AuthStore } from '../src/auth-store.js'
 import { createDatabase, migrateDatabase } from '../src/database.js'
 import {
@@ -12,12 +15,40 @@ import {
   verifyProvisionedTestAccount,
 } from '../src/test-account-provisioning.js'
 
+const execFileAsync = promisify(execFile)
 const env = process.env
-const email = normalizeTestAccountEmail(process.argv[2] || env.TEST_ACCOUNT_EMAIL)
+const args = process.argv.slice(2)
+const seedWithCobol = args.includes('--seed-cobol')
+const emailArgument = args.find((argument) => !argument.startsWith('--'))
+const email = normalizeTestAccountEmail(emailArgument || env.TEST_ACCOUNT_EMAIL)
 const name = requireTestAccountName(env.TEST_ACCOUNT_NAME)
 const seedFile = String(env.TEST_ACCOUNT_SEED_FILE || '').trim()
-const pool = createDatabase(env.DATABASE_URL)
+const defaultCobolSeedBinary = fileURLToPath(new URL('../build/test-seed', import.meta.url))
+const cobolSeedBinary = String(env.COBOL_TEST_SEED_BINARY || defaultCobolSeedBinary).trim()
 
+if (seedWithCobol && seedFile) {
+  throw new Error('Choose exactly one test-data seed source: --seed-cobol or TEST_ACCOUNT_SEED_FILE, not both.')
+}
+
+async function loadSeedPayload() {
+  if (seedWithCobol) {
+    const { stdout, stderr } = await execFileAsync(cobolSeedBinary, [], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      maxBuffer: 1_000_000,
+      env: { PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin' },
+    })
+    if (stderr?.trim()) throw new Error('The COBOL test-seed generator wrote unexpected stderr output.')
+    return { payload: validateCloudPayload(JSON.parse(stdout)), source: 'gnucobol' }
+  }
+  if (seedFile) {
+    const parsed = JSON.parse(await readFile(seedFile, 'utf8'))
+    return { payload: validateCloudPayload(parsed), source: 'file' }
+  }
+  return { payload: null, source: null }
+}
+
+const pool = createDatabase(env.DATABASE_URL)
 await migrateDatabase(pool)
 
 try {
@@ -38,13 +69,11 @@ try {
     expectedUserId: provisioned.userId,
   })
 
+  const seedInput = await loadSeedPayload()
   let seedSummary = null
-  if (seedFile) {
-    const payload = JSON.parse(await readFile(seedFile, 'utf8'))
-    validateCloudPayload(payload)
-
+  if (seedInput.payload) {
     const encryptedPayload = encryptCloudPayload(
-      payload,
+      seedInput.payload,
       env.CONNECTOR_MASTER_KEY,
       provisioned.userId,
     )
@@ -63,10 +92,11 @@ try {
     )
 
     seedSummary = {
+      source: seedInput.source,
       version: Number(result.rows[0].version),
-      accounts: payload.state.accounts.length,
-      transactions: payload.state.transactions.length,
-      goals: payload.state.goals.length,
+      accounts: seedInput.payload.state.accounts.length,
+      transactions: seedInput.payload.state.transactions.length,
+      goals: seedInput.payload.state.goals.length,
     }
   }
 
@@ -74,7 +104,7 @@ try {
     status: 'ok',
     created: provisioned.created,
     persisted: true,
-    seedApplied: Boolean(seedFile),
+    seedApplied: Boolean(seedInput.payload),
     seed: seedSummary,
   }, null, 2))
 } finally {

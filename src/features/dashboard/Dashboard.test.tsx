@@ -40,7 +40,7 @@ describe('Dashboard', () => {
     renderDashboard()
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
     expect(screen.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeInTheDocument()
-    expect(screen.getByText(/Good evening, Alex/)).toBeInTheDocument()
+    expect(screen.getByText('Welcome back, Alex. Here is your financial overview.')).toBeInTheDocument()
     expect(screen.getByText('August 2026')).toBeInTheDocument()
     expect(screen.getByText('Income').closest('article')).toHaveTextContent('+3.000,00 €')
     expect(screen.getByText('Expenses').closest('article')).toHaveTextContent('−450,00 €')
