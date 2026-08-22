@@ -3,10 +3,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends gnucobol && rm 
 WORKDIR /app
 COPY core/cobol/transaction_rules.cob core/cobol/transaction_rules.cob
 COPY core/cobol/banking/banking-core.cob core/cobol/banking/banking-core.cob
+COPY core/cobol/test_account_empty_generator.cob core/cobol/test_account_empty_generator.cob
 COPY core/cobol/test_seed_generator.cob core/cobol/test_seed_generator.cob
 RUN mkdir -p build \
     && cobc -Wall -Wextra -x -o build/transaction-rules core/cobol/transaction_rules.cob \
     && cobc -Wall -Wextra -x -o build/banking-core core/cobol/banking/banking-core.cob \
+    && cobc -free -Wall -Wextra -x -o build/test-account-empty core/cobol/test_account_empty_generator.cob \
     && cobc -free -Wall -Wextra -x -o build/test-seed core/cobol/test_seed_generator.cob
 
 FROM node:22-bookworm-slim
@@ -29,6 +31,7 @@ COPY server/scripts ./scripts
 COPY server/migrations ./migrations
 COPY --from=build /app/build/transaction-rules ./build/transaction-rules
 COPY --from=build /app/build/banking-core ./build/banking-core
+COPY --from=build /app/build/test-account-empty ./build/test-account-empty
 COPY --from=build /app/build/test-seed ./build/test-seed
 RUN mkdir -p /app/data && chown -R node:node /app
 USER node
@@ -37,6 +40,7 @@ ENV NODE_ENV=production \
     PORT=8787 \
     COBOL_TRANSACTION_ENGINE=/app/build/transaction-rules \
     COBOL_BANKING_BINARY=/app/build/banking-core \
+    COBOL_TEST_ACCOUNT_EMPTY_BINARY=/app/build/test-account-empty \
     COBOL_TEST_SEED_BINARY=/app/build/test-seed \
     COBOL_BANKING_REQUIRED=true \
     CONNECTOR_STORE_PATH=/app/data/connectors.enc.json \
