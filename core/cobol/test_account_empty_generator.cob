@@ -13,8 +13,6 @@ MAIN.
     DISPLAY '    "transactions": [],'
     DISPLAY '    "goals": []'
     DISPLAY '  },'
-    DISPLAY '  "secureData": {'
-    DISPLAY '    "testAccount": {"generator":"gnucobol","mode":"empty","version":1}'
-    DISPLAY '  }'
+    DISPLAY '  "secureData": {}'
     DISPLAY '}'
     STOP RUN.
