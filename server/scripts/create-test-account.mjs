@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { AuthStore } from '../src/auth-store.js'
 import { createDatabase, migrateDatabase } from '../src/database.js'
@@ -22,7 +23,8 @@ const emailArgument = args.find((argument) => !argument.startsWith('--'))
 const email = normalizeTestAccountEmail(emailArgument || env.TEST_ACCOUNT_EMAIL)
 const name = requireTestAccountName(env.TEST_ACCOUNT_NAME)
 const seedFile = String(env.TEST_ACCOUNT_SEED_FILE || '').trim()
-const cobolSeedBinary = String(env.COBOL_TEST_SEED_BINARY || '/app/build/test-seed').trim()
+const defaultCobolSeedBinary = fileURLToPath(new URL('../build/test-seed', import.meta.url))
+const cobolSeedBinary = String(env.COBOL_TEST_SEED_BINARY || defaultCobolSeedBinary).trim()
 
 if (seedWithCobol && seedFile) {
   throw new Error('Choose exactly one test-data seed source: --seed-cobol or TEST_ACCOUNT_SEED_FILE, not both.')
