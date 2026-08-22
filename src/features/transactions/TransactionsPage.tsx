@@ -52,8 +52,7 @@ const FOCUSABLE =
   'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
 
 function signedMoney(transaction: Transaction) {
-  const type = presentedTransactionType(transaction);
-  return `${type === "income" ? "+" : "−"}${formatMoney(transaction.amountCents)}`;
+  return `${transaction.type === "income" ? "+" : "−"}${formatMoney(transaction.amountCents)}`;
 }
 
 function typeLabel(transaction: Transaction) {
