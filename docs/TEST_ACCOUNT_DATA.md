@@ -11,7 +11,7 @@ Authentication/security/database orchestration stays in Node.js. GnuCOBOL is use
 ```json
 {
   "state": { "accounts": [], "transactions": [], "goals": [] },
-  "secureData": { "testAccount": { "generator": "gnucobol", "mode": "empty", "version": 1 } }
+  "secureData": {}
 }
 ```
 
@@ -48,7 +48,7 @@ The explicit empty-account workflow is:
 1. execute the compiled GnuCOBOL empty-state generator **before any auth/database mutation**;
 2. validate the emitted JSON through `validateCloudPayload()`;
 3. create/update the deterministic test auth identity in Node.js;
-4. encrypt the empty payload with the user binding;
+4. encrypt the fully empty payload with the user binding;
 5. persist that encrypted empty state in PostgreSQL.
 
 Local development, with GnuCOBOL installed:
@@ -65,7 +65,7 @@ docker compose --env-file .env exec -T \
   connector node scripts/create-test-account.mjs --empty-cobol
 ```
 
-Running this again deliberately returns the deterministic test account to an encrypted empty finance state while preserving its test login identity.
+Running this again deliberately returns the deterministic test account to an encrypted `accounts=[]`, `transactions=[]`, `goals=[]`, `secureData={}` state while preserving its test login identity.
 
 ## Comprehensive seed
 
