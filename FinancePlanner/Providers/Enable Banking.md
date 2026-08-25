@@ -83,6 +83,30 @@ A second follow-up review on this same PR found two further real gaps and fixed 
 
 **Status: code-fixed, locally test-verified only, independently reviewed (no CRITICAL/HIGH/MEDIUM findings; one cosmetic stale-comment fix) — still awaiting a fresh Mock ASPSP run.** Nothing here changes the account-handling 422 fix above; both rounds are cumulative fixes on the same, still-unexercised-live, fourth pass.
 
+## Fifth pass (2026-08-25): a temporary deployment of the above fixes confirmed the popup/vault mechanism live, then found a concurrent-duplicate-callback race
+
+A temporary deployment was tested against Enable Banking's real Mock ASPSP sandbox in Firefox — the first live exercise of the popup-preservation and 422/status-mapping fixes above.
+
+**Verified live on 2026-08-25:**
+- a separate provider popup opens correctly on the Enable Banking sandbox;
+- the original Finance Planner SPA remains mounted throughout;
+- the original vault remains unlocked throughout (the original same-tab vault-reset regression this whole popup mechanism exists to fix did **not** reproduce);
+- `POST /api/connectors/enablebanking/start` returned 200 and Enable Banking authorization progressed and completed successfully;
+- Enable Banking authorization completes server-side and a connector connection was genuinely **persisted** (confirmed by a read-only PostgreSQL check: an `enablebanking` row in `connector_connections` with `updated_at` matching the test's timestamp exactly).
+
+**Runtime defect found:** the connector logged **two** `GET /api/connectors/callback` deliveries for that single authorization (~5ms and ~343ms apart). The original tab accepted the faster one, which returned `invalid_state` — "The connection was not completed: It may have expired or already been used" — even though the slower delivery went on to finalize the very same connection successfully moments later. A concurrent-duplicate-callback race can therefore surface a spurious `invalid_state` failure to the user while the same attempt is still finalizing server-side. Full root cause, fix (a claim lifecycle replacing immediate nonce deletion — new `oauth_nonces.claim_token` column, `claimPendingConnectionSetup()`/`waitForPendingConnectionCompletion()`/`releasePendingConnectionSetup()`, the whole sequence extracted into a directly-testable `completeConnectorCallback()`), and verification (16 new unit tests including a deterministic reproduction of the exact race, plus a real-concurrent-Postgres-clients test) are documented in [[Provider Callback Binding]]'s "Fixed 2026-08-25: concurrent-duplicate-callback race" section — not duplicated here since it's a provider-agnostic fix to the shared callback route, not something specific to Enable Banking (it would apply identically to GoCardless/PayPal if either ever produced a duplicate delivery, though none has been observed to).
+
+**Do not claim yet** (this pass was blocked at callback-return handling before any of the following could be trusted):
+- the concurrent-callback-race fix itself is live-verified — it is code-fixed and test-verified only;
+- first balance sync is live-verified;
+- first transaction sync is live-verified;
+- second-sync deduplication is live-verified;
+- disconnect is live-verified.
+
+**Status: code-fixed, locally test-verified only (including against a real local Postgres container) — awaiting a fresh Mock ASPSP run with this fix in place.** See [[Provider Status]] and [[Provider Authorization Popup Bridge]] for the full status breakdown.
+
+**Status: code-fixed, locally test-verified only, independently reviewed (no CRITICAL/HIGH/MEDIUM findings; one cosmetic stale-comment fix) — still awaiting a fresh Mock ASPSP run.** Nothing here changes the account-handling 422 fix above; both rounds are cumulative fixes on the same, still-unexercised-live, fourth pass.
+
 ## Third live pass (2026-08-22): `POST /auth` accepted, real sandbox authentication reached
 
 After the redirect_uri and rate-limit fixes above were redeployed, `POST /auth` was **accepted** by Enable Banking (no more `REDIRECT_URI_NOT_ALLOWED`) — confirming the canonical callback URI fix in [[Provider Callback Binding]] works far enough for the real provider. The browser reached `tilisy-sandbox.enablebanking.com/ais/` ("Authentication is initiated by Finance Planner"), then progressed to a real bank authentication-method selector (VR NetKey, PIN) for Volksbank Köln Bonn. A credential attempt was rejected by the bank sandbox itself ("Invalid credentials") — this is Enable Banking/bank sandbox UI behavior, not a Finance Planner code path, and is not evidence of any defect here.

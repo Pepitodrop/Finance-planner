@@ -69,6 +69,12 @@ The sandbox warning and CSS refinement are **IMPLEMENTED on PR #154 but not yet 
 
 This pass also exercised the provider-authorization **popup** bridge (`src/providerReturnBridge.ts`) against a real callback for the first time. Two review rounds on PR #154 found and fixed a total of five bugs in it: an unreachable popup-blocked fallback, later corrected into a genuine fail-closed rejection after a second review caught that the first fix's fallback would have recreated the vault-reset problem the bridge exists to prevent (see [[Rejected Approaches]]); its own test suite silently never executing for lack of a jsdom environment pragma; unbounded provider/error validation on the return signal; and a logout cleanup gap. See [[Provider Authorization Popup Bridge]] for full detail. Also code-fixed, awaiting runtime re-verification.
 
+**Updated again 2026-08-25 — fifth pass, a temporary deployment carrying the fixes above:**
+
+- **Popup opens, original tab stays mounted, original vault stays unlocked: LIVE VERIFIED.** This is the first live confirmation that the popup bridge's core purpose (no same-tab vault-reset regression) actually works in a real browser.
+- **New defect found and fixed: concurrent-duplicate-callback race.** The connector logged two `GET /api/connectors/callback` deliveries for one authorization; the original tab accepted the faster one, which returned `invalid_state`, even though the slower delivery finalized the connection successfully moments later (confirmed by a read-only DB check). Root-caused and fixed with a claim lifecycle replacing immediate nonce deletion — see [[Provider Callback Binding]]'s "Fixed 2026-08-25: concurrent-duplicate-callback race" section. **Code-fixed, locally test-verified only (including against a real local Postgres container) — not yet re-verified live.**
+- Balances/transactions/disconnect/second-sync-dedup: **still NOT YET VERIFIED** — this pass was blocked by the callback race before any of them could be trusted, same as before.
+
 ## Production use
 
 A real Volksbank Köln Bonn connection belongs to a separate **Enable Banking production application**, not the sandbox application. Production and sandbox applications are separate environments and must not be conflated.
