@@ -1,9 +1,13 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  abandonConnectorPopupAttempt,
   acceptConnectorReturnSignal,
   beginConnectorPopupAttempt,
+  clearPendingConnectorAttempt,
   navigateConnectorPopup,
   publishConnectorReturnFromPopup,
+  subscribeConnectorReturns,
   takeBufferedConnectorReturn,
   type ConnectorReturnSignal,
 } from './providerReturnBridge'
@@ -116,5 +120,90 @@ describe('provider return bridge', () => {
     expect(sessionStorage.getItem(PENDING_STORAGE_KEY)).toBeNull()
     expect(localStorage.getItem(`${RETURN_STORAGE_PREFIX}${attempt.attemptId}`)).toBeNull()
     expect(takeBufferedConnectorReturn()).toBeNull()
+  })
+
+  it('an expired pending attempt (older than the 20-minute bound) is never accepted, even with a matching signal', () => {
+    const attemptId = 'b'.repeat(20)
+    sessionStorage.setItem(PENDING_STORAGE_KEY, JSON.stringify({ attemptId, provider: 'enablebanking', createdAt: Date.now() - 21 * 60 * 1000 }))
+    localStorage.setItem(`${RETURN_STORAGE_PREFIX}${attemptId}`, JSON.stringify({ type: 'finance-planner:connector-return', attemptId, provider: 'enablebanking' }))
+
+    expect(takeBufferedConnectorReturn()).toBeNull()
+    // The expired attempt's own return record is cleaned up too, not just ignored.
+    expect(localStorage.getItem(`${RETURN_STORAGE_PREFIX}${attemptId}`)).toBeNull()
+  })
+
+  it('a signal already consumed once cannot be replayed -- the pending record is gone, so a second delivery of the same signal is rejected', () => {
+    const { popup } = fakePopup()
+    vi.spyOn(window, 'open').mockReturnValue(popup)
+    const attempt = beginConnectorPopupAttempt('enablebanking')
+    const signal: ConnectorReturnSignal = { type: 'finance-planner:connector-return', attemptId: attempt.attemptId, provider: 'enablebanking' }
+
+    expect(acceptConnectorReturnSignal(signal)).toEqual(signal)
+    // A replay of the exact same signal (e.g. a duplicate BroadcastChannel
+    // delivery, or a second tab's storage event) must not be accepted twice.
+    expect(acceptConnectorReturnSignal(signal)).toBeNull()
+  })
+
+  it('abandoning a popup attempt closes the real window and removes both the pending binding and any buffered return', () => {
+    const { popup, close } = fakePopup()
+    vi.spyOn(window, 'open').mockReturnValue(popup)
+    const attempt = beginConnectorPopupAttempt('enablebanking')
+    localStorage.setItem(`${RETURN_STORAGE_PREFIX}${attempt.attemptId}`, JSON.stringify({ type: 'finance-planner:connector-return', attemptId: attempt.attemptId, provider: 'enablebanking' }))
+
+    abandonConnectorPopupAttempt(attempt)
+
+    expect(close).toHaveBeenCalled()
+    expect(sessionStorage.getItem(PENDING_STORAGE_KEY)).toBeNull()
+    expect(localStorage.getItem(`${RETURN_STORAGE_PREFIX}${attempt.attemptId}`)).toBeNull()
+  })
+
+  it('clearPendingConnectorAttempt (logout) removes the pending binding so no future return signal for it can ever be accepted', () => {
+    const { popup } = fakePopup()
+    vi.spyOn(window, 'open').mockReturnValue(popup)
+    const attempt = beginConnectorPopupAttempt('enablebanking')
+
+    clearPendingConnectorAttempt()
+
+    expect(sessionStorage.getItem(PENDING_STORAGE_KEY)).toBeNull()
+    expect(acceptConnectorReturnSignal({ type: 'finance-planner:connector-return', attemptId: attempt.attemptId, provider: 'enablebanking' })).toBeNull()
+  })
+
+  it('delivers a matching return via BroadcastChannel to a subscriber, with the payload intact', async () => {
+    const { popup } = fakePopup()
+    vi.spyOn(window, 'open').mockReturnValue(popup)
+    const attempt = beginConnectorPopupAttempt('enablebanking')
+
+    // BroadcastChannel delivery is asynchronous even within the same
+    // document -- wait for the subscriber's own callback to actually fire
+    // rather than asserting synchronously right after postMessage.
+    const delivered = new Promise<ConnectorReturnSignal>((resolve) => {
+      const unsubscribe = subscribeConnectorReturns((signal) => { unsubscribe(); resolve(signal) })
+    })
+
+    const channel = new BroadcastChannel('finance-planner-connector-return-v1')
+    channel.postMessage({ type: 'finance-planner:connector-return', attemptId: attempt.attemptId, provider: 'enablebanking' })
+    channel.close()
+
+    await expect(delivered).resolves.toEqual({ type: 'finance-planner:connector-return', attemptId: attempt.attemptId, provider: 'enablebanking' })
+  })
+
+  it('never delivers a malformed BroadcastChannel payload (wrong type, missing attemptId, or carrying neither provider nor error) to a subscriber', async () => {
+    const received: unknown[] = []
+    const unsubscribe = subscribeConnectorReturns((signal) => { received.push(signal) })
+    const channel = new BroadcastChannel('finance-planner-connector-return-v1')
+
+    for (const malformed of [
+      { type: 'wrong-type', attemptId: 'a'.repeat(20), provider: 'enablebanking' },
+      { type: 'finance-planner:connector-return', attemptId: 'too-short', provider: 'enablebanking' },
+      { type: 'finance-planner:connector-return', attemptId: 'a'.repeat(20) },
+    ]) {
+      channel.postMessage(malformed)
+    }
+    // Let any (incorrectly) scheduled delivery have a chance to run before asserting nothing arrived.
+    await new Promise((resolve) => window.setTimeout(resolve, 20))
+
+    channel.close()
+    unsubscribe()
+    expect(received).toEqual([])
   })
 })

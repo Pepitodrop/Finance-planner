@@ -48,7 +48,7 @@ function readPendingAttempt(): PendingConnectorAttempt | null {
     }
     return { attemptId: parsed.attemptId, provider: parsed.provider, createdAt: Number(parsed.createdAt) }
   } catch {
-    try { sessionStorage.removeItem(PENDING_STORAGE_KEY) } catch {}
+    try { sessionStorage.removeItem(PENDING_STORAGE_KEY) } catch { /* best-effort */ }
     return null
   }
 }
@@ -90,7 +90,7 @@ export function beginConnectorPopupAttempt(provider: string): ConnectorPopupAtte
   try {
     sessionStorage.setItem(PENDING_STORAGE_KEY, JSON.stringify(pending))
   } catch {
-    try { popup.close() } catch {}
+    try { popup.close() } catch { /* best-effort */ }
     throw new Error('Bank authorization could not create a secure return binding in this browser. Check site-storage permissions and try again.')
   }
 
@@ -114,10 +114,30 @@ export function abandonConnectorPopupAttempt(attempt: ConnectorPopupAttempt | nu
   if (!attempt) return
   const pending = readPendingAttempt()
   if (pending?.attemptId === attempt.attemptId) {
-    try { sessionStorage.removeItem(PENDING_STORAGE_KEY) } catch {}
+    try { sessionStorage.removeItem(PENDING_STORAGE_KEY) } catch { /* best-effort */ }
   }
-  try { localStorage.removeItem(`${RETURN_STORAGE_PREFIX}${attempt.attemptId}`) } catch {}
-  try { attempt.popup.close() } catch {}
+  try { localStorage.removeItem(`${RETURN_STORAGE_PREFIX}${attempt.attemptId}`) } catch { /* best-effort */ }
+  try { attempt.popup.close() } catch { /* best-effort */ }
+}
+
+// Called on logout (AuthGate.tsx), not on a vault lock. A lock is meant to
+// be momentary for the SAME already-authenticated user -- an in-flight
+// popup attempt should survive it, and already does (the pending record
+// lives in sessionStorage/localStorage, entirely outside React state, so a
+// lock/unlock cycle never touches it). Logout is the actual trust boundary:
+// without this, a stale attemptId left behind by a previous session could
+// be silently accepted by whichever different user next logs into the same
+// browser tab (acceptConnectorReturnSignal()/takeBufferedConnectorReturn()
+// only check attemptId/provider, never which account is currently
+// authenticated -- that binding is enforced server-side, via the signed
+// state's own `sub` claim, not by this client-side bridge). Only removes
+// the tab-local pending-attempt binding -- without it, no future return
+// signal can ever be accepted (acceptConnectorReturnSignal/
+// takeBufferedConnectorReturn both fail closed once readPendingAttempt()
+// has nothing to match against) -- so any already-written localStorage
+// return record for that attempt is simply inert, not touched here.
+export function clearPendingConnectorAttempt(): void {
+  try { sessionStorage.removeItem(PENDING_STORAGE_KEY) } catch { /* best-effort */ }
 }
 
 function signalFromCurrentUrl(): ConnectorReturnSignal | null {
@@ -141,19 +161,19 @@ export function publishConnectorReturnFromPopup(): boolean {
 
   try {
     localStorage.setItem(`${RETURN_STORAGE_PREFIX}${signal.attemptId}`, JSON.stringify(signal))
-  } catch {}
+  } catch { /* best-effort */ }
 
   if (typeof BroadcastChannel !== 'undefined') {
     try {
       const channel = new BroadcastChannel(CHANNEL_NAME)
       channel.postMessage(signal)
       channel.close()
-    } catch {}
+    } catch { /* best-effort */ }
   }
 
   const root = document.getElementById('root')
   if (root) root.textContent = 'Bank authorization completed. This window can close.'
-  window.setTimeout(() => { try { window.close() } catch {} }, 0)
+  window.setTimeout(() => { try { window.close() } catch { /* best-effort */ } }, 0)
   return true
 }
 
@@ -162,8 +182,8 @@ export function acceptConnectorReturnSignal(signal: ConnectorReturnSignal): Conn
   if (!pending || pending.attemptId !== signal.attemptId) return null
   if (signal.provider && signal.provider !== pending.provider) return null
 
-  try { sessionStorage.removeItem(PENDING_STORAGE_KEY) } catch {}
-  try { localStorage.removeItem(`${RETURN_STORAGE_PREFIX}${signal.attemptId}`) } catch {}
+  try { sessionStorage.removeItem(PENDING_STORAGE_KEY) } catch { /* best-effort */ }
+  try { localStorage.removeItem(`${RETURN_STORAGE_PREFIX}${signal.attemptId}`) } catch { /* best-effort */ }
   return signal
 }
 
@@ -176,7 +196,7 @@ export function takeBufferedConnectorReturn(): ConnectorReturnSignal | null {
     const signal = parseSignal(JSON.parse(raw))
     return signal ? acceptConnectorReturnSignal(signal) : null
   } catch {
-    try { localStorage.removeItem(`${RETURN_STORAGE_PREFIX}${pending.attemptId}`) } catch {}
+    try { localStorage.removeItem(`${RETURN_STORAGE_PREFIX}${pending.attemptId}`) } catch { /* best-effort */ }
     return null
   }
 }
@@ -199,7 +219,7 @@ export function subscribeConnectorReturns(listener: (signal: ConnectorReturnSign
     try {
       const signal = parseSignal(JSON.parse(event.newValue))
       if (signal) listener(signal)
-    } catch {}
+    } catch { /* best-effort */ }
   }
   window.addEventListener('storage', onStorage)
 

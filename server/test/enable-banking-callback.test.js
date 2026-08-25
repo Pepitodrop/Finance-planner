@@ -307,3 +307,14 @@ test('a malformed session response (accounts not an array) throws', () => withRe
 
   await assert.rejects(adapter.completeCallback({ code: 'x', pending: PENDING }), /valid session/)
 }))
+
+// Same bounded safe-charset validation sync() applies to every account id
+// it later reads back from GET /sessions/{id} -- checked here too so the
+// guarantee holds end-to-end regardless of which Enable Banking response an
+// account id originally arrived through (review finding, 2026-08-25).
+test('a malformed account uid in the POST /sessions response fails closed, never persisted', () => withRestoredFetch(async () => {
+  globalThis.fetch = async () => new Response(JSON.stringify({ session_id: 's', accounts: [{ uid: 'has a space and $ymbol', name: 'Girokonto', currency: 'EUR', cash_account_type: 'CACC' }] }), { status: 200 })
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  await assert.rejects(adapter.completeCallback({ code: 'x', pending: PENDING }), /malformed account id/)
+}))

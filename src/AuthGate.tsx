@@ -3,6 +3,7 @@ import { Fingerprint, KeyRound, LogIn, RefreshCw, ShieldCheck, UserPlus, X } fro
 import { startRegistration } from '@simplewebauthn/browser'
 import { RUNTIME_SURFACE_PRIORITY } from './runtime-surfaces/runtimeSurfacePolicy'
 import { runtimeSurfaceRegistration, useRuntimeSurface } from './runtime-surfaces/runtimeSurfaceContext'
+import { clearPendingConnectorAttempt } from './providerReturnBridge'
 
 export interface AuthUser { id: string; email: string; name: string; picture?: string; passkeyCount: number }
 export interface AuthActions { logout: () => Promise<void> }
@@ -129,6 +130,13 @@ export function AuthGate({ children }: AuthGateProps) {
 
   const logout = useCallback(async () => {
     await api('/api/auth/logout', { method: 'POST' })
+    // An in-flight bank-connection popup attempt is bound to this browser
+    // tab, not to this user session -- without clearing it, a different
+    // user logging into the same tab afterward could have a stale return
+    // signal from the PREVIOUS user's attempt silently accepted (see
+    // clearPendingConnectorAttempt()'s doc comment for why this is a
+    // logout-only concern, not something a vault lock needs to do too).
+    clearPendingConnectorAttempt()
     setUser(null)
   }, [])
 

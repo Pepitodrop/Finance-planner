@@ -658,6 +658,124 @@ describe('redirect confirmation', () => {
   })
 })
 
+describe('provider authorization popup (fixed 2026-08-25: a successful popup launch is not the same as a same-tab redirect)', () => {
+  function fakePopupAttempt(overrides: Partial<{ closed: boolean }> = {}) {
+    const close = vi.fn()
+    const popup = { closed: overrides.closed ?? false, close } as unknown as Window
+    return { attempt: { attemptId: 'popup-attempt-1234567890', provider: 'paypal' as const, createdAt: Date.now(), popup }, close }
+  }
+
+  it('does not leave the modal permanently busy -- clears busy and shows an explicit calm waiting state', async () => {
+    const { attempt } = fakePopupAttempt()
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'popup', attempt })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue with owner connection' }))
+
+    expect(await screen.findByRole('heading', { name: 'Continue in the secure window' })).toBeInTheDocument()
+    expect(screen.getByText(/Bank authorization opened in a secure window/)).toBeInTheDocument()
+    // The Cancel action must be reachable -- it would be disabled/unreachable
+    // if `busy` had incorrectly stayed true, exactly the bug this fixes.
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled()
+  })
+
+  it('detects the user manually closing the popup and offers Try again instead of waiting forever', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const { attempt } = fakePopupAttempt()
+      vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'popup', attempt })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      renderConnections()
+      await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+      await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
+      await user.click(screen.getByRole('button', { name: 'Continue with owner connection' }))
+      await screen.findByRole('heading', { name: 'Continue in the secure window' })
+
+      // The user closes the real popup window themselves, without ever completing authorization.
+      ;(attempt.popup as unknown as { closed: boolean }).closed = true
+      await act(async () => { await vi.advanceTimersByTimeAsync(600) })
+
+      expect(await screen.findByRole('heading', { name: 'Secure window closed' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('Try again after a manual close starts a fresh attempt', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const first = fakePopupAttempt()
+      const second = fakePopupAttempt()
+      vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'popup', attempt: first.attempt }).mockResolvedValueOnce({ mode: 'popup', attempt: second.attempt })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      renderConnections()
+      await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+      await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
+      await user.click(screen.getByRole('button', { name: 'Continue with owner connection' }))
+      await screen.findByRole('heading', { name: 'Continue in the secure window' })
+
+      ;(first.attempt.popup as unknown as { closed: boolean }).closed = true
+      await act(async () => { await vi.advanceTimersByTimeAsync(600) })
+      await user.click(await screen.findByRole('button', { name: 'Try again' }))
+
+      expect(startConnector).toHaveBeenCalledTimes(2)
+      expect(await screen.findByRole('heading', { name: 'Continue in the secure window' })).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('Cancel while waiting closes the real popup window, not just the React state', async () => {
+    const { attempt, close } = fakePopupAttempt()
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'popup', attempt })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue with owner connection' }))
+    await screen.findByRole('heading', { name: 'Continue in the secure window' })
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(close).toHaveBeenCalled()
+  })
+
+  it('the Back arrow collapses one level (closing the real popup) rather than leaving Step 3 entirely', async () => {
+    const { attempt, close } = fakePopupAttempt()
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'popup', attempt })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue with owner connection' }))
+    await screen.findByRole('heading', { name: 'Continue in the secure window' })
+
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+
+    expect(close).toHaveBeenCalled()
+    expect(screen.queryByRole('heading', { name: 'Continue in the secure window' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Continue with the owner PayPal connection' })).toBeInTheDocument()
+  })
+
+  it('closing and reopening the setup dialog abandons any still-open popup from a previous attempt', async () => {
+    const { attempt, close } = fakePopupAttempt()
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'popup', attempt })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue with owner connection' }))
+    await screen.findByRole('heading', { name: 'Continue in the secure window' })
+
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+
+    expect(close).toHaveBeenCalled()
+  })
+})
+
 describe('Enable Banking Auth Flow widget', () => {
   it('1. stays on the setup modal and shows the secure-authorization loading state instead of navigating away when a valid embedded-auth descriptor is returned', async () => {
     vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))

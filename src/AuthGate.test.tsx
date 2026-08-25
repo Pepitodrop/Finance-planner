@@ -137,4 +137,26 @@ describe('AuthGate: sign-out', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: /sign in to finance planner/i })).toBeInTheDocument())
     expect(fetchMock).toHaveBeenCalledWith('/api/auth/logout', expect.objectContaining({ method: 'POST' }))
   })
+
+  // A bank-connection popup attempt binds to this browser TAB
+  // (sessionStorage), not to any particular user session -- without
+  // clearing it on logout, a different user signing into the same tab
+  // afterward could have the previous user's stale attempt silently
+  // accepted by the popup-return bridge (attemptId/provider matching alone,
+  // with no notion of "which account is this for" at the client-storage
+  // layer). See providerReturnBridge.ts's clearPendingConnectorAttempt().
+  it('clears any in-flight bank-connection popup attempt on logout, so a different user in the same tab cannot inherit it', async () => {
+    vi.spyOn(window, 'fetch').mockImplementation((input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/auth/logout')) return jsonResponse({ authenticated: false })
+      return jsonResponse({ authenticated: true, user: AUTHENTICATED_USER })
+    })
+    sessionStorage.setItem('finance-planner-connector-pending-v1', JSON.stringify({ attemptId: 'a'.repeat(16), provider: 'enablebanking', createdAt: Date.now() }))
+
+    render(<AuthGate>{(user, { logout }) => <button onClick={() => void logout()}>Sign out as {user.name}</button>}</AuthGate>)
+    await waitFor(() => screen.getByRole('button', { name: /sign out as demo user/i }))
+    fireEvent.click(screen.getByRole('button', { name: /sign out as demo user/i }))
+
+    await waitFor(() => expect(sessionStorage.getItem('finance-planner-connector-pending-v1')).toBeNull())
+  })
 })

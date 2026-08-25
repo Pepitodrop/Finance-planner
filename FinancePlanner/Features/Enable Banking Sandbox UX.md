@@ -49,9 +49,9 @@ Finance Planner still does **not** read, copy, mutate, store or log credential v
 
 ## Verification status
 
-The sandbox warning and CSS refinement are **IMPLEMENTED on PR #144 but not yet redeployed/re-verified live**.
+The sandbox warning and CSS refinement are **IMPLEMENTED on PR #154 but not yet redeployed/re-verified live** since they landed.
 
-The prior live matrix remains unchanged until a new deployment is tested:
+**Updated 2026-08-25 — a real Mock ASPSP production run got further than this note previously recorded:**
 
 - Enable Banking configuration: LIVE VERIFIED
 - `/aspsps`: LIVE VERIFIED
@@ -59,15 +59,18 @@ The prior live matrix remains unchanged until a new deployment is tested:
 - real bank logos/logo proxy: LIVE VERIFIED
 - `POST /auth` accepted: LIVE VERIFIED
 - official Auth Flow widget rendering: previously live-observed before this UI refinement
-- successful sandbox authorization: NOT YET VERIFIED
-- callback: NOT YET VERIFIED
-- `POST /sessions`: NOT YET VERIFIED
-- balances: NOT YET VERIFIED
-- transactions: NOT YET VERIFIED
+- successful sandbox authorization: **LIVE VERIFIED** (Mock ASPSP, no real bank credentials needed)
+- callback: **LIVE VERIFIED** — an `enablebanking` connector connection was persisted, the first ever in this codebase
+- `POST /sessions`: **LIVE VERIFIED** (implied by the persisted connection)
+- balances: NOT YET VERIFIED — the first sync after this persisted connection failed with a real provider HTTP 422 (an account-handling contract bug in `EnableBankingProvider.sync()`, unrelated to this note's UI work — see [[Enable Banking]]'s fourth-pass entry and [[Provider Status]] for the full root cause and fix). **Code-fixed, locally test-verified only, awaiting re-verification.**
+- transactions: NOT YET VERIFIED — same block
 - disconnect: NOT YET VERIFIED
+- second-sync deduplication: NOT YET VERIFIED — blocked on the first sync succeeding live
+
+This pass also exercised the provider-authorization **popup** bridge (`src/providerReturnBridge.ts`) against a real callback for the first time, fixing two more pre-existing bugs found while reviewing it (a popup-blocked fallback that was unreachable dead code, and its own test suite silently never executing for lack of a jsdom environment pragma) — see [[Bank Connections]] for detail. Also code-fixed, awaiting runtime re-verification.
 
 ## Production use
 
 A real Volksbank Köln Bonn connection belongs to a separate **Enable Banking production application**, not the sandbox application. Production and sandbox applications are separate environments and must not be conflated.
 
-Related: [[Enable Banking]] · [[Enable Banking Auth Flow Widget]] · [[Bank Family Directory Resolution]] · [[Connections Page]] · [[Provider Status]] · [[Provider Callback Binding]] · [[Institution Logo Proxy]] · [[Rate Limiting]]
+Related: [[Enable Banking]] · [[Enable Banking Auth Flow Widget]] · [[Bank Family Directory Resolution]] · [[Connections Page]] · [[Provider Status]] · [[Provider Callback Binding]] · [[Institution Logo Proxy]] · [[Rate Limiting]] · [[Provider Authorization Popup Bridge]]

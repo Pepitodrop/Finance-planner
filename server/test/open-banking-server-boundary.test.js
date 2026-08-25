@@ -96,8 +96,11 @@ test('the provider callback route redirects every failure back into the app inst
   const pendingFailure = callbackRoute.indexOf('if (!pending)')
   assert.ok(consumeCall > missingClaims && pendingFailure > consumeCall)
   // Once state HAS been cryptographically verified, its redirectUri is
-  // trusted -- this and every failure branch after this point uses it.
-  assert.match(callbackRoute.slice(pendingFailure, pendingFailure + 200), /redirectWithError\(state\.redirectUri\)/)
+  // trusted -- this and every failure branch after this point uses it. The
+  // window is wide enough to cover the replay-detection logic (checking
+  // whether this is a genuine repeat of an already-completed connection)
+  // that runs before the actual redirect call in this branch.
+  assert.match(callbackRoute.slice(pendingFailure, pendingFailure + 500), /redirectWithError\(state\.redirectUri\)/)
 })
 
 test('the provider callback route redirects instead of throwing raw JSON when consumePendingConnectionSetup itself fails (not just returns null)', () => {
@@ -160,8 +163,14 @@ test('the provider callback route never activates a connection until finalizeCon
   const finalizeCatch = callbackRoute.indexOf('} catch {', finalizeCall)
   assert.ok(finalizeCatch > finalizeCall)
   assert.match(callbackRoute.slice(finalizeCatch, finalizeCatch + 800), /redirectWithError\(state\.redirectUri\)/)
-  // The success redirect must come strictly after finalizeConnection, never before it.
-  const successRedirect = callbackRoute.indexOf('const success = new URL(state.redirectUri)')
+  // The success redirect must come strictly after finalizeConnection, never
+  // before it. Searched starting from finalizeCall, not from the start of
+  // the route -- an earlier, separate replay-tolerance branch (an
+  // already-completed connection being safely re-confirmed without
+  // re-running finalizeConnection) legitimately contains the same
+  // `const success = new URL(state.redirectUri)` pattern before this point,
+  // and is not the occurrence this assertion is about.
+  const successRedirect = callbackRoute.indexOf('const success = new URL(state.redirectUri)', finalizeCall)
   assert.ok(successRedirect > finalizeCall)
 })
 

@@ -36,11 +36,18 @@ function withRestoredFetch(run) {
   return run().finally(() => { globalThis.fetch = originalFetch })
 }
 
+// lastSyncedAt is set so this shared fixture represents a routine,
+// already-connected-for-a-while sync (the common case, and what most tests
+// below actually mean to exercise) -- NOT the first sync after
+// authorization, which now uses a different transaction-request strategy
+// (see the dedicated "first sync" tests further down, which explicitly
+// build a credential with lastSyncedAt omitted).
 const CREDENTIAL = {
   sessionId: 'session-1',
   aspspName: 'ING-DiBa',
   aspspCountry: 'DE',
   accessValidUntil: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+  lastSyncedAt: new Date(Date.now() - 2 * 86_400_000).toISOString(),
   accounts: [{ uid: 'acct-1', name: 'Girokonto', currency: 'EUR', cashAccountType: 'CACC' }],
 }
 
@@ -109,6 +116,11 @@ test('syncs balances and transactions for multiple accounts', () => withRestored
   assert.deepEqual(result.accounts.map((a) => a.balanceCents), [10_000, 50_000])
 }))
 
+// GET /sessions/{id}.accounts is documented as an array of bare account-id
+// STRINGS, not AccountResource objects -- this fixture now matches that
+// real shape. 'fresh-acct' isn't in staleCredential's stored accounts, so
+// this also exercises the GET /accounts/{id}/details fallback for a
+// genuinely new account the live session exposes.
 test('refreshes the account list and consent expiry from the live session response, not the frozen credential', () => withRestoredFetch(async () => {
   const staleCredential = { ...CREDENTIAL, accounts: [{ uid: 'stale-acct', name: 'Stale', currency: 'EUR', cashAccountType: 'CACC' }] }
   const freshValidUntil = new Date(Date.now() + 60 * 86_400_000).toISOString()
@@ -116,9 +128,10 @@ test('refreshes the account list and consent expiry from the live session respon
     const url = String(input)
     if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({
       status: 'AUTHORIZED',
-      accounts: [{ uid: 'fresh-acct', name: 'Fresh Account', currency: 'EUR', cash_account_type: 'CACC' }],
+      accounts: ['fresh-acct'],
       access: { valid_until: freshValidUntil },
     }), { status: 200 })
+    if (url.endsWith('/accounts/fresh-acct/details')) return new Response(JSON.stringify({ uid: 'fresh-acct', name: 'Fresh Account', currency: 'EUR', cash_account_type: 'CACC' }), { status: 200 })
     if (url.includes('fresh-acct/balances')) return new Response(JSON.stringify(balancesResponse('42.00')), { status: 200 })
     if (url.includes('fresh-acct/transactions')) return new Response(JSON.stringify({ transactions: [] }), { status: 200 })
     throw new Error(`Unexpected URL: ${url}`)
@@ -593,4 +606,257 @@ test('the committed Mock ASPSP EUR fixture produces exactly its own documented e
     assert.equal(transaction.amountCents, fixture._expected_normalized_amountsCents[item.entry_reference])
     assert.equal(transaction.pending, fixture._expected_pending[item.entry_reference])
   }
+}))
+
+// Regression suite for the GET /sessions/{id}.accounts contract bug found
+// during a live Mock ASPSP run (2026-08-25): that endpoint's `accounts`
+// field is documented as an array of bare account-id STRINGS -- not
+// AccountResource objects like POST /sessions returns -- so the previous
+// code's `account.uid` was always undefined, producing requests like
+// /accounts/undefined/balances and a real provider HTTP 422 on the very
+// first sync after authorization.
+
+test('A. the real documented GET-session shape (bare account-id strings) requests /accounts/acct-1/... and never /accounts/undefined/...', () => withRestoredFetch(async () => {
+  const requests = []
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    requests.push(url)
+    if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({
+      status: 'AUTHORIZED',
+      accounts: ['acct-1'],
+      accounts_data: [{ uid: 'acct-1', identification_hash: 'hash' }],
+    }), { status: 200 })
+    if (url.includes('/acct-1/balances')) return new Response(JSON.stringify(balancesResponse('10.00')), { status: 200 })
+    if (url.includes('/acct-1/transactions')) return new Response(JSON.stringify({ transactions: [] }), { status: 200 })
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  const result = await adapter.sync(CREDENTIAL)
+
+  assert.equal(result.accounts.length, 1)
+  assert.equal(result.accounts[0].externalId, 'acct-1')
+  assert.ok(requests.some((url) => url.includes('/accounts/acct-1/')), 'expected a request against the real account id')
+  assert.ok(!requests.some((url) => url.includes('undefined')), `no request should ever target an undefined account id, got: ${JSON.stringify(requests)}`)
+}))
+
+test('B. multiple account IDs in the live session are all synced independently', () => withRestoredFetch(async () => {
+  const credential = { ...CREDENTIAL, accounts: [
+    { uid: 'acct-1', name: 'Girokonto', currency: 'EUR', cashAccountType: 'CACC' },
+    { uid: 'acct-2', name: 'Tagesgeld', currency: 'EUR', cashAccountType: 'SVGS' },
+  ] }
+  const requests = []
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    requests.push(url)
+    if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({ status: 'AUTHORIZED', accounts: ['acct-1', 'acct-2'] }), { status: 200 })
+    if (url.includes('acct-1/balances')) return new Response(JSON.stringify(balancesResponse('10.00')), { status: 200 })
+    if (url.includes('acct-2/balances')) return new Response(JSON.stringify(balancesResponse('20.00')), { status: 200 })
+    if (url.includes('/transactions')) return new Response(JSON.stringify({ transactions: [] }), { status: 200 })
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  const result = await adapter.sync(credential)
+
+  assert.deepEqual(result.accounts.map((a) => a.externalId).sort(), ['acct-1', 'acct-2'])
+  assert.ok(!requests.some((url) => url.includes('undefined')))
+}))
+
+test('C. an account removed from the live session (still present in stored credential metadata) is no longer treated as active', () => withRestoredFetch(async () => {
+  const credential = { ...CREDENTIAL, accounts: [
+    { uid: 'acct-1', name: 'Girokonto', currency: 'EUR', cashAccountType: 'CACC' },
+    { uid: 'acct-removed', name: 'Closed account', currency: 'EUR', cashAccountType: 'CACC' },
+  ] }
+  const requests = []
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    requests.push(url)
+    // The live session now only reports acct-1 -- acct-removed was closed
+    // or its consent scope was narrowed at the bank.
+    if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({ status: 'AUTHORIZED', accounts: ['acct-1'] }), { status: 200 })
+    if (url.includes('acct-1/balances')) return new Response(JSON.stringify(balancesResponse('10.00')), { status: 200 })
+    if (url.includes('/transactions')) return new Response(JSON.stringify({ transactions: [] }), { status: 200 })
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  const result = await adapter.sync(credential)
+
+  assert.deepEqual(result.accounts.map((a) => a.externalId), ['acct-1'])
+  assert.ok(!requests.some((url) => url.includes('acct-removed')), 'a removed account must never be fetched, not even once')
+  assert.equal(result.credential.accounts.length, 1, 'the persisted credential must drop the removed account too, not just the transient sync result')
+}))
+
+// An explicit empty `accounts` array is real information (every account was
+// removed/revoked at the bank) and must be honored, not papered over by
+// falling back to stale stored accounts -- but the pre-existing
+// zero-accounts health policy (assessBankConnectionHealth /
+// completedHealth(), unrelated to and unweakened by this fix) then
+// correctly fails the sync closed rather than silently reporting a
+// successful empty result. Together these mean a fully-removed connection
+// can never be silently misreported as either "still has its old accounts"
+// or "successfully synced nothing."
+test('an explicit empty accounts array from the live session never falls back to stale stored accounts (fails closed via the existing zero-accounts health policy instead)', () => withRestoredFetch(async () => {
+  const credential = { ...CREDENTIAL, accounts: [{ uid: 'acct-1', name: 'Girokonto', currency: 'EUR', cashAccountType: 'CACC' }] }
+  const requests = []
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    requests.push(url)
+    if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({ status: 'AUTHORIZED', accounts: [] }), { status: 200 })
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  await assert.rejects(adapter.sync(credential), /health policy/)
+  assert.ok(!requests.some((url) => url.includes('acct-1')), 'the removed account must never be fetched, not even once')
+}))
+
+test('D. a new account id the session exposes (not in stored credential metadata) is safely retrieved via GET /accounts/{id}/details and normalized correctly', () => withRestoredFetch(async () => {
+  const credential = { ...CREDENTIAL, accounts: [{ uid: 'acct-1', name: 'Girokonto', currency: 'EUR', cashAccountType: 'CACC' }] }
+  const requests = []
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    requests.push(url)
+    if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({ status: 'AUTHORIZED', accounts: ['acct-1', 'acct-new'] }), { status: 200 })
+    if (url.endsWith('/accounts/acct-new/details')) return new Response(JSON.stringify({ uid: 'acct-new', name: 'Newly Added', currency: 'EUR', cash_account_type: 'SVGS' }), { status: 200 })
+    if (url.includes('acct-1/balances')) return new Response(JSON.stringify(balancesResponse('10.00')), { status: 200 })
+    if (url.includes('acct-new/balances')) return new Response(JSON.stringify(balancesResponse('99.00')), { status: 200 })
+    if (url.includes('/transactions')) return new Response(JSON.stringify({ transactions: [] }), { status: 200 })
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  const result = await adapter.sync(credential)
+
+  assert.ok(requests.some((url) => url.endsWith('/accounts/acct-new/details')), 'must fetch real account details for a genuinely new account, never invent one')
+  const newAccount = result.accounts.find((a) => a.externalId === 'acct-new')
+  assert.ok(newAccount)
+  assert.equal(newAccount.name, 'Newly Added')
+  assert.equal(newAccount.balanceCents, 9900)
+  assert.equal(result.credential.accounts.find((a) => a.uid === 'acct-new').cashAccountType, 'SVGS')
+}))
+
+test('a malformed GET /accounts/{id}/details response for a new account fails closed rather than inventing metadata', () => withRestoredFetch(async () => {
+  const credential = { ...CREDENTIAL, accounts: [{ uid: 'acct-1', name: 'Girokonto', currency: 'EUR', cashAccountType: 'CACC' }] }
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({ status: 'AUTHORIZED', accounts: ['acct-1', 'acct-new'] }), { status: 200 })
+    // Malformed: uid in the details response doesn't match the requested account id.
+    if (url.endsWith('/accounts/acct-new/details')) return new Response(JSON.stringify({ uid: 'someone-else', name: 'Wrong' }), { status: 200 })
+    if (url.includes('acct-1/balances')) return new Response(JSON.stringify(balancesResponse('10.00')), { status: 200 })
+    if (url.includes('/transactions')) return new Response(JSON.stringify({ transactions: [] }), { status: 200 })
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  await assert.rejects(adapter.sync(credential), /account details response is invalid/)
+}))
+
+test('E. a malformed account id from the live session fails the whole sync closed, never guessed or skipped silently', () => withRestoredFetch(async () => {
+  const requests = []
+  for (const malformed of [123, '', '   ', 'has a space', 'has/a/slash', null, { uid: 'nested-object' }, 'x'.repeat(129)]) {
+    globalThis.fetch = async (input) => {
+      const url = String(input)
+      requests.push(url)
+      if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({ status: 'AUTHORIZED', accounts: [malformed] }), { status: 200 })
+      throw new Error(`Unexpected URL for malformed id ${JSON.stringify(malformed)}: ${url}`)
+    }
+    const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+    await assert.rejects(adapter.sync(CREDENTIAL), /malformed account id/, `expected a fail-closed rejection for ${JSON.stringify(malformed)}`)
+  }
+  assert.ok(!requests.some((url) => url.includes('/balances') || url.includes('/transactions')), 'must never reach balances/transactions for a malformed account id')
+}))
+
+test('F. the first sync (no prior lastSyncedAt) requests transactions with strategy=longest', () => withRestoredFetch(async () => {
+  const firstSyncCredential = { ...CREDENTIAL, lastSyncedAt: undefined }
+  const transactionRequests = []
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input))
+    if (url.pathname === '/sessions/session-1') return new Response(JSON.stringify({ status: 'AUTHORIZED', accounts: ['acct-1'] }), { status: 200 })
+    if (url.pathname.includes('/balances')) return new Response(JSON.stringify(balancesResponse('0.00')), { status: 200 })
+    if (url.pathname.includes('/transactions')) {
+      transactionRequests.push({ strategy: url.searchParams.get('strategy'), dateFrom: url.searchParams.get('date_from'), dateTo: url.searchParams.get('date_to') })
+      return new Response(JSON.stringify({ transactions: [] }), { status: 200 })
+    }
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  await adapter.sync(firstSyncCredential)
+
+  assert.equal(transactionRequests.length, 1)
+  assert.equal(transactionRequests[0].strategy, 'longest')
+  assert.ok(transactionRequests[0].dateFrom, 'date_from is still sent as a lower-bound suggestion')
+  assert.equal(transactionRequests[0].dateTo, null, 'date_to must be omitted in longest mode')
+}))
+
+test('G. a subsequent sync (lastSyncedAt present) uses the normal incremental date_from/date_to window, never strategy=longest', () => withRestoredFetch(async () => {
+  const transactionRequests = []
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input))
+    if (url.pathname === '/sessions/session-1') return new Response(JSON.stringify({ status: 'AUTHORIZED', accounts: ['acct-1'] }), { status: 200 })
+    if (url.pathname.includes('/balances')) return new Response(JSON.stringify(balancesResponse('0.00')), { status: 200 })
+    if (url.pathname.includes('/transactions')) {
+      transactionRequests.push({ strategy: url.searchParams.get('strategy'), dateFrom: url.searchParams.get('date_from'), dateTo: url.searchParams.get('date_to') })
+      return new Response(JSON.stringify({ transactions: [] }), { status: 200 })
+    }
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  // CREDENTIAL already carries a lastSyncedAt (a routine, already-connected sync).
+  await adapter.sync(CREDENTIAL)
+
+  assert.equal(transactionRequests.length, 1)
+  assert.equal(transactionRequests[0].strategy, null, 'must never send strategy=longest once a prior sync has succeeded')
+  assert.ok(transactionRequests[0].dateFrom)
+  assert.ok(transactionRequests[0].dateTo)
+}))
+
+test('H. continuation_key pagination keeps strategy and date parameters identical across every page, in first-sync (longest) mode', () => withRestoredFetch(async () => {
+  const firstSyncCredential = { ...CREDENTIAL, lastSyncedAt: undefined }
+  const transactionRequests = []
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input))
+    if (url.pathname === '/sessions/session-1') return new Response(JSON.stringify({ status: 'AUTHORIZED', accounts: ['acct-1'] }), { status: 200 })
+    if (url.pathname.includes('/balances')) return new Response(JSON.stringify(balancesResponse('0.00')), { status: 200 })
+    if (url.pathname.includes('/transactions')) {
+      transactionRequests.push({ strategy: url.searchParams.get('strategy'), dateFrom: url.searchParams.get('date_from'), dateTo: url.searchParams.get('date_to'), continuationKey: url.searchParams.get('continuation_key') })
+      if (!url.searchParams.get('continuation_key')) {
+        return new Response(JSON.stringify({ transactions: [{ entry_reference: 'p1', status: 'BOOK', credit_debit_indicator: 'CRDT', transaction_amount: { currency: 'EUR', amount: '1.00' }, booking_date: '2026-08-01', remittance_information: [] }], continuation_key: 'page-2' }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ transactions: [{ entry_reference: 'p2', status: 'BOOK', credit_debit_indicator: 'CRDT', transaction_amount: { currency: 'EUR', amount: '2.00' }, booking_date: '2026-08-02', remittance_information: [] }] }), { status: 200 })
+    }
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  const result = await adapter.sync(firstSyncCredential)
+
+  assert.equal(transactionRequests.length, 2)
+  assert.equal(transactionRequests[0].strategy, 'longest')
+  assert.equal(transactionRequests[1].strategy, 'longest')
+  assert.equal(transactionRequests[0].dateFrom, transactionRequests[1].dateFrom)
+  assert.equal(transactionRequests[0].dateTo, null)
+  assert.equal(transactionRequests[1].dateTo, null)
+  assert.deepEqual(result.transactions.map((t) => t.externalId).sort(), ['acct-1:p1', 'acct-1:p2'])
+}))
+
+// Same fail-closed account-id validation applies even on the "session
+// omitted accounts entirely, fall back to stored credential" path -- not
+// just the path that reads live account ids from GET /sessions/{id}
+// directly (review finding, 2026-08-25: the guarantee should hold
+// end-to-end regardless of how a malformed uid could end up in
+// credential.accounts, not only for data arriving through this one path).
+test('a malformed stored account uid fails closed even on the "session omitted accounts" fallback path', () => withRestoredFetch(async () => {
+  const credential = { ...CREDENTIAL, accounts: [{ uid: 'has a space', name: 'Girokonto', currency: 'EUR', cashAccountType: 'CACC' }] }
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({ status: 'AUTHORIZED' }), { status: 200 })
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  await assert.rejects(adapter.sync(credential), /malformed account id/)
 }))

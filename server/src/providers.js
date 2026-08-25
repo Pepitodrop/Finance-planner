@@ -810,6 +810,23 @@ function selectEnableBankingBalance(balances) {
   return preferred?.balance_amount?.amount ?? '0'
 }
 
+// GET /sessions/{id}'s documented shape (confirmed 2026-08-25 against the
+// current official Enable Banking account-information API reference)
+// carries `accounts` as an array of bare account-id STRINGS -- unlike
+// POST /sessions, whose `accounts` array holds full AccountResource
+// objects. A real Enable Banking Mock ASPSP run found sync() treating the
+// GET /sessions response the same way as the POST one, so `account.uid` on
+// a bare string was always undefined -- producing requests like
+// /accounts/undefined/balances, which the provider correctly rejected with
+// HTTP 422. Enable Banking's real account ids are UUIDs; this allowlist is
+// intentionally narrower than "any non-empty string" so a malformed or
+// provider-corrupted value fails closed here rather than reaching a URL
+// path segment at all.
+const ENABLE_BANKING_ACCOUNT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
+function isValidEnableBankingAccountId(value) {
+  return typeof value === 'string' && ENABLE_BANKING_ACCOUNT_ID_PATTERN.test(value)
+}
+
 class EnableBankingProvider extends OpenBankingProvider {
   constructor(env, core) {
     super({ id: 'enablebanking', displayName: 'Bank connection', kind: 'psd2-account-information', env, core })
@@ -1033,6 +1050,15 @@ class EnableBankingProvider extends OpenBankingProvider {
       body: JSON.stringify({ code }),
     }, policy)
     if (!response?.session_id || !Array.isArray(response.accounts)) throw new Error('Enable Banking did not return a valid session.')
+    // Same bounded safe-charset validation sync() applies to every live
+    // account id it reads from GET /sessions/{id} -- applied here too so
+    // the guarantee is genuinely end-to-end: nothing this codebase ever
+    // persists as an account uid can be malformed, regardless of which
+    // Enable Banking response it originally came from (found by review,
+    // 2026-08-25, while confirming sync()'s own fix closes this fully).
+    for (const account of response.accounts) {
+      if (!isValidEnableBankingAccountId(account?.uid)) throw new Error(`Enable Banking session returned a malformed account id: ${JSON.stringify(account?.uid ?? null)}`)
+    }
     return {
       ...pending,
       sessionId: response.session_id,
@@ -1065,13 +1091,67 @@ class EnableBankingProvider extends OpenBankingProvider {
     // this, an account added or removed at the bank after initial connection
     // would never be reflected, and a consent window the provider
     // extended/shortened would silently drift from the locally cached value.
-    // Falls back to the originally-stored values whenever this response
-    // omits either field, so behavior is unchanged if a given Enable Banking
-    // deployment's GET /sessions/{id} doesn't echo them.
-    const liveAccounts = Array.isArray(session?.accounts) && session.accounts.length > 0
-      ? session.accounts.map((account) => ({ uid: account.uid, name: account.name, currency: account.currency, cashAccountType: account.cash_account_type }))
-      : credential.accounts
+    //
+    // Fixed 2026-08-25 (live Mock ASPSP run, provider 422 on the first
+    // sync): GET /sessions/{id}.accounts is documented as an array of bare
+    // account-id STRINGS, not AccountResource objects (POST /sessions
+    // returns those) -- treating a string as {uid,...} always produced
+    // uid: undefined here, which then built /accounts/undefined/... URLs.
+    //
+    // `Array.isArray` alone (not `.length > 0`) gates the fallback to
+    // stored credential.accounts: a deployment that omits `accounts`
+    // entirely from GET /sessions/{id} still falls back to what
+    // completeCallback() originally stored (unchanged prior behavior), but
+    // an explicit empty array is real information -- every account was
+    // removed/revoked at the bank -- and must not resurrect stale stored
+    // accounts as if they were still active.
+    //
+    // For each live account id: reuse the originally-stored AccountResource
+    // metadata (name/currency/cashAccountType) when that id is still
+    // present, since GET /sessions/{id} itself carries no such metadata
+    // fields. An id the live session now exposes that ISN'T in stored
+    // metadata (a genuinely new account) gets its real metadata via the
+    // official GET /accounts/{id}/details endpoint instead of ever being
+    // invented. Any account-id string that doesn't look like a real Enable
+    // Banking account id fails the whole sync closed rather than being
+    // silently skipped or guessed into shape.
+    let liveAccounts
+    if (!Array.isArray(session?.accounts)) {
+      // Re-validated even on this fallback path -- credential.accounts was
+      // already validated once, at completeCallback() time, but re-checking
+      // here means the "no malformed id ever reaches a balances/transactions
+      // URL" guarantee holds regardless of how this credential got onto
+      // disk (e.g. a hand-edited fixture in a dev environment, or a future
+      // storage-layer bug), not only for data that arrived through this
+      // exact code path.
+      for (const account of credential.accounts || []) {
+        if (!isValidEnableBankingAccountId(account?.uid)) throw new Error(`Stored Enable Banking credential has a malformed account id: ${JSON.stringify(account?.uid ?? null)}`)
+      }
+      liveAccounts = credential.accounts
+    } else {
+      const storedByUid = new Map((credential.accounts || []).map((account) => [account.uid, account]))
+      liveAccounts = []
+      for (const accountId of session.accounts) {
+        if (!isValidEnableBankingAccountId(accountId)) {
+          throw new Error(`Enable Banking session returned a malformed account id: ${JSON.stringify(accountId)}`)
+        }
+        const stored = storedByUid.get(accountId)
+        if (stored) { liveAccounts.push(stored); continue }
+        const details = await jsonFetch(`${EB_BASE}/accounts/${encodeURIComponent(accountId)}/details`, { headers: enableBankingHeaders(this.env) }, policy)
+        if (!details?.uid || details.uid !== accountId) {
+          throw new Error(`Enable Banking account details response is invalid for account ${accountId}.`)
+        }
+        liveAccounts.push({ uid: details.uid, name: details.name, currency: details.currency, cashAccountType: details.cash_account_type })
+      }
+    }
     const liveConsentExpiresAt = session?.access?.valid_until || consentExpiresAt
+    // The FIRST sync for this connection (no prior successful lastSyncedAt)
+    // uses Enable Banking's documented `strategy=longest` for its initial
+    // transaction fetch -- their own docs recommend it specifically to
+    // avoid a WRONG_TRANSACTIONS_PERIOD rejection and to retrieve the
+    // longest history the ASPSP will return, rather than the short
+    // incremental window meant for routine re-syncs.
+    const isFirstSync = !credential.lastSyncedAt
 
     const window = syncWindow(credential.lastSyncedAt, completedAt, 90)
     const accounts = []
@@ -1085,18 +1165,31 @@ class EnableBankingProvider extends OpenBankingProvider {
       const balanceCents = await this.core.normalizeProviderAmount(balance)
       accounts.push({ externalId: account.uid, name: account.name || 'Bankkonto', type, balanceCents, currency: 'EUR' })
 
-      // continuation_key pagination: date_from/date_to stay identical across
-      // every page (Enable Banking's documented requirement); bounded to
-      // MAX_ENABLEBANKING_PAGES so a provider-controlled continuation_key
-      // can never drive an unbounded loop. An empty page with a
-      // continuation_key still present must still continue -- only the
-      // key's absence ends the loop.
+      // continuation_key pagination: strategy/date parameters stay
+      // identical across every page (Enable Banking's documented
+      // requirement); bounded to MAX_ENABLEBANKING_PAGES so a
+      // provider-controlled continuation_key can never drive an unbounded
+      // loop. An empty page with a continuation_key still present must
+      // still continue -- only the key's absence ends the loop.
       let continuationKey
       let pageCount = 0
       do {
         const txUrl = new URL(`${EB_BASE}/accounts/${account.uid}/transactions`)
-        txUrl.searchParams.set('date_from', window.dateFrom)
-        txUrl.searchParams.set('date_to', window.dateTo)
+        if (isFirstSync) {
+          // strategy=longest: Enable Banking's documented recommendation
+          // for the very first transaction fetch after authorization --
+          // avoids a WRONG_TRANSACTIONS_PERIOD rejection and asks for the
+          // longest history the ASPSP will return. date_from is sent only
+          // as a lower-bound suggestion; longest mode is documented as not
+          // depending on date_to, so it is deliberately omitted here.
+          txUrl.searchParams.set('strategy', 'longest')
+          txUrl.searchParams.set('date_from', window.dateFrom)
+        } else {
+          // Subsequent syncs: normal/default strategy over the existing
+          // incremental date_from/date_to window.
+          txUrl.searchParams.set('date_from', window.dateFrom)
+          txUrl.searchParams.set('date_to', window.dateTo)
+        }
         if (continuationKey) txUrl.searchParams.set('continuation_key', continuationKey)
         const page = await jsonFetch(txUrl, { headers: enableBankingHeaders(this.env) }, policy)
         if (!Array.isArray(page?.transactions)) throw new Error('Enable Banking transaction response is invalid.')

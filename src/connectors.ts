@@ -4,6 +4,7 @@ import {
   beginConnectorPopupAttempt,
   CONNECTOR_RETURN_ATTEMPT_PARAM,
   navigateConnectorPopup,
+  type ConnectorPopupAttempt,
 } from './providerReturnBridge'
 import type { Account, AppState, CreditCardDetails, Transaction } from './types'
 
@@ -53,8 +54,20 @@ export interface SyncPreview { accountsToCreate: Account[]; transactionsToImport
 // blocked, existing behavior remains the fallback: Enable Banking can use its
 // embedded Auth Flow widget and other providers use the normal same-tab
 // redirect. No vault password/key is persisted to achieve this.
+//
+// 'popup' is distinct from 'redirect': for 'redirect', the CURRENT tab is
+// about to navigate away (nothing left to do here). For 'popup', the
+// current tab's document is untouched and stays fully interactive -- a
+// caller that treated 'popup' the same as 'redirect' would be left showing
+// a permanently "busy" UI with no further progress, since no navigation in
+// this tab is ever coming (fixed 2026-08-25; see ConnectionsPage.tsx's
+// startProvider()). The full ConnectorPopupAttempt (not just the bare
+// Window) is included so a caller can both poll `attempt.popup.closed` to
+// detect a manual close and call abandonConnectorPopupAttempt(attempt) to
+// cancel cleanly.
 export type ConnectorStartResult =
   | { mode: 'redirect' }
+  | { mode: 'popup'; attempt: ConnectorPopupAttempt }
   | { mode: 'embedded-auth'; provider: 'enablebanking'; redirectUrl: string; authorizationId: string; origin: string; sandbox: boolean }
 
 const REQUEST_TIMEOUT_MS = 15_000
@@ -197,7 +210,24 @@ export async function startConnector(provider: ConnectorProvider, context: Conne
   // opening it after the /start await would be blocked by normal popup
   // protection. Acceptance fixtures deliberately keep their deterministic
   // embedded/same-tab behavior and never create real browser windows.
-  const popupAttempt = import.meta.env.VITE_ACCEPTANCE_FIXTURES === 'true' ? null : beginConnectorPopupAttempt(provider)
+  //
+  // Fixed 2026-08-25: beginConnectorPopupAttempt() throws when the browser
+  // actually blocks the popup (or can't create the sessionStorage return
+  // binding) -- calling it unguarded meant that throw propagated straight
+  // out of startConnector() before /start was ever contacted, silently
+  // skipping the embedded-widget/same-tab-redirect fallback documented
+  // below and leaving a blocked-popup user with nothing but a raw
+  // "allow pop-ups" error. Falling through to `popupAttempt = null` here
+  // is exactly what the acceptance-fixture branch already does, so the
+  // fallback path this file's own comments describe is actually reachable.
+  let popupAttempt: ConnectorPopupAttempt | null = null
+  if (import.meta.env.VITE_ACCEPTANCE_FIXTURES !== 'true') {
+    try {
+      popupAttempt = beginConnectorPopupAttempt(provider)
+    } catch {
+      popupAttempt = null
+    }
+  }
   try {
     const result = await requestJson<{ redirectUrl?: string; authFlow?: { provider?: string; authorizationId?: string; origin?: string; sandbox?: boolean } }>(`/api/connectors/${provider}/start`, {
       method: 'POST',
@@ -211,9 +241,10 @@ export async function startConnector(provider: ConnectorProvider, context: Conne
     // memory-only vault key remains unlocked. The server callback returns to
     // the popup-specific application URL, which providerReturnBridge relays
     // to the original tab without transferring any vault/provider secrets.
+    // 'popup', not 'redirect': the current tab isn't navigating anywhere.
     if (popupAttempt) {
       navigateConnectorPopup(popupAttempt, result.redirectUrl)
-      return { mode: 'redirect' }
+      return { mode: 'popup', attempt: popupAttempt }
     }
 
     const authFlow = result.authFlow

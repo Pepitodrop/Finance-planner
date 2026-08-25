@@ -15,8 +15,14 @@ For first-party internal flows with no external provider (for example Finance Pl
 Implementation: **implemented** (real Enable Banking API client, `server/src/providers.js` `EnableBankingProvider`, `server/src/enable-banking-jwt.js`)
 Configuration: **optional** (requires `ENABLE_BANKING_APPLICATION_ID` + `ENABLE_BANKING_PRIVATE_KEY_FILE` or `ENABLE_BANKING_PRIVATE_KEY`)
 Provider-dependent: yes
-Runtime verified: **partial — see live verification matrix (2026-08-22, third pass)**. Institution discovery, logos, and `/auth` acceptance are genuinely live-verified; the browser has reached both Enable Banking's pre-auth page and a real bank authentication page; authorization completion, callback, sync, and disconnect are not yet verified. The Auth Flow widget embedding this pass added is code-complete and locally verified only, not yet redeployed.
-Production verified: **no evidence found** for the authorization-completion/callback/sync/disconnect path. Institution discovery, logos, `/auth` acceptance, and reaching real bank authentication screens WERE exercised against three sequential temporary production deployments (`finance.luisbenedikt.de`) of PR #144, against the real configured Enable Banking sandbox application — see matrix below.
+Runtime verified: **partial — see live verification matrix, updated for the fourth pass (2026-08-25)**. Summary status:
+- **Discovery: previously runtime verified.**
+- **Authorization/callback/persistence: previously runtime verified** — the fourth pass (Mock ASPSP, no real bank credentials) completed authorization, callback, and persisted a real `enablebanking` connector connection for the first time in this codebase's history.
+- **Account/balance/transaction sync: code-fixed, awaiting runtime re-verification** — the first sync after that persisted connection failed with a real provider HTTP 422 (root-caused: `GET /sessions/{id}.accounts` is bare account-id strings, not `AccountResource` objects; see [[Enable Banking]]'s fourth-pass entry for the full fix). Fixed and covered by 40 local tests against mocked responses; not yet exercised against a real session.
+- **Second-sync deduplication: awaiting runtime verification** — blocked on the first sync itself succeeding live.
+- **Disconnect/provider revocation: awaiting runtime verification** — never yet reached.
+- **No-reunlock popup return: code-fixed, awaiting runtime verification** — the provider-authorization popup bridge (`src/providerReturnBridge.ts`) was exercised for the first time this pass against a real provider callback; two additional pre-existing bugs in it (an unreachable popup-blocked fallback, and its own test suite silently never executing) were found and fixed the same session — see [[Bank Connections]] and [[Provider Callback Binding]].
+Production verified: **no evidence found** for the sync/second-sync-dedup/disconnect path. Institution discovery, logos, `/auth` acceptance, real bank authentication screens, and (as of the fourth pass) authorization/callback/persistence via Mock ASPSP WERE exercised against sequential temporary production deployments (`finance.luisbenedikt.de`) of this codebase, against the real configured Enable Banking sandbox application — see matrix below.
 
 ### Live verification matrix (PR #144, three sequential temporary deployments against finance.luisbenedikt.de, 2026-08-21/22)
 
@@ -32,12 +38,13 @@ Production verified: **no evidence found** for the authorization-completion/call
 | `POST /auth` accepted | **LIVE VERIFIED = YES** (third pass, 2026-08-22) | No more `REDIRECT_URI_NOT_ALLOWED`; the browser reached `tilisy-sandbox.enablebanking.com/ais/` |
 | Enable Banking pre-auth page reached | **LIVE VERIFIED = YES** (third pass) | "Authentication is initiated by Finance Planner" shown on the real sandbox host |
 | Bank authentication page reached | **LIVE VERIFIED = YES** (third pass) | Real authentication-method selector (VR NetKey, PIN fields) for Volksbank Köln Bonn |
-| Authorization successfully completed | **NO** | A credential attempt returned "Invalid credentials" from the external bank sandbox -- not a Finance Planner defect; see [[Enable Banking]] for the recommended next test bank |
-| Consent (user completes bank-side auth) | **NO** | Blocked pending a successful credential attempt |
-| Callback (`GET /api/connectors/callback`) | **NO** | Never reached |
-| `POST /sessions` (session exchange) | **NO** | Never reached |
-| Balance sync | **NO** | Never reached |
-| Transaction sync | **NO** | Never reached |
+| Authorization successfully completed | **LIVE VERIFIED = YES** (fourth pass, 2026-08-25, Mock ASPSP) | No real bank credentials needed; the third pass's "NO" was specific to a real-bank (Volksbank Köln Bonn) credential attempt returning "Invalid credentials" from the external bank sandbox, not a Finance Planner defect |
+| Consent (user completes bank-side auth) | **LIVE VERIFIED = YES** (fourth pass) | Completed via Mock ASPSP |
+| Callback (`GET /api/connectors/callback`) | **LIVE VERIFIED = YES** (fourth pass) | Completed; an `enablebanking` connector connection was persisted -- the first ever in this codebase |
+| `POST /sessions` (session exchange) | **LIVE VERIFIED = YES** (fourth pass) | Implied by a persisted connection |
+| Balance sync | **NO** | Blocked: first sync failed with provider HTTP 422 (see fourth-pass entry below); fix is code-complete, not yet re-verified live |
+| Transaction sync | **NO** | Same block |
+| Second-sync deduplication | **NO** | Not yet exercised -- blocked on the first sync succeeding live |
 | Disconnect | **NO** | Never reached |
 | Official Auth Flow widget (`<enablebanking-auth-flow>`) | **IMPLEMENTED / LOCALLY VERIFIED only** | See [[Enable Banking Auth Flow Widget]] -- not yet redeployed/re-tested live |
 
@@ -50,6 +57,10 @@ Both the redirect_uri fix and the rate-limit tier fix are **IMPLEMENTED / LOCALL
 **Third live pass (2026-08-22):** after redeploying the two fixes above, `POST /auth` was **accepted** — the redirect_uri fix works end to end against the real provider. The browser reached `tilisy-sandbox.enablebanking.com/ais/` ("Authentication is initiated by Finance Planner") and progressed to a real bank authentication-method selector (VR NetKey, PIN) for Volksbank Köln Bonn. A credential attempt returned "Invalid credentials" from the external bank sandbox itself — not a Finance Planner code path, not evidence of any defect here. This pass motivated embedding Enable Banking's **official Auth Flow widget** so this pre-auth step happens inside Finance Planner's own modal instead of a full-page redirect to a generic Enable Banking-hosted page — see [[Enable Banking Auth Flow Widget]] for the full architecture, security review, and CSP change (IMPLEMENTED / LOCALLY VERIFIED only, including a real-browser-QA pass on the widget's loading/error shell states at all 5 required viewports — not yet exercised against the real widget script/live authorization).
 
 **Mock ASPSP sandbox prep (2026-08-22), before any real Mock ASPSP test:** review ahead of the next real E2E pass (Enable Banking's Mock ASPSP — no real bank credentials, available in all countries) found and fixed three provider-contract bugs in `EnableBankingProvider.sync()` that would otherwise have surfaced as corrupted financial data on the very first successful sync: `transaction_amount.amount` is absolute (sign comes from `credit_debit_indicator`, previously ignored), `entry_reference` (not `transaction_id`) is the documented transaction identifier, and `PDNG` (not `PEND`) is the documented pending status. Full detail in [[Enable Banking]]'s 2026-08-22 entry. **IMPLEMENTED / LOCALLY VERIFIED only** — confirmed against current official documentation and covered by 29 tests against mocked responses (including a new synthetic EUR fixture run end-to-end through the real `sync()` pipeline), but no sync has ever run against a real Enable Banking session, mock or otherwise. **Do not mark Mock ASPSP E2E as LIVE VERIFIED until an actual Mock ASPSP sync has been observed.** Also confirmed (code-reading only, not yet live-observed): Finance Planner's existing live-directory top-level search (`searchLiveInstitutions`, matches on institution `name`/`bic`/`group.name`, queried with `country: 'DE'`) requires no new code to surface a real "Mock ASPSP" `/aspsps` directory entry if Enable Banking's sandbox actually returns one — no dedicated sandbox UI was added.
+
+**Fourth live pass (2026-08-25), Mock ASPSP:** discovery, authorization, and callback all completed and an `enablebanking` connector connection was genuinely **persisted** for the first time in this codebase's history. The very first subsequent sync failed with a real provider **HTTP 422**. Root-caused (inspected, not guessed): `EnableBankingProvider.sync()`'s refresh of the account list from `GET /sessions/{id}` treated that endpoint's documented bare account-id-string `accounts` array as if it were `AccountResource` objects (the shape `POST /sessions` actually returns), so `account.uid` was always `undefined`, producing `/accounts/undefined/balances`. Fixed with a general account-handling contract fix (not an Mock-ASPSP special case): live session account ids are read as strings; previously-stored `POST /sessions` metadata is reused for an id still present; a genuinely new id gets real metadata from `GET /accounts/{id}/details` (never invented); a removed id is dropped from both the sync result and the persisted credential; every id is validated against a bounded safe-charset pattern with the whole sync failing closed otherwise. Also added Enable Banking's documented `strategy=longest` first-sync transaction request (proactive, not itself observed live). **Code-fixed, locally test-verified only (40 tests, including tests independently confirmed to fail without the fix and pass with it) — awaiting a fresh Mock ASPSP run after this PR is reviewed/deployed.** Full detail: [[Enable Banking]]'s fourth-pass entry.
+
+This pass also exercised the pre-existing **provider-authorization popup bridge** (`src/providerReturnBridge.ts`) against a real provider callback for the first time. Reviewing it for this task surfaced two more pre-existing bugs, both fixed the same session: (1) a blocked popup made `startConnector()` throw before ever reaching the documented same-tab-redirect/embedded-widget fallback, making that fallback unreachable dead code; (2) `providerReturnBridge.test.ts` had no jsdom environment pragma, so its entire security-relevant test suite (attempt binding, provider-mismatch rejection, callback code/state/error_description leakage prevention) had silently never executed. Also added: clearing the popup-bridge's pending-attempt binding on logout (not on a vault lock), closing a narrow cross-user risk where a different user logging into the same browser tab could otherwise have a stale attempt's return signal accepted. See [[Bank Connections]] and [[Provider Callback Binding]].
 
 Current exact matrix as of this pass:
 
@@ -65,13 +76,15 @@ POST /auth request reaches Enable Banking: LIVE VERIFIED = YES
 POST /auth accepted: LIVE VERIFIED = YES
 Enable Banking pre-auth page reached: LIVE VERIFIED = YES
 Bank authentication page reached: LIVE VERIFIED = YES
-Authorization successfully completed: NO
-Callback: NO
-POST /sessions: NO
-Balances: NO
-Transactions: NO
-Disconnect: NO
-Official Auth Flow widget: IMPLEMENTED / LOCALLY VERIFIED only after this task until redeployed and actually tested.
+Authorization successfully completed: LIVE VERIFIED = YES (fourth pass, Mock ASPSP)
+Callback: LIVE VERIFIED = YES (fourth pass) -- connection persisted
+POST /sessions: LIVE VERIFIED = YES (fourth pass, implied)
+Balances: NO -- blocked by the account-handling 422, now code-fixed, awaiting re-verification
+Transactions: NO -- same block
+Second-sync deduplication: NO -- awaiting runtime verification
+Disconnect: NO -- awaiting runtime verification
+Official Auth Flow widget: IMPLEMENTED / LOCALLY VERIFIED only, not yet redeployed and actually tested.
+No-reunlock popup return: code-fixed, awaiting runtime verification.
 ```
 
 Current limitations: same class of gap as GoCardless below — no completed end-to-end consent→sync→disconnect cycle evidenced against a live sandbox, and the redirect_uri fix above is **not yet re-verified live**. Do not mark the consent-duration fix LIVE VERIFIED either — the provider currently rejects on redirect_uri first, so another contract problem could still surface once that's corrected. Control Panel setup itself is confirmed already correct (discovery/JWT auth succeed live; both required redirect URLs are registered). See [[Enable Banking]], [[Bank Family Directory Resolution]], [[Institution Logo Proxy]], and [[Provider Callback Binding]].
@@ -197,4 +210,4 @@ Relevant code/docs: `src/aiModels.ts`, `README.md` ("AI architecture")
 
 [[Providers Index]] mirrors this note's verification table as individually-linkable atomic nodes (one per provider, each with its own implementation/config/test/verification-state breakdown) so a specific provider can be reached directly from [[Pages Index]], [[Flows Index]], or [[Security Index]] without returning here first.
 
-Related: [[Authentication]], [[Bank Connections]], [[Enable Banking]], [[PayPal]], [[AI System]], [[Known Issues and Limitations]], [[Rejected Approaches]], [[Providers Index]], [[Provider Callback Binding]], [[Bank Disconnect Flow]], [[Rate Limiting]], [[Institution Logo Proxy]], [[Enable Banking Auth Flow Widget]]
+Related: [[Authentication]], [[Bank Connections]], [[Enable Banking]], [[PayPal]], [[AI System]], [[Known Issues and Limitations]], [[Rejected Approaches]], [[Providers Index]], [[Provider Callback Binding]], [[Bank Disconnect Flow]], [[Rate Limiting]], [[Institution Logo Proxy]], [[Enable Banking Auth Flow Widget]], [[Provider Authorization Popup Bridge]]
