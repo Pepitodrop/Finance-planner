@@ -43,4 +43,10 @@ Approaches explicitly not taken, and the stated reason, sourced from `TODOS.md` 
 **Why rejected:** `config/production-readiness-evidence.json`'s `distributedRateLimiting` gate was corrected from `pending` to `partial` (not `verified`) on 2026-08-03 specifically because `verified` requires a named, accountable human `approvedBy`/`reviewedAt` that no one had actually recorded — "claiming it here would trade one inaccuracy for another." This is a repo-wide convention worth respecting when writing any future readiness claim, including in this vault. (`TODOS.md`)
 **Related:** [[Backend]], [[Provider Status]], [[Memory System]]
 
+---
+
+**Tried, then reverted:** falling back to a same-tab redirect / the Enable Banking embedded widget when a provider-authorization popup is blocked or the browser can't create the tab-local return binding.
+**Why rejected:** [[Provider Authorization Popup Bridge]] exists specifically because a same-tab provider redirect unloads the SPA and destroys Finance Planner's memory-only, non-extractable vault decryption key, forcing an unwanted re-unlock. An early version of `startConnector()` (`src/connectors.ts`) caught `beginConnectorPopupAttempt()`'s failure and fell through into exactly that same-tab/embedded-widget path — reasonable-looking as a UX nicety ("don't just fail, degrade gracefully"), but it silently recreated the precise regression the whole bridge was built to prevent, for the one population of users most likely to hit it (anyone with a popup blocker). Caught by a PR #154 review comment before merge, not by a test — none of the existing tests asserted that this path *shouldn't* navigate. Fixed by removing the fallback entirely outside `VITE_ACCEPTANCE_FIXTURES=true`: a blocked popup or failed storage binding is now a fail-closed, retryable start failure (rejects before `/start` is ever called, before any provider nonce exists, before the tab is touched), never a silent degrade. (PR #154, 2026-08-25)
+**Related:** [[Provider Authorization Popup Bridge]], [[Bank Connection Flow]], [[Connections Page]], [[Provider Callback Binding]]
+
 Related: [[Architecture Decisions]] · [[Security Decisions]]

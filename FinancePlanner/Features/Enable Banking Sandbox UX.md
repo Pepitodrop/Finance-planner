@@ -67,7 +67,7 @@ The sandbox warning and CSS refinement are **IMPLEMENTED on PR #154 but not yet 
 - disconnect: NOT YET VERIFIED
 - second-sync deduplication: NOT YET VERIFIED — blocked on the first sync succeeding live
 
-This pass also exercised the provider-authorization **popup** bridge (`src/providerReturnBridge.ts`) against a real callback for the first time, fixing two more pre-existing bugs found while reviewing it (a popup-blocked fallback that was unreachable dead code, and its own test suite silently never executing for lack of a jsdom environment pragma) — see [[Bank Connections]] for detail. Also code-fixed, awaiting runtime re-verification.
+This pass also exercised the provider-authorization **popup** bridge (`src/providerReturnBridge.ts`) against a real callback for the first time. Two review rounds on PR #154 found and fixed a total of five bugs in it: an unreachable popup-blocked fallback, later corrected into a genuine fail-closed rejection after a second review caught that the first fix's fallback would have recreated the vault-reset problem the bridge exists to prevent (see [[Rejected Approaches]]); its own test suite silently never executing for lack of a jsdom environment pragma; unbounded provider/error validation on the return signal; and a logout cleanup gap. See [[Provider Authorization Popup Bridge]] for full detail. Also code-fixed, awaiting runtime re-verification.
 
 ## Production use
 
