@@ -1,4 +1,10 @@
 import { assessBankImportQuality, suggestCategoryFromHistory, type BankImportQuality } from './bankIntelligence'
+import {
+  abandonConnectorPopupAttempt,
+  beginConnectorPopupAttempt,
+  CONNECTOR_RETURN_ATTEMPT_PARAM,
+  navigateConnectorPopup,
+} from './providerReturnBridge'
 import type { Account, AppState, CreditCardDetails, Transaction } from './types'
 
 export type ConnectorProvider = 'enablebanking' | 'gocardless' | 'finapi' | 'paypal'
@@ -39,17 +45,14 @@ export interface ExternalTransaction { externalId: string; externalAccountId: st
 export interface SyncPayload { connection: ConnectorConnection; accounts: ExternalAccount[]; transactions: ExternalTransaction[] }
 export interface SyncPreview { accountsToCreate: Account[]; transactionsToImport: Transaction[]; duplicateCount: number; pendingCount: number; quality: BankImportQuality }
 
-// startConnector()'s result. Every provider except Enable Banking always
-// gets 'redirect' (the browser is already navigating away by the time this
-// resolves -- see startConnector() below, unchanged behavior). Enable
-// Banking gets 'embedded-auth' only when the server's /start response
-// included a validated authFlow descriptor (see server/src/providers.js's
-// validateEnableBankingAuthOrigin()/validEnableBankingAuthorizationId()) --
-// the caller must keep the setup modal open and render the official Auth
-// Flow widget instead of navigating, and `redirectUrl` is kept on this
-// result specifically so the widget's own error-fallback UI has an
-// already-validated plain-redirect URL to fall back to without a second
-// network round trip.
+// startConnector()'s result. When a real browser allows a popup, provider
+// authorization is moved into that popup so the already-unlocked Finance
+// Planner tab is never unloaded and its in-memory vault key remains intact.
+// The popup return is bridged back through providerReturnBridge.ts and the
+// existing callback/sync UI is remounted by ConnectionsPanel. If a popup is
+// blocked, existing behavior remains the fallback: Enable Banking can use its
+// embedded Auth Flow widget and other providers use the normal same-tab
+// redirect. No vault password/key is persisted to achieve this.
 export type ConnectorStartResult =
   | { mode: 'redirect' }
   | { mode: 'embedded-auth'; provider: 'enablebanking'; redirectUrl: string; authorizationId: string; origin: string; sandbox: boolean }
@@ -164,7 +167,13 @@ async function requestJson<T>(url: string, init: RequestInit, options: { retry?:
   throw lastError instanceof Error ? lastError : new Error('The banking backend is temporarily unreachable.')
 }
 
-export function connectorReturnUrl(): string { const url = new URL(window.location.href); for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'institution']) url.searchParams.delete(key); url.hash = ''; return url.toString() }
+export function connectorReturnUrl(attemptId?: string): string {
+  const url = new URL(window.location.href)
+  for (const key of ['code', 'state', 'scope', 'error', 'error_description', 'provider', 'institution', CONNECTOR_RETURN_ATTEMPT_PARAM]) url.searchParams.delete(key)
+  if (attemptId) url.searchParams.set(CONNECTOR_RETURN_ATTEMPT_PARAM, attemptId)
+  url.hash = ''
+  return url.toString()
+}
 // Same-origin logo proxy, never a direct link to a provider-controlled URL:
 // the server re-resolves institutionId against its own live directory and
 // re-validates the logo URL it finds there before ever fetching it (see
@@ -184,28 +193,50 @@ export async function fetchProviderInstitutions(provider: ConnectorProvider, cou
   return result.institutions
 }
 export async function startConnector(provider: ConnectorProvider, context: ConnectorStartContext = {}): Promise<ConnectorStartResult> {
-  const result = await requestJson<{ redirectUrl?: string; authFlow?: { provider?: string; authorizationId?: string; origin?: string; sandbox?: boolean } }>(`/api/connectors/${provider}/start`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ redirectUri: connectorReturnUrl(), country: 'DE', institutionId: context.institutionId, institutionName: context.institutionName, accountType: context.accountType }),
-  }, { idempotent: true })
-  if (!result.redirectUrl || !result.redirectUrl.startsWith('https://')) throw new Error('The connector did not return a secure redirect address.')
-  const authFlow = result.authFlow
-  // Every field is re-validated here, client-side, even though the server
-  // already validated them -- this function's contract must never hand the
-  // widget a value it can't itself vouch for, regardless of what the network
-  // layer in between claims the response shape was.
-  if (
-    provider === 'enablebanking' &&
-    authFlow &&
-    authFlow.provider === 'enablebanking' &&
-    typeof authFlow.authorizationId === 'string' && authFlow.authorizationId.length > 0 &&
-    typeof authFlow.origin === 'string' && authFlow.origin.startsWith('https://')
-  ) {
-    return { mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: result.redirectUrl, authorizationId: authFlow.authorizationId, origin: authFlow.origin, sandbox: Boolean(authFlow.sandbox) }
+  // window.open must happen synchronously inside the user's click stack;
+  // opening it after the /start await would be blocked by normal popup
+  // protection. Acceptance fixtures deliberately keep their deterministic
+  // embedded/same-tab behavior and never create real browser windows.
+  const popupAttempt = import.meta.env.VITE_ACCEPTANCE_FIXTURES === 'true' ? null : beginConnectorPopupAttempt(provider)
+  try {
+    const result = await requestJson<{ redirectUrl?: string; authFlow?: { provider?: string; authorizationId?: string; origin?: string; sandbox?: boolean } }>(`/api/connectors/${provider}/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ redirectUri: connectorReturnUrl(popupAttempt?.attemptId), country: 'DE', institutionId: context.institutionId, institutionName: context.institutionName, accountType: context.accountType }),
+    }, { idempotent: true })
+    if (!result.redirectUrl || !result.redirectUrl.startsWith('https://')) throw new Error('The connector did not return a secure redirect address.')
+
+    // Preferred production path: redirect only the popup. This keeps the
+    // original Finance Planner document alive, so its non-extractable,
+    // memory-only vault key remains unlocked. The server callback returns to
+    // the popup-specific application URL, which providerReturnBridge relays
+    // to the original tab without transferring any vault/provider secrets.
+    if (popupAttempt) {
+      navigateConnectorPopup(popupAttempt, result.redirectUrl)
+      return { mode: 'redirect' }
+    }
+
+    const authFlow = result.authFlow
+    // Popup blocked: preserve the existing Enable Banking widget fallback.
+    // Every field is re-validated here, client-side, even though the server
+    // already validated them -- this function's contract must never hand the
+    // widget a value it can't itself vouch for, regardless of what the network
+    // layer in between claims the response shape was.
+    if (
+      provider === 'enablebanking' &&
+      authFlow &&
+      authFlow.provider === 'enablebanking' &&
+      typeof authFlow.authorizationId === 'string' && authFlow.authorizationId.length > 0 &&
+      typeof authFlow.origin === 'string' && authFlow.origin.startsWith('https://')
+    ) {
+      return { mode: 'embedded-auth', provider: 'enablebanking', redirectUrl: result.redirectUrl, authorizationId: authFlow.authorizationId, origin: authFlow.origin, sandbox: Boolean(authFlow.sandbox) }
+    }
+    window.location.assign(result.redirectUrl)
+    return { mode: 'redirect' }
+  } catch (error) {
+    abandonConnectorPopupAttempt(popupAttempt)
+    throw error
   }
-  window.location.assign(result.redirectUrl)
-  return { mode: 'redirect' }
 }
 export async function synchronizeConnections(): Promise<SyncPayload[]> { if (activeSynchronization) return activeSynchronization; const operation = (async () => { const result = await requestJson<{ connections?: SyncPayload[] }>('/api/connectors/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } }, { retry: true, idempotent: true }); if (!Array.isArray(result.connections)) throw new Error('The sync service returned an invalid result.'); return result.connections })(); activeSynchronization = operation; try { return await operation } finally { if (activeSynchronization === operation) activeSynchronization = null } }
 export type DisconnectResult = { disconnected: boolean; providerRevoked: boolean; providerRevokeReason: 'confirmed' | 'not_applicable' | 'not_supported' | 'provider_error' }
