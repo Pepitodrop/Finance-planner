@@ -68,12 +68,17 @@ function parseSignal(value: unknown): ConnectorReturnSignal | null {
   }
 }
 
-export function beginConnectorPopupAttempt(provider: string): ConnectorPopupAttempt | null {
+export function beginConnectorPopupAttempt(provider: string): ConnectorPopupAttempt {
   const normalizedProvider = String(provider || '').trim()
-  if (!normalizedProvider) return null
+  if (!normalizedProvider) throw new Error('A connector provider is required.')
   const attemptId = createAttemptId()
   const popup = window.open('about:blank', `finance-planner-provider-${attemptId}`, 'popup,width=720,height=820,resizable=yes,scrollbars=yes')
-  if (!popup) return null
+  // Never silently fall back to same-tab navigation. Same-tab provider
+  // redirects unload the SPA and intentionally destroy the memory-only vault
+  // key, which is exactly the re-unlock regression this bridge exists to
+  // avoid. A blocked popup is therefore a visible/retryable start failure,
+  // before /start is contacted and before an OAuth nonce is created.
+  if (!popup) throw new Error('Bank authorization needs a separate secure window. Allow pop-ups for Finance Planner and try again.')
 
   const pending: PendingConnectorAttempt = { attemptId, provider: normalizedProvider, createdAt: Date.now() }
   // The original tab must be able to prove that a later popup return belongs
@@ -86,7 +91,7 @@ export function beginConnectorPopupAttempt(provider: string): ConnectorPopupAtte
     sessionStorage.setItem(PENDING_STORAGE_KEY, JSON.stringify(pending))
   } catch {
     try { popup.close() } catch {}
-    return null
+    throw new Error('Bank authorization could not create a secure return binding in this browser. Check site-storage permissions and try again.')
   }
 
   try {
