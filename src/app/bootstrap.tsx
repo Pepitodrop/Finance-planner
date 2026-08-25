@@ -11,6 +11,7 @@ import { MobileEnhancements } from '../MobileEnhancements'
 import { MobileExperience } from '../MobileExperience'
 import { MobileProductionRuntime } from '../MobileProductionRuntime'
 import { MobileRuntime } from '../MobileRuntime'
+import { publishConnectorReturnFromPopup } from '../providerReturnBridge'
 import { TestEnrollmentPage } from '../TestEnrollmentPage'
 import { VaultGate } from '../VaultGate'
 import { WebMobileHardening } from '../WebMobileHardening'
@@ -55,46 +56,55 @@ import '../features/planning/planning.css'
 import '../runtime-surfaces/runtime-surfaces.css'
 import '../post-release-fixes.css'
 
+// A provider popup returning to the application is a transport surface, not a
+// second Finance Planner application instance. Publish its bounded callback
+// signal and close it before AuthGate/VaultGate (or service-worker setup) can
+// mount. The original tab stays alive throughout authorization, so its
+// memory-only vault key remains exactly where it was; no password/key is ever
+// copied into this popup or browser storage.
+const connectorReturnPopup = publishConnectorReturnFromPopup()
 const enrollmentRoute = window.location.pathname === '/test-enrollment'
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <ErrorBoundary>
-      <AcceptanceCrashTrigger />
-      {enrollmentRoute ? <TestEnrollmentPage /> : <>
-        <RuntimeSurfaceCoordinator>
-        <WebMobileHardening />
-        <FrontendExperience />
-        <MobileProductionRuntime />
-        <MobileRuntime />
-        <MobileConnectivityStatus />
-        <MobileEnhancements />
-        <MobileExperience />
-        <AuthGate>{(user, { logout }) => <VaultGate key={user.id} userId={user.id}>{(lock) => <><App userId={user.id} userName={user.name} user={user} onLockVault={lock} onLogout={logout}/><CloudSyncStatus /><AutomaticTransactionAnalysis /></>}</VaultGate>}</AuthGate>
-        </RuntimeSurfaceCoordinator>
-      </>}
-    </ErrorBoundary>
-  </React.StrictMode>,
-)
+if (!connectorReturnPopup) {
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <ErrorBoundary>
+        <AcceptanceCrashTrigger />
+        {enrollmentRoute ? <TestEnrollmentPage /> : <>
+          <RuntimeSurfaceCoordinator>
+          <WebMobileHardening />
+          <FrontendExperience />
+          <MobileProductionRuntime />
+          <MobileRuntime />
+          <MobileConnectivityStatus />
+          <MobileEnhancements />
+          <MobileExperience />
+          <AuthGate>{(user, { logout }) => <VaultGate key={user.id} userId={user.id}>{(lock) => <><App userId={user.id} userName={user.name} user={user} onLockVault={lock} onLogout={logout}/><CloudSyncStatus /><AutomaticTransactionAnalysis /></>}</VaultGate>}</AuthGate>
+          </RuntimeSurfaceCoordinator>
+        </>}
+      </ErrorBoundary>
+    </React.StrictMode>,
+  )
 
-// Sole owner of service-worker registration and of the controllerchange ->
-// reload transition. Update DETECTION (registration.update() polling,
-// updatefound observation, and dispatching finance-planner:update-available)
-// is owned solely by MobileProductionRuntime, which already ties polling to
-// meaningful triggers (online, visibility, pageshow, resume) instead of a
-// blind interval -- having both here and there was genuine duplicate
-// ownership of the same browser state.
-if ('serviceWorker' in navigator && import.meta.env.PROD) {
-  window.addEventListener('load', () => {
-    let refreshing = false
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (refreshing) return
-      refreshing = true
-      window.location.reload()
-    })
+  // Sole owner of service-worker registration and of the controllerchange ->
+  // reload transition. Update DETECTION (registration.update() polling,
+  // updatefound observation, and dispatching finance-planner:update-available)
+  // is owned solely by MobileProductionRuntime, which already ties polling to
+  // meaningful triggers (online, visibility, pageshow, resume) instead of a
+  // blind interval -- having both here and there was genuine duplicate
+  // ownership of the same browser state.
+  if ('serviceWorker' in navigator && import.meta.env.PROD) {
+    window.addEventListener('load', () => {
+      let refreshing = false
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (refreshing) return
+        refreshing = true
+        window.location.reload()
+      })
 
-    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch((error: unknown) => {
-      console.warn('Service worker registration failed', error)
+      navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch((error: unknown) => {
+        console.warn('Service worker registration failed', error)
+      })
     })
-  })
+  }
 }
