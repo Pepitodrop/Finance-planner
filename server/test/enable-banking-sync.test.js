@@ -247,6 +247,82 @@ test('maps booked and pending transactions from the BOOK/PDNG status field (6, 7
   assert.equal(pending.pending, true)
 }))
 
+// Found by PR #154 review (2026-08-25): the current official Enable Banking
+// transaction-status enum has seven values -- BOOK, PDNG, CNCL, HOLD, OTHR,
+// RJCT, SCHD -- but the mapping above only ever checked for PDNG, so
+// CNCL/HOLD/OTHR/RJCT/SCHD all silently became `pending: false` and were
+// imported as ordinary booked transactions. Only BOOK/PDNG should ever
+// reach the imported set; the rest have no correct booked-or-pending
+// mapping in Finance Planner's model (no cancelled/held/scheduled/other
+// category exists) and must be skipped outright -- never coerced to
+// booked, never guessed at.
+function transactionFixture(overrides) {
+  return { entry_reference: 'entry', credit_debit_indicator: 'CRDT', transaction_amount: { currency: 'EUR', amount: '1.00' }, booking_date: '2026-08-01', remittance_information: [], ...overrides }
+}
+
+test('every documented status is handled correctly: only BOOK/PDNG are imported, CNCL/HOLD/OTHR/RJCT/SCHD are skipped, none of them ever become booked', () => withRestoredFetch(async () => {
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({ status: 'AUTHORIZED' }), { status: 200 })
+    if (url.includes('/balances')) return new Response(JSON.stringify(balancesResponse('0.00')), { status: 200 })
+    if (url.includes('/transactions')) return new Response(JSON.stringify({ transactions: [
+      transactionFixture({ entry_reference: 'entry-book', status: 'BOOK' }),
+      transactionFixture({ entry_reference: 'entry-pdng', status: 'PDNG' }),
+      transactionFixture({ entry_reference: 'entry-cncl', status: 'CNCL' }),
+      transactionFixture({ entry_reference: 'entry-hold', status: 'HOLD' }),
+      transactionFixture({ entry_reference: 'entry-othr', status: 'OTHR' }),
+      transactionFixture({ entry_reference: 'entry-rjct', status: 'RJCT' }),
+      transactionFixture({ entry_reference: 'entry-schd', status: 'SCHD' }),
+    ] }), { status: 200 })
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  const result = await adapter.sync(CREDENTIAL)
+
+  // Exactly the two real transactions are imported -- the other five never
+  // enter the transactions array at all, booked or otherwise.
+  assert.deepEqual(result.transactions.map((t) => t.externalId).sort(), ['acct-1:entry-book', 'acct-1:entry-pdng'])
+  const booked = result.transactions.find((t) => t.externalId === 'acct-1:entry-book')
+  const pending = result.transactions.find((t) => t.externalId === 'acct-1:entry-pdng')
+  assert.equal(booked.pending, false)
+  assert.equal(pending.pending, true)
+  // Prove none of the excluded statuses leaked in under a booked (or any) row.
+  for (const excluded of ['entry-cncl', 'entry-hold', 'entry-othr', 'entry-rjct', 'entry-schd']) {
+    assert.equal(result.transactions.some((t) => t.externalId === `acct-1:${excluded}`), false)
+  }
+}))
+
+test('fails closed on a transaction status outside the documented enum, rather than guessing or defaulting to booked', () => withRestoredFetch(async () => {
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({ status: 'AUTHORIZED' }), { status: 200 })
+    if (url.includes('/balances')) return new Response(JSON.stringify(balancesResponse('0.00')), { status: 200 })
+    if (url.includes('/transactions')) return new Response(JSON.stringify({ transactions: [
+      transactionFixture({ entry_reference: 'entry-unknown', status: 'WEIRD' }),
+    ] }), { status: 200 })
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  await assert.rejects(adapter.sync(CREDENTIAL), /unrecognized status/)
+}))
+
+test('fails closed on a transaction with no status field at all', () => withRestoredFetch(async () => {
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({ status: 'AUTHORIZED' }), { status: 200 })
+    if (url.includes('/balances')) return new Response(JSON.stringify(balancesResponse('0.00')), { status: 200 })
+    if (url.includes('/transactions')) return new Response(JSON.stringify({ transactions: [
+      transactionFixture({ entry_reference: 'entry-missing', status: undefined }),
+    ] }), { status: 200 })
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  await assert.rejects(adapter.sync(CREDENTIAL), /unrecognized status/)
+}))
+
 test('follows continuation_key pagination, keeping date_from/date_to identical across pages (10)', () => withRestoredFetch(async () => {
   const transactionRequests = []
   globalThis.fetch = async (input) => {

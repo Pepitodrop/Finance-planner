@@ -14,6 +14,17 @@ import {
 
 const PENDING_STORAGE_KEY = 'finance-planner-connector-pending-v1'
 const RETURN_STORAGE_PREFIX = 'finance-planner-connector-return-v1:'
+const POPUP_ORIGIN_MARKER_KEY = 'finance-planner-connector-popup-origin-v1'
+
+// Simulates what a REAL popup's own sessionStorage would contain on return:
+// beginConnectorPopupAttempt() writes this marker immediately before
+// window.open() (picked up by the new browsing context's one-time
+// sessionStorage clone) and removes it from the opener right after -- a
+// unit test has no real second browsing context to clone into, so this
+// stands in for "the document currently running this test is that popup".
+function markAsPopupReturn(attemptId: string) {
+  sessionStorage.setItem(POPUP_ORIGIN_MARKER_KEY, attemptId)
+}
 
 function fakePopup() {
   const replace = vi.fn()
@@ -90,6 +101,7 @@ describe('provider return bridge', () => {
     vi.useFakeTimers()
     const attemptId = '1234567890abcdef1234567890abcdef'
     window.history.replaceState({}, document.title, `/?fp_connection_attempt=${attemptId}&provider=enablebanking&code=secret-code&state=secret-state&error_description=secret-detail`)
+    markAsPopupReturn(attemptId)
 
     expect(publishConnectorReturnFromPopup()).toBe(true)
     const raw = localStorage.getItem(`${RETURN_STORAGE_PREFIX}${attemptId}`)
@@ -241,6 +253,7 @@ describe('provider return bridge', () => {
     it('rejects an unknown provider name from the URL, publishing nothing', () => {
       const attemptId = '1234567890abcdef1234567890abcdef'
       window.history.replaceState({}, document.title, `/?fp_connection_attempt=${attemptId}&provider=not-a-real-provider`)
+      markAsPopupReturn(attemptId)
       expect(publishConnectorReturnFromPopup()).toBe(false)
       expect(localStorage.getItem(`${RETURN_STORAGE_PREFIX}${attemptId}`)).toBeNull()
     })
@@ -248,12 +261,14 @@ describe('provider return bridge', () => {
     it('rejects a provider value containing free text/spaces', () => {
       const attemptId = '1234567890abcdef1234567890abcdef'
       window.history.replaceState({}, document.title, `/?fp_connection_attempt=${attemptId}&provider=${encodeURIComponent('enable banking please')}`)
+      markAsPopupReturn(attemptId)
       expect(publishConnectorReturnFromPopup()).toBe(false)
     })
 
     it('rejects an oversized provider value', () => {
       const attemptId = '1234567890abcdef1234567890abcdef'
       window.history.replaceState({}, document.title, `/?fp_connection_attempt=${attemptId}&provider=${'enablebanking'.repeat(20)}`)
+      markAsPopupReturn(attemptId)
       expect(publishConnectorReturnFromPopup()).toBe(false)
     })
 
@@ -268,18 +283,21 @@ describe('provider return bridge', () => {
     it('rejects an error value containing spaces/free text', () => {
       const attemptId = '1234567890abcdef1234567890abcdef'
       window.history.replaceState({}, document.title, `/?fp_connection_attempt=${attemptId}&error=${encodeURIComponent('the user said no thanks')}`)
+      markAsPopupReturn(attemptId)
       expect(publishConnectorReturnFromPopup()).toBe(false)
     })
 
     it('rejects an oversized error value', () => {
       const attemptId = '1234567890abcdef1234567890abcdef'
       window.history.replaceState({}, document.title, `/?fp_connection_attempt=${attemptId}&error=${'a'.repeat(65)}`)
+      markAsPopupReturn(attemptId)
       expect(publishConnectorReturnFromPopup()).toBe(false)
     })
 
     it('never delivers code/state/error_description through BroadcastChannel, only the bounded provider metadata', async () => {
       const attemptId = '1234567890abcdef1234567890abcdef'
       window.history.replaceState({}, document.title, `/?fp_connection_attempt=${attemptId}&provider=enablebanking&code=secret-code&state=secret-state&error_description=secret-detail`)
+      markAsPopupReturn(attemptId)
 
       const delivered = new Promise<ConnectorReturnSignal>((resolve) => {
         const unsubscribe = subscribeConnectorReturns((signal) => { unsubscribe(); resolve(signal) })
@@ -290,6 +308,64 @@ describe('provider return bridge', () => {
       const signal = await delivered
       expect(signal).toEqual({ type: 'finance-planner:connector-return', attemptId, provider: 'enablebanking' })
       expect(JSON.stringify(signal)).not.toMatch(/secret-code|secret-state|secret-detail/)
+    })
+  })
+
+  // Fixed 2026-08-25 (PR #154 review): publishConnectorReturnFromPopup()
+  // used to treat ANY document carrying a syntactically valid
+  // fp_connection_attempt + provider/error as the popup transport surface --
+  // including an ordinary tab that merely navigated to a crafted
+  // same-origin URL. It now also requires this document's own sessionStorage
+  // to carry POPUP_ORIGIN_MARKER_KEY matching the URL's attemptId, which
+  // only the real popup Finance Planner opened for that exact attempt ever
+  // has (see beginConnectorPopupAttempt()'s sessionStorage-clone-at-creation
+  // note).
+  describe('popup-context binding (bootstrap short-circuit is popup-bound, not URL-triggered)', () => {
+    it('a crafted URL with a perfectly valid attemptId/provider does NOT short-circuit in a document with no popup-origin marker at all', () => {
+      const attemptId = '1234567890abcdef1234567890abcdef'
+      window.history.replaceState({}, document.title, `/?fp_connection_attempt=${attemptId}&provider=enablebanking`)
+      // Deliberately no markAsPopupReturn() call -- this simulates an
+      // ordinary tab (including the user's own already-open Finance Planner
+      // tab, which never receives this marker either) that merely loaded a
+      // URL shaped like a popup return.
+      expect(publishConnectorReturnFromPopup()).toBe(false)
+      expect(localStorage.getItem(`${RETURN_STORAGE_PREFIX}${attemptId}`)).toBeNull()
+      expect(document.getElementById('root')).not.toHaveTextContent('Bank authorization completed')
+    })
+
+    it('beginConnectorPopupAttempt() removes the marker from the OPENER immediately after creating the popup, so the opener itself is never mistaken for the popup', () => {
+      const { popup } = fakePopup()
+      vi.spyOn(window, 'open').mockReturnValue(popup)
+      const attempt = beginConnectorPopupAttempt('enablebanking')
+
+      // If the opener's own tab later loaded a URL carrying this same
+      // attemptId (e.g. the user pasted/bookmarked it, or it leaked into
+      // browser history), it must not be treated as the popup returning --
+      // the marker was already consumed/removed from this context.
+      window.history.replaceState({}, document.title, `/?fp_connection_attempt=${attempt.attemptId}&provider=enablebanking`)
+      expect(sessionStorage.getItem(POPUP_ORIGIN_MARKER_KEY)).toBeNull()
+      expect(publishConnectorReturnFromPopup()).toBe(false)
+    })
+
+    it('a marker present for a DIFFERENT attemptId than the URL does not match', () => {
+      const attemptId = '1234567890abcdef1234567890abcdef'
+      const otherAttemptId = 'fedcba0987654321fedcba0987654321'
+      window.history.replaceState({}, document.title, `/?fp_connection_attempt=${attemptId}&provider=enablebanking`)
+      markAsPopupReturn(otherAttemptId)
+      expect(publishConnectorReturnFromPopup()).toBe(false)
+    })
+
+    it('the marker is single-use -- a second load of the same popup-return URL after a successful publish does not re-trigger it', () => {
+      const attemptId = '1234567890abcdef1234567890abcdef'
+      window.history.replaceState({}, document.title, `/?fp_connection_attempt=${attemptId}&provider=enablebanking`)
+      markAsPopupReturn(attemptId)
+
+      expect(publishConnectorReturnFromPopup()).toBe(true)
+      expect(sessionStorage.getItem(POPUP_ORIGIN_MARKER_KEY)).toBeNull()
+      // Simulate the same document loading the same URL again (e.g. a
+      // reload before window.close() actually takes effect) -- the marker
+      // is already gone, so this must not publish a second time.
+      expect(publishConnectorReturnFromPopup()).toBe(false)
     })
   })
 })

@@ -66,9 +66,14 @@ export interface SyncPreview { accountsToCreate: Account[]; transactionsToImport
 // a permanently "busy" UI with no further progress, since no navigation in
 // this tab is ever coming (fixed 2026-08-25; see ConnectionsPage.tsx's
 // startProvider()). The full ConnectorPopupAttempt (not just the bare
-// Window) is included so a caller can both poll `attempt.popup.closed` to
-// detect a manual close and call abandonConnectorPopupAttempt(attempt) to
-// cancel cleanly.
+// Window) is included so a caller can call abandonConnectorPopupAttempt(attempt)
+// to cancel cleanly. Deliberately NOT so a caller can poll `attempt.popup.closed`
+// to detect a manual close: this app's COOP policy (`same-origin`, see
+// server/src/server.js) severs the opener's WindowProxy reference once the
+// popup navigates cross-origin to the real provider, so `.closed` can read
+// `true` while the authorization window is genuinely still open (fixed
+// 2026-08-25, see ConnectionsPage.tsx's removed polling effect and its
+// PopupWaitingStep component).
 export type ConnectorStartResult =
   | { mode: 'redirect' }
   | { mode: 'popup'; attempt: ConnectorPopupAttempt }

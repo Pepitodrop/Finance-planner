@@ -4,6 +4,20 @@ const CHANNEL_NAME = 'finance-planner-connector-return-v1'
 const PENDING_STORAGE_KEY = 'finance-planner-connector-pending-v1'
 const RETURN_STORAGE_PREFIX = 'finance-planner-connector-return-v1:'
 const ATTEMPT_MAX_AGE_MS = 20 * 60 * 1000
+// Popup-context proof (added 2026-08-25, PR #154 review): a same-origin
+// browsing context created via window.open() receives a ONE-TIME CLONE of
+// the opener's sessionStorage at creation time (distinct from localStorage,
+// which is origin-wide and continuously shared) -- see
+// beginConnectorPopupAttempt() for how this key is written immediately
+// before window.open() and removed from the opener immediately after, so
+// only the freshly-created popup's own sessionStorage retains it. sessionStorage
+// itself stays scoped per (browsing context, origin), so the popup keeps its
+// own Finance-Planner-origin storage area, marker included, intact across
+// its round trip through the cross-origin provider. See
+// publishConnectorReturnFromPopup() for how this proves a returning
+// document is genuinely that popup, not merely a tab carrying a
+// similar-looking URL.
+const POPUP_ORIGIN_MARKER_KEY = 'finance-planner-connector-popup-origin-v1'
 
 export interface ConnectorReturnSignal {
   type: 'finance-planner:connector-return'
@@ -87,7 +101,15 @@ export function beginConnectorPopupAttempt(provider: string): ConnectorPopupAtte
   const normalizedProvider = String(provider || '').trim()
   if (!normalizedProvider) throw new Error('A connector provider is required.')
   const attemptId = createAttemptId()
+  // Written immediately before window.open() so the new browsing context's
+  // one-time sessionStorage clone picks it up, then removed from THIS tab
+  // right after -- see POPUP_ORIGIN_MARKER_KEY above. Best-effort: if this
+  // write fails, the popup simply won't carry the marker, and its return is
+  // then treated like any other non-popup page load (fails closed, never a
+  // false positive) -- it does not block opening the popup itself.
+  try { sessionStorage.setItem(POPUP_ORIGIN_MARKER_KEY, attemptId) } catch { /* best-effort */ }
   const popup = window.open('about:blank', `finance-planner-provider-${attemptId}`, 'popup,width=720,height=820,resizable=yes,scrollbars=yes')
+  try { sessionStorage.removeItem(POPUP_ORIGIN_MARKER_KEY) } catch { /* best-effort */ }
   // Never silently fall back to same-tab navigation. Same-tab provider
   // redirects unload the SPA and intentionally destroy the memory-only vault
   // key, which is exactly the re-unlock regression this bridge exists to
@@ -125,6 +147,19 @@ export function navigateConnectorPopup(attempt: ConnectorPopupAttempt, redirectU
   attempt.popup.location.replace(target.toString())
 }
 
+// Called on an explicit, synchronous user action (Cancel, Back, closing the
+// setup dialog, switching institutions, or a manual "Try again") -- unlike
+// clearPendingConnectorAttempt() on logout, this always runs deterministically
+// and immediately, with no network round trip to race against. It closes
+// the real popup window and removes this tab's own bridge records
+// (sessionStorage binding + any already-buffered localStorage return), but
+// -- same caveat as logout -- it has no server-side effect. If the provider
+// popup had already progressed far enough to reach Finance Planner's own
+// callback route before this runs, that callback still finalizes server-side
+// (bound to the signed `state` from `/start`, independent of this
+// client-side bridge); this function can only prevent that popup's return
+// signal from being accepted by *this tab* afterward, not un-do a
+// server-side connection that already completed.
 export function abandonConnectorPopupAttempt(attempt: ConnectorPopupAttempt | null): void {
   if (!attempt) return
   const pending = readPendingAttempt()
@@ -175,10 +210,30 @@ function signalFromCurrentUrl(): ConnectorReturnSignal | null {
  * publishes only fixed callback metadata to the already-open original tab,
  * then closes. No vault password, derived key, financial data, provider code,
  * signed state, token, or free-text error_description is ever transferred.
+ *
+ * Fixed 2026-08-25 (PR #154 review): a syntactically valid
+ * fp_connection_attempt + provider/error in the URL alone used to be enough
+ * to short-circuit bootstrap into this transport screen -- which a crafted
+ * link to Finance Planner's own origin (opened in an ordinary tab, not a
+ * popup) could also satisfy, stranding that tab on "Bank authorization
+ * completed" instead of mounting the app. The ORIGINAL tab would still
+ * reject a mismatched attemptId later (see acceptConnectorReturnSignal()),
+ * so this was never a cross-user data leak -- but it could disrupt a normal
+ * tab. Now also requires POPUP_ORIGIN_MARKER_KEY's sessionStorage value to
+ * exactly match the URL's attemptId: only the popup Finance Planner itself
+ * opened for this exact attempt ever has it (see
+ * beginConnectorPopupAttempt()), so a normal tab -- including the original
+ * Finance Planner tab, which never receives this marker either -- always
+ * falls through to mounting the app normally instead.
  */
 export function publishConnectorReturnFromPopup(): boolean {
   const signal = signalFromCurrentUrl()
   if (!signal) return false
+
+  let marker: string | null = null
+  try { marker = sessionStorage.getItem(POPUP_ORIGIN_MARKER_KEY) } catch { marker = null }
+  if (marker !== signal.attemptId) return false
+  try { sessionStorage.removeItem(POPUP_ORIGIN_MARKER_KEY) } catch { /* best-effort */ }
 
   try {
     localStorage.setItem(`${RETURN_STORAGE_PREFIX}${signal.attemptId}`, JSON.stringify(signal))

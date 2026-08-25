@@ -681,10 +681,19 @@ describe('provider authorization popup (fixed 2026-08-25: a successful popup lau
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled()
   })
 
-  it('detects the user manually closing the popup and offers Try again instead of waiting forever', async () => {
+  // Regression for the COOP/popup.closed finding (PR #154 review,
+  // 2026-08-25): Finance Planner sends `Cross-Origin-Opener-Policy:
+  // same-origin`, which severs this tab's WindowProxy reference to the
+  // popup once it navigates cross-origin to the real provider -- `.closed`
+  // can then read `true` even though the authorization window is genuinely
+  // still open. There must be no polling left that reacts to this at all:
+  // the waiting UI stays exactly as-is even when the handle already reports
+  // closed:true from the very start (the worst case -- a fully "severed"
+  // handle) and stays that way well past the old 500ms poll interval.
+  it('never shows a false "Secure window closed" state, even when the popup handle already reads closed:true (a COOP-severed handle)', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
-      const { attempt } = fakePopupAttempt()
+      const { attempt } = fakePopupAttempt({ closed: true })
       vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'popup', attempt })
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
       renderConnections()
@@ -693,39 +702,36 @@ describe('provider authorization popup (fixed 2026-08-25: a successful popup lau
       await user.click(screen.getByRole('button', { name: 'Continue with owner connection' }))
       await screen.findByRole('heading', { name: 'Continue in the secure window' })
 
-      // The user closes the real popup window themselves, without ever completing authorization.
-      ;(attempt.popup as unknown as { closed: boolean }).closed = true
-      await act(async () => { await vi.advanceTimersByTimeAsync(600) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
 
-      expect(await screen.findByRole('heading', { name: 'Secure window closed' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Continue in the secure window' })).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Secure window closed' })).not.toBeInTheDocument()
+      expect(screen.queryByText(/secure window was closed/)).not.toBeInTheDocument()
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('Try again after a manual close starts a fresh attempt', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    try {
-      const first = fakePopupAttempt()
-      const second = fakePopupAttempt()
-      vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'popup', attempt: first.attempt }).mockResolvedValueOnce({ mode: 'popup', attempt: second.attempt })
-      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
-      renderConnections()
-      await user.click(screen.getByRole('button', { name: 'Connect an account' }))
-      await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
-      await user.click(screen.getByRole('button', { name: 'Continue with owner connection' }))
-      await screen.findByRole('heading', { name: 'Continue in the secure window' })
+  it('"Try again" is always available as a manual action (never gated on any auto-detected close) and abandons the current popup before starting a fresh one', async () => {
+    const first = fakePopupAttempt()
+    const second = fakePopupAttempt()
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'popup', attempt: first.attempt }).mockResolvedValueOnce({ mode: 'popup', attempt: second.attempt })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue with owner connection' }))
+    await screen.findByRole('heading', { name: 'Continue in the secure window' })
 
-      ;(first.attempt.popup as unknown as { closed: boolean }).closed = true
-      await act(async () => { await vi.advanceTimersByTimeAsync(600) })
-      await user.click(await screen.findByRole('button', { name: 'Try again' }))
+    // Available immediately -- not conditional on any closed-detection.
+    await user.click(screen.getByRole('button', { name: 'Try again' }))
 
-      expect(startConnector).toHaveBeenCalledTimes(2)
-      expect(await screen.findByRole('heading', { name: 'Continue in the secure window' })).toBeInTheDocument()
-    } finally {
-      vi.useRealTimers()
-    }
+    // The first (possibly still-live) popup must be closed before a second
+    // one opens, so a user who retries can never end up with two concurrent
+    // authorization attempts for the same connection.
+    expect(first.close).toHaveBeenCalled()
+    expect(startConnector).toHaveBeenCalledTimes(2)
+    expect(await screen.findByRole('heading', { name: 'Continue in the secure window' })).toBeInTheDocument()
   })
 
   it('Cancel while waiting closes the real popup window, not just the React state', async () => {

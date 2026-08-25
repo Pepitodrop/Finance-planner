@@ -159,4 +159,29 @@ describe('AuthGate: sign-out', () => {
 
     await waitFor(() => expect(sessionStorage.getItem('finance-planner-connector-pending-v1')).toBeNull())
   })
+
+  // Fixed 2026-08-25 (PR #154 review): this cleanup previously ran only
+  // after `await api('/api/auth/logout', ...)` resolved successfully, so a
+  // failed/lost logout response left the stale binding in place. It is
+  // purely local browser hygiene, unrelated to whether the server accepted
+  // the request, so it must run regardless -- ApplicationShell.tsx's
+  // signOut() still surfaces the request failure and lets the user retry.
+  it('clears the pending connector-popup binding even when the logout request itself fails', async () => {
+    vi.spyOn(window, 'fetch').mockImplementation((input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/auth/logout')) return Promise.resolve(new Response(JSON.stringify({ error: 'Internal error' }), { status: 500 }))
+      return jsonResponse({ authenticated: true, user: AUTHENTICATED_USER })
+    })
+    sessionStorage.setItem('finance-planner-connector-pending-v1', JSON.stringify({ attemptId: 'a'.repeat(16), provider: 'enablebanking', createdAt: Date.now() }))
+
+    let caught: unknown = null
+    render(<AuthGate>{(user, { logout }) => <button onClick={() => { logout().catch((reason: unknown) => { caught = reason }) }}>Sign out as {user.name}</button>}</AuthGate>)
+    await waitFor(() => screen.getByRole('button', { name: /sign out as demo user/i }))
+    fireEvent.click(screen.getByRole('button', { name: /sign out as demo user/i }))
+
+    await waitFor(() => expect(sessionStorage.getItem('finance-planner-connector-pending-v1')).toBeNull())
+    // The failure itself must still propagate -- this fix only moves the
+    // browser-side cleanup earlier, it doesn't hide a genuine logout failure.
+    await waitFor(() => expect(caught).not.toBeNull())
+  })
 })

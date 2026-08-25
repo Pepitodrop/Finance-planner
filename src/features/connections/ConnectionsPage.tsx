@@ -172,7 +172,6 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   // clears this state along with everything else -- this only needs to
   // handle the "still waiting" and "user closed the popup" cases itself.
   const [popupAttempt, setPopupAttempt] = useState<Extract<ConnectorStartResult, { mode: 'popup' }>['attempt'] | null>(null)
-  const [popupClosedEarly, setPopupClosedEarly] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [category, setCategory] = useState<InstitutionCategory>('popular')
   const [selectedInstitutionId, setSelectedInstitutionId] = useState<string | null>(null)
@@ -470,7 +469,6 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
         // permanently strand the modal with no way to proceed: nothing in
         // this tab is ever coming to replace it. Clearing busy and showing
         // an explicit waiting state is what actually fixes that.
-        setPopupClosedEarly(false)
         setPopupAttempt(result.attempt)
         setBusy(false)
       }
@@ -490,22 +488,25 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     }
   }
 
-  // Detects the user manually closing the provider popup before it ever
-  // completed. A genuine completion never reaches this: ConnectionsPanel
-  // remounts this whole component on a successful/failed return signal
-  // (see providerReturnBridge.ts + ConnectionsPanel.tsx), which tears down
-  // this effect (and every other piece of state) before the interval could
-  // ever observe `popup.closed` becoming true for that reason. Polling
-  // (rather than a 'close' event, which cross-origin popups don't reliably
-  // fire to the opener) is the standard, safe way to detect this.
-  useEffect(() => {
-    if (!popupAttempt) return
-    const interval = window.setInterval(() => {
-      if (popupAttempt.popup.closed) setPopupClosedEarly(true)
-    }, 500)
-    return () => window.clearInterval(interval)
-  }, [popupAttempt])
-
+  // Deliberately no `popupAttempt.popup.closed` polling here (removed
+  // 2026-08-25, found by PR #154 review, see [[Provider Authorization Popup
+  // Bridge]] in the project vault). Finance Planner sends
+  // `Cross-Origin-Opener-Policy: same-origin` (server/src/server.js) -- a
+  // real security control, not something to weaken for this. Once the
+  // popup navigates from this origin to the cross-origin OAuth/PSD2
+  // provider, that COOP policy moves the popup into a different browsing
+  // context group, severing this tab's `WindowProxy` reference to it. From
+  // that point on, `.closed` is not a "sometimes stale" signal -- it is
+  // fully unreliable and can read `true` while the real authorization
+  // window is still open and the user is mid-login. Since `startConnector()`
+  // only ever returns `{mode: 'popup'}` *after* the popup has already been
+  // navigated to the provider (see connectors.ts), there was never a safe
+  // window in which polling here observed a trustworthy value -- so instead
+  // of trying to patch the heuristic, "the popup closed on its own" is no
+  // longer detected automatically at all. The user can always end the wait
+  // explicitly (Cancel, or the "Try again" action in PopupWaitingStep below),
+  // and a genuine completion is still driven entirely by the bounded
+  // popup-return bridge (providerReturnBridge.ts), never by this signal.
   const connectorContext = (): ConnectorStartContext => {
     if (!selectedInstitution) return {}
     if (selectedInstitution.provider === 'ais') {
@@ -581,7 +582,6 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     // record in sessionStorage.
     if (popupAttempt) abandonConnectorPopupAttempt(popupAttempt)
     setPopupAttempt(null)
-    setPopupClosedEarly(false)
     setSetupOpen(true)
   }
   const closeSetup = useCallback(() => {
@@ -592,7 +592,6 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setAuthFlowFixtureStatus(null)
     if (popupAttempt) abandonConnectorPopupAttempt(popupAttempt)
     setPopupAttempt(null)
-    setPopupClosedEarly(false)
   }, [busy, popupAttempt])
 
   const openManualAccount = (hintedType: ConnectorAccountType = 'checking', hintedName = '') => {
@@ -634,7 +633,6 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setAuthFlowFixtureStatus(null)
     if (popupAttempt) abandonConnectorPopupAttempt(popupAttempt)
     setPopupAttempt(null)
-    setPopupClosedEarly(false)
   }
 
   const chooseInstitution = (id: string) => {
@@ -646,7 +644,6 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setAuthFlowFixtureStatus(null)
     if (popupAttempt) abandonConnectorPopupAttempt(popupAttempt)
     setPopupAttempt(null)
-    setPopupClosedEarly(false)
     if (institution.provider === 'manual') {
       openManualAccount(defaultAccountTypeForInstitution(institution), institution.name === 'Virtuelles / manuelles Konto' ? '' : institution.name)
       return
@@ -927,9 +924,20 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
                 institution={selectedInstitution}
                 resolvedInstitutionName={resolvedProviderInstitution?.name}
                 resolvedInstitutionId={resolvedProviderInstitution?.id}
-                closedEarly={popupClosedEarly}
                 onCancel={closeSetup}
-                onRetry={() => { const provider = effectiveProvider(); if (provider) void startProvider(provider, connectorContext(), setSetupError) }}
+                onRetry={() => {
+                  // Always abandon the current attempt first: since a
+                  // closed/still-open popup can no longer be told apart
+                  // (see the note above connectorContext), a user-initiated
+                  // retry must not leave a first, possibly still-live popup
+                  // authorizing in the background while a second one starts
+                  // -- that would risk two concurrent authorization attempts
+                  // for the same connection.
+                  abandonConnectorPopupAttempt(popupAttempt)
+                  setPopupAttempt(null)
+                  const provider = effectiveProvider()
+                  if (provider) void startProvider(provider, connectorContext(), setSetupError)
+                }}
               />
             : <RedirectConfirmationStep
                 institution={selectedInstitution}
@@ -963,7 +971,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
             // back out of the waiting view without leaving Step 3, and
             // actually close the real popup window rather than abandoning
             // it silently in the background.
-            if (setupStep === 3 && popupAttempt) { abandonConnectorPopupAttempt(popupAttempt); setPopupAttempt(null); setPopupClosedEarly(false); return }
+            if (setupStep === 3 && popupAttempt) { abandonConnectorPopupAttempt(popupAttempt); setPopupAttempt(null); return }
             setSetupStep(setupStep === 3 ? previousSetupStepFromConfirmation(selectedInstitution) : 1)
           }}><ArrowLeft size={18}/></button>
           <p className="connections-step-label">Step {setupStep} of 3</p>
@@ -1298,7 +1306,6 @@ interface PopupWaitingStepProps {
   institution: { id: string; name: string; provider: string; kind: string }
   resolvedInstitutionName?: string
   resolvedInstitutionId?: string
-  closedEarly: boolean
   onCancel: () => void
   onRetry: () => void
 }
@@ -1313,25 +1320,33 @@ interface PopupWaitingStepProps {
 // leave in its place. A successful/failed popup return is handled entirely
 // outside this component -- ConnectionsPanel remounts the whole page once
 // the return signal arrives, which unmounts this view along with
-// everything else, so this only needs to handle "still waiting" and "the
-// user closed the popup before it finished" itself.
-function PopupWaitingStep({ institution, resolvedInstitutionName, resolvedInstitutionId, closedEarly, onCancel, onRetry }: PopupWaitingStepProps) {
+// everything else.
+//
+// Deliberately a single, steady state -- no "the popup was closed early"
+// branch (removed 2026-08-25, PR #154 review). Finance Planner's COOP
+// policy (`same-origin`) severs this tab's ability to read the popup's
+// `.closed` property reliably once it navigates cross-origin to the
+// provider, so that signal can read "closed" while the real authorization
+// window is still open mid-login -- using it here would risk showing a
+// false "window closed" error (and inviting a Retry that starts a second,
+// redundant authorization) during an entirely normal wait. The user ends
+// the wait explicitly instead: Cancel abandons the attempt outright, and
+// "Try again" (always available, not conditionally shown) closes whatever
+// popup exists -- open or not, this tab genuinely cannot tell -- before
+// starting a fresh one.
+function PopupWaitingStep({ institution, resolvedInstitutionName, resolvedInstitutionId, onCancel, onRetry }: PopupWaitingStepProps) {
   return <div className="connections-confirmation connections-auth-flow-step">
     <div className="connections-institution-banner">
       <span className="connections-row-icon"><InstitutionIcon key={resolvedInstitutionId ?? institution.id} institution={institution}/></span>
       <span className="connections-row-body"><strong>{institution.name}</strong>{resolvedInstitutionName && resolvedInstitutionName !== institution.name && <small>{resolvedInstitutionName}</small>}</span>
     </div>
-    <h2 id="connections-setup-title" className="connections-setup-title">{closedEarly ? 'Secure window closed' : 'Continue in the secure window'}</h2>
+    <h2 id="connections-setup-title" className="connections-setup-title">Continue in the secure window</h2>
     <div className="connections-auth-flow-frame" aria-live="polite">
-      {closedEarly
-        ? <div className="connections-auth-flow-error" role="alert">
-            <AlertTriangle size={18}/>
-            <p>It looks like the secure window was closed before authorization finished. No connection was made.</p>
-            <div className="connections-modal-actions">
-              <button type="button" className="primary" onClick={onRetry}>Try again</button>
-            </div>
-          </div>
-        : <p className="connections-auth-flow-loading">Bank authorization opened in a secure window. Complete it there; Finance Planner will update automatically when it returns.</p>}
+      <p className="connections-auth-flow-loading">Bank authorization opened in a secure window. Complete it there; Finance Planner will update automatically when it returns.</p>
+      <p className="connections-fallback-message">
+        Didn't get a window, or need to start over?{' '}
+        <button type="button" className="connections-text-button connections-retry-button" onClick={onRetry}>Try again</button>
+      </p>
     </div>
     <p className="connections-footnote connections-auth-flow-footer"><ShieldCheck size={14}/> Finance Planner never receives your online-banking credentials.</p>
     <div className="connections-modal-actions">

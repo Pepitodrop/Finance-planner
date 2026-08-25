@@ -827,6 +827,15 @@ function isValidEnableBankingAccountId(value) {
   return typeof value === 'string' && ENABLE_BANKING_ACCOUNT_ID_PATTERN.test(value)
 }
 
+// Enable Banking's documented transaction-status enum (current official
+// account-information API reference), used to fail closed on anything
+// outside it rather than guessing -- see the status handling in sync()
+// below. Only BOOK/PDNG map to an ExternalTransaction; the rest
+// (cancelled/held/other/rejected/scheduled) have no correct booked-or-
+// pending mapping in Finance Planner's model and are skipped, never
+// imported as booked.
+const ENABLE_BANKING_KNOWN_TRANSACTION_STATUSES = new Set(['BOOK', 'PDNG', 'CNCL', 'HOLD', 'OTHR', 'RJCT', 'SCHD'])
+
 class EnableBankingProvider extends OpenBankingProvider {
   constructor(env, core) {
     super({ id: 'enablebanking', displayName: 'Bank connection', kind: 'psd2-account-information', env, core })
@@ -1195,6 +1204,26 @@ class EnableBankingProvider extends OpenBankingProvider {
         if (!Array.isArray(page?.transactions)) throw new Error('Enable Banking transaction response is invalid.')
         for (const item of page.transactions) {
           if (item.transaction_amount?.currency !== 'EUR') continue
+          // Found by PR #154 review (2026-08-25): the current official
+          // Enable Banking transaction-status enum has seven values --
+          // BOOK, PDNG, CNCL, HOLD, OTHR, RJCT, SCHD -- but this loop only
+          // ever checked for PDNG, so CNCL/HOLD/OTHR/RJCT/SCHD all silently
+          // became pending: false and were imported as ordinary booked
+          // transactions. Finance Planner's transaction model has no
+          // cancelled/held/scheduled/other category (`ExternalTransaction`
+          // only has a boolean `pending`), so there is no correct mapping
+          // for those five statuses other than not importing them as either
+          // booked or pending -- skipped here, the same way a non-EUR
+          // transaction is skipped above, rather than guessing. Only BOOK
+          // and PDNG ever reach the push below. Fails closed (throws) for
+          // any status outside this documented set, exactly like the
+          // credit_debit_indicator check below -- never silently defaults
+          // an unrecognized value to booked.
+          const status = item.status
+          if (!ENABLE_BANKING_KNOWN_TRANSACTION_STATUSES.has(status)) {
+            throw new Error(`Enable Banking transaction has an unrecognized status: ${JSON.stringify(status ?? null)}`)
+          }
+          if (status !== 'BOOK' && status !== 'PDNG') continue
           // Found during Mock ASPSP sandbox prep (2026-08-22), confirmed
           // against the current official Enable Banking account-information
           // API reference: transaction_amount.amount is an ABSOLUTE value --
@@ -1242,11 +1271,9 @@ class EnableBankingProvider extends OpenBankingProvider {
             amountCents: signedCents,
             currency: 'EUR',
             bookingDate: item.booking_date || item.value_date || item.transaction_date || window.dateTo,
-            // PDNG = pending, BOOK = booked in the current official status
-            // enum -- previously compared against 'PEND', a value this API
-            // does not use, so every transaction was silently treated as
-            // booked (pending: false) regardless of its real status.
-            pending: item.status === 'PDNG',
+            // Only BOOK/PDNG ever reach this push (see the status check
+            // above), so this is now an exhaustive, not a best-effort, check.
+            pending: status === 'PDNG',
           })
         }
         continuationKey = page.continuation_key
