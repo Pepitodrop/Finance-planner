@@ -48,7 +48,7 @@ function readPendingAttempt(): PendingConnectorAttempt | null {
     }
     return { attemptId: parsed.attemptId, provider: parsed.provider, createdAt: Number(parsed.createdAt) }
   } catch {
-    sessionStorage.removeItem(PENDING_STORAGE_KEY)
+    try { sessionStorage.removeItem(PENDING_STORAGE_KEY) } catch {}
     return null
   }
 }
@@ -76,8 +76,20 @@ export function beginConnectorPopupAttempt(provider: string): ConnectorPopupAtte
   if (!popup) return null
 
   const pending: PendingConnectorAttempt = { attemptId, provider: normalizedProvider, createdAt: Date.now() }
+  // The original tab must be able to prove that a later popup return belongs
+  // to an attempt it actually started. If sessionStorage is unavailable we
+  // fail closed and do not contact the provider at all; otherwise a random
+  // same-origin page carrying fp_connection_attempt could be accepted without
+  // a durable tab-local binding. No password/key/provider token is stored --
+  // this record is only a high-entropy attempt id, provider id and timestamp.
   try {
     sessionStorage.setItem(PENDING_STORAGE_KEY, JSON.stringify(pending))
+  } catch {
+    try { popup.close() } catch {}
+    return null
+  }
+
+  try {
     popup.document.title = 'Finance Planner — Bank authorization'
     popup.document.body.textContent = 'Preparing secure bank authorization…'
   } catch {
@@ -96,8 +108,10 @@ export function navigateConnectorPopup(attempt: ConnectorPopupAttempt, redirectU
 export function abandonConnectorPopupAttempt(attempt: ConnectorPopupAttempt | null): void {
   if (!attempt) return
   const pending = readPendingAttempt()
-  if (pending?.attemptId === attempt.attemptId) sessionStorage.removeItem(PENDING_STORAGE_KEY)
-  localStorage.removeItem(`${RETURN_STORAGE_PREFIX}${attempt.attemptId}`)
+  if (pending?.attemptId === attempt.attemptId) {
+    try { sessionStorage.removeItem(PENDING_STORAGE_KEY) } catch {}
+  }
+  try { localStorage.removeItem(`${RETURN_STORAGE_PREFIX}${attempt.attemptId}`) } catch {}
   try { attempt.popup.close() } catch {}
 }
 
@@ -133,7 +147,7 @@ export function publishConnectorReturnFromPopup(): boolean {
   }
 
   const root = document.getElementById('root')
-  if (root) root.textContent = 'Bank authorization completed. You can close this window.'
+  if (root) root.textContent = 'Bank authorization completed. This window can close.'
   window.setTimeout(() => { try { window.close() } catch {} }, 0)
   return true
 }
@@ -143,8 +157,8 @@ export function acceptConnectorReturnSignal(signal: ConnectorReturnSignal): Conn
   if (!pending || pending.attemptId !== signal.attemptId) return null
   if (signal.provider && signal.provider !== pending.provider) return null
 
-  sessionStorage.removeItem(PENDING_STORAGE_KEY)
-  localStorage.removeItem(`${RETURN_STORAGE_PREFIX}${signal.attemptId}`)
+  try { sessionStorage.removeItem(PENDING_STORAGE_KEY) } catch {}
+  try { localStorage.removeItem(`${RETURN_STORAGE_PREFIX}${signal.attemptId}`) } catch {}
   return signal
 }
 
@@ -157,7 +171,7 @@ export function takeBufferedConnectorReturn(): ConnectorReturnSignal | null {
     const signal = parseSignal(JSON.parse(raw))
     return signal ? acceptConnectorReturnSignal(signal) : null
   } catch {
-    localStorage.removeItem(`${RETURN_STORAGE_PREFIX}${pending.attemptId}`)
+    try { localStorage.removeItem(`${RETURN_STORAGE_PREFIX}${pending.attemptId}`) } catch {}
     return null
   }
 }
