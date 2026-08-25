@@ -13,7 +13,7 @@ import { createFinanceRouter } from './finance-router.js'
 import { createGoogleSubscriptionsRouter } from './google-subscriptions-router.js'
 import { OperationalMetrics } from './operational-metrics.js'
 import { authorizeProviderUser, describeProviderForUser } from './provider-access.js'
-import { callbackHasCompletionSignal, completedConnectionMatchesState } from './provider-callback.js'
+import { callbackHasCompletionSignal, completeConnectorCallback } from './provider-callback.js'
 import { createOpenBankingProviderRegistry } from './providers.js'
 import { HttpError, SlidingWindowRateLimiter, classifyError, clientIp, rateLimitTier, requestId, validateProductionConfig } from './runtime-security.js'
 import { bearerToken, createSession, issueState, verifySessionClaims, verifyState } from './security.js'
@@ -506,63 +506,32 @@ const server = createServer(async (request, response) => {
         redirectWithoutError(state.redirectUri)
         return
       }
-      // Two provider-agnostic steps, never one -- see providers.js's
-      // completeCallback() doc comment and the postgres-store.js/
-      // crypto-store.js consumePendingConnectionSetup()/finalizeConnection()
-      // doc comments for the full reasoning. The nonce is consumed first
-      // (single local operation, still atomic and replay-proof); only once
-      // that succeeds AND the provider's own completion step succeeds does
-      // the connection get promoted into the live connector_connections
-      // record. No provider-specific branching lives here -- every provider
-      // implements the same completeCallback() contract (a pass-through for
-      // GoCardless/PayPal, a real code-for-session exchange for Enable
-      // Banking).
-      let pending
-      try {
-        pending = await store.consumePendingConnectionSetup({ nonce: state.nonce, consentId: state.consentId, userId: state.sub, provider, redirectUri: state.redirectUri, now: Date.now() })
-      } catch {
-        redirectWithError(state.redirectUri)
-        return
-      }
-      if (!pending) {
-        let replayed = false
-        try {
-          const stored = await store.get(state.sub, provider)
-          replayed = completedConnectionMatchesState(stored, state, provider)
-        } catch {}
-        if (!replayed) { redirectWithError(state.redirectUri); return }
-        const success = new URL(state.redirectUri)
-        success.searchParams.set('provider', provider)
-        response.writeHead(302, { Location: success.toString(), 'Cache-Control': 'no-store', 'X-Request-ID': id })
-        return response.end()
-      }
+      // The exactly-once-claim / concurrent-duplicate-safe completion
+      // algorithm lives in provider-callback.js's completeConnectorCallback()
+      // -- extracted (2026-08-25, fixing a live concurrent-callback race
+      // found in a Mock ASPSP run) so it can be exercised directly with
+      // mocked store/providerAdapter dependencies, not only through
+      // source-text assertions against this route. No provider-specific
+      // branching lives here or there -- every provider implements the same
+      // completeCallback() contract (a pass-through for GoCardless/PayPal, a
+      // real code-for-session exchange for Enable Banking). Never logs the
+      // code/state/token/payload -- only a fixed event name, provider id,
+      // and timing.
       let completed
       try {
-        completed = await providerAdapter(provider).completeCallback({ code: url.searchParams.get('code'), pending })
-      } catch (error) {
-        // The nonce is already burned and any existing working connection
-        // (reconnect case) is untouched -- this connection attempt simply
-        // never gets finalized. Distinguish "the user declined at the
-        // provider" (authorization_denied, an honest and distinct message)
-        // from every other failure (network error, malformed response,
-        // rejected code -- the generic copy), but never reflect the raw
-        // provider/error text itself.
-        redirectWithError(state.redirectUri, error?.code === 'authorization_denied' ? 'access_denied' : 'invalid_state')
+        completed = await completeConnectorCallback({
+          store,
+          providerAdapter: providerAdapter(provider),
+          state,
+          code: url.searchParams.get('code'),
+          log: (fields) => console.log(JSON.stringify({ level: 'info', requestId: id, ...fields })),
+        })
+      } catch {
+        redirectWithError(state.redirectUri)
         return
       }
-      try {
-        await store.finalizeConnection({ userId: state.sub, provider, connection: completed, connectedAt: new Date().toISOString() })
-      } catch {
-        // completeCallback() already succeeded -- for a provider like Enable
-        // Banking, a real session/consent now exists at their end with zero
-        // local trace of it. Best-effort ask the provider to revoke what it
-        // just created rather than leaving it permanently orphaned. Never
-        // lets a revoke failure change the error the user sees, and never
-        // throws (disconnect() implementations already never throw; the
-        // wrapper is defense-in-depth against a future adapter breaking
-        // that contract).
-        try { await providerAdapter(provider).disconnect(completed) } catch {}
-        redirectWithError(state.redirectUri)
+      if (completed.outcome === 'error') {
+        redirectWithError(state.redirectUri, completed.errorCode)
         return
       }
       const success = new URL(state.redirectUri)

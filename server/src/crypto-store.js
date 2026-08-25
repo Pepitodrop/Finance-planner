@@ -243,33 +243,62 @@ export class EncryptedStore {
     })
   }
 
-  // Consumes the single-use nonce and returns the pending credential it
-  // guarded, without yet promoting it into data.connections -- some
-  // providers (Enable Banking) still need to complete a server-side exchange
-  // (an authorization code -> session call) before the connection is safe to
-  // activate, and that exchange is a network call that must never happen
-  // inside mutate()'s serialized write queue. See finalizeConnection() for
-  // the second, provider-independent step.
-  async consumePendingConnectionSetup(input) {
+  // CLAIMS (does not delete) the pending credential guarded by this nonce,
+  // exactly once -- see PostgresStore.claimPendingConnectionSetup()'s doc
+  // comment for the full race this fixes and the return-shape contract,
+  // which this mirrors exactly. mutate()'s write queue already serializes
+  // every call against this store instance, so within one process this is
+  // trivially exactly-once; it exists mainly so server.js's callback route
+  // has one coherent contract regardless of which store backs it (this one,
+  // for non-Postgres deployments, or PostgresStore in production).
+  async claimPendingConnectionSetup(input) {
     return this.mutate(() => {
       const key = nonceKey(input.nonce)
       const stored = this.data.oauthNonces[key]
-      if (!stored || !stored.pendingConnection) return null
+      if (!stored || !stored.pendingConnection) return { status: 'not_found' }
       if (stored.expiresAt <= input.now) {
         delete this.data.oauthNonces[key]
-        return null
+        return { status: 'not_found' }
       }
-      const connection = stored.pendingConnection
       if (
-        connection.consentId !== input.consentId ||
-        connection.redirectUri !== input.redirectUri ||
         stored.consentId !== input.consentId ||
         stored.userId !== input.userId ||
         stored.provider !== input.provider ||
         stored.redirectUri !== input.redirectUri
-      ) return null
+      ) return { status: 'not_found' }
+      const connection = stored.pendingConnection
+      if (connection.consentId !== input.consentId || connection.redirectUri !== input.redirectUri) return { status: 'not_found' }
+      if (stored.claimToken) return { status: 'in_progress' }
+      const claimToken = randomBytes(24).toString('base64url')
+      stored.claimToken = claimToken
+      return { status: 'claimed', claimToken, connection }
+    })
+  }
+
+  // Read-only (well, mutate() still serializes it against concurrent writes,
+  // but it never changes anything) -- see PostgresStore's twin.
+  async pendingConnectionSetupExists(input) {
+    return this.mutate(() => {
+      const key = nonceKey(input.nonce)
+      const stored = this.data.oauthNonces[key]
+      if (!stored || stored.expiresAt <= input.now) return false
+      return (
+        stored.consentId === input.consentId &&
+        stored.userId === input.userId &&
+        stored.provider === input.provider &&
+        stored.redirectUri === input.redirectUri
+      )
+    })
+  }
+
+  // See PostgresStore.releasePendingConnectionSetup()'s doc comment.
+  async releasePendingConnectionSetup(input) {
+    return this.mutate(() => {
+      const key = nonceKey(input.nonce)
+      const stored = this.data.oauthNonces[key]
+      if (!stored || stored.claimToken !== input.claimToken) return false
       delete this.data.oauthNonces[key]
-      return connection
+      return true
     })
   }
 

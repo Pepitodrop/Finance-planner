@@ -92,33 +92,19 @@ test('the provider callback route redirects every failure back into the app inst
   assert.ok(missingClaims > catchBlock)
   assert.match(callbackRoute.slice(missingClaims, missingClaims + 200), /redirectWithError\(origin\)/)
 
-  const consumeCall = callbackRoute.indexOf('await store.consumePendingConnectionSetup(')
-  const pendingFailure = callbackRoute.indexOf('if (!pending)')
-  assert.ok(consumeCall > missingClaims && pendingFailure > consumeCall)
+  const completeCall = callbackRoute.indexOf('await completeConnectorCallback(')
+  const completeCatch = callbackRoute.indexOf('} catch {', completeCall)
+  assert.ok(completeCall > missingClaims && completeCatch > completeCall)
   // Once state HAS been cryptographically verified, its redirectUri is
-  // trusted -- this and every failure branch after this point uses it. The
-  // window is wide enough to cover the replay-detection logic (checking
-  // whether this is a genuine repeat of an already-completed connection)
-  // that runs before the actual redirect call in this branch.
-  assert.match(callbackRoute.slice(pendingFailure, pendingFailure + 500), /redirectWithError\(state\.redirectUri\)/)
-})
-
-test('the provider callback route redirects instead of throwing raw JSON when consumePendingConnectionSetup itself fails (not just returns null)', () => {
-  const callbackStart = serverSource.indexOf("if (request.method === 'GET' && url.pathname === '/api/connectors/callback')")
-  const callbackRoute = serverSource.slice(
-    callbackStart,
-    serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
-  )
-  // A DB error or a corrupted pending_payload throws out of
-  // store.consumePendingConnectionSetup() itself, distinct from it resolving
-  // null. That throw must still be caught and redirected -- state.redirectUri
-  // is already verified by this point -- not left to propagate to the
-  // top-level handler's raw-JSON error response.
-  const consumeTry = callbackRoute.indexOf('try {\n        pending = await store.consumePendingConnectionSetup(')
-  assert.ok(consumeTry >= 0, 'the consumePendingConnectionSetup call must be inside its own try block')
-  const consumeCatch = callbackRoute.indexOf('} catch {', consumeTry)
-  assert.ok(consumeCatch > consumeTry)
-  assert.match(callbackRoute.slice(consumeCatch, consumeCatch + 200), /redirectWithError\(state\.redirectUri\)/)
+  // trusted -- a thrown completion (a DB error, a corrupted pending_payload,
+  // anything completeConnectorCallback() itself doesn't catch) redirects
+  // with it rather than propagating to the raw-JSON error handler. The
+  // exactly-once-claim / concurrent-duplicate-safe logic that used to be
+  // inline here (nonce consumption, replay detection) now lives entirely
+  // inside completeConnectorCallback() -- see provider-callback.test.js for
+  // its own direct behavioral coverage of that algorithm, including the
+  // concurrent-duplicate race this whole extraction exists to fix.
+  assert.match(callbackRoute.slice(completeCatch, completeCatch + 200), /redirectWithError\(state\.redirectUri\)/)
 })
 
 test('the provider callback route never reads a client-supplied ?provider= query parameter -- the source no longer contains that pattern at all', () => {
@@ -130,48 +116,33 @@ test('the provider callback route never reads a client-supplied ?provider= query
   assert.doesNotMatch(callbackRoute, /searchParams\.get\('provider'\)/, 'provider must be derived from the verified state, never trusted from an unauthenticated query parameter (fixed 2026-08-21 after a live REDIRECT_URI_NOT_ALLOWED rejection)')
 })
 
-test('the provider callback route runs completeCallback() only after the nonce has been consumed, and redirects on failure without exposing raw JSON', () => {
+// Fixed 2026-08-25 (live concurrent-duplicate-callback race, Mock ASPSP run
+// against PR #154): the nonce-claim / completeCallback() / finalizeConnection
+// sequencing this pair of tests used to check via source-text position now
+// lives entirely inside provider-callback.js's completeConnectorCallback(),
+// extracted specifically so it could be exercised with real execution
+// (mocked store/providerAdapter, real call-order assertions, a real
+// concurrent-duplicate race) instead of only source-text offsets -- see
+// server/test/provider-callback.test.js for that direct coverage, including
+// the exact race this fixes: two concurrent deliveries of the same signed
+// attempt, one paused mid-completeCallback(), must still result in exactly
+// one provider code exchange, exactly one finalizeConnection() call, and
+// both callbacks resolving to the same success outcome. What remains
+// checkable at the server.js boundary is only that server.js itself no
+// longer inlines any of that logic (a regression guard against someone
+// re-inlining it insecurely later) and that its result is always turned into
+// a redirect -- covered by the test above and by
+// provider-callback-boundary.test.js.
+test('the provider callback route no longer inlines nonce-claim/completeCallback/finalizeConnection sequencing directly -- that now lives in completeConnectorCallback()', () => {
   const callbackStart = serverSource.indexOf("if (request.method === 'GET' && url.pathname === '/api/connectors/callback')")
   const callbackRoute = serverSource.slice(
     callbackStart,
     serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
   )
-  const pendingFailure = callbackRoute.indexOf('if (!pending)')
-  const completeCallbackCall = callbackRoute.indexOf('providerAdapter(provider).completeCallback(')
-  assert.ok(completeCallbackCall > pendingFailure, 'completeCallback() must only run after the pending setup has been consumed')
-  assert.match(callbackRoute.slice(completeCallbackCall, completeCallbackCall + 200), /code: url\.searchParams\.get\('code'\), pending/)
-
-  const completeCatch = callbackRoute.indexOf('} catch (error) {', completeCallbackCall)
-  assert.ok(completeCatch > completeCallbackCall)
-  const completeCatchBody = callbackRoute.slice(completeCatch, completeCatch + 800)
-  // Distinguishes the provider denying authorization (an honest, distinct
-  // error code) from every other completeCallback() failure (the generic
-  // copy) -- but never reflects the raw provider/error text itself.
-  assert.match(completeCatchBody, /error\?\.code === 'authorization_denied' \? 'access_denied' : 'invalid_state'/)
-  assert.match(completeCatchBody, /redirectWithError\(state\.redirectUri,/)
-})
-
-test('the provider callback route never activates a connection until finalizeConnection succeeds, and redirects (not raw JSON) if it fails', () => {
-  const callbackStart = serverSource.indexOf("if (request.method === 'GET' && url.pathname === '/api/connectors/callback')")
-  const callbackRoute = serverSource.slice(
-    callbackStart,
-    serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
-  )
-  const completeCallbackCall = callbackRoute.indexOf('providerAdapter(provider).completeCallback(')
-  const finalizeCall = callbackRoute.indexOf('await store.finalizeConnection(')
-  assert.ok(finalizeCall > completeCallbackCall, 'finalizeConnection must only run after completeCallback() has succeeded')
-  const finalizeCatch = callbackRoute.indexOf('} catch {', finalizeCall)
-  assert.ok(finalizeCatch > finalizeCall)
-  assert.match(callbackRoute.slice(finalizeCatch, finalizeCatch + 800), /redirectWithError\(state\.redirectUri\)/)
-  // The success redirect must come strictly after finalizeConnection, never
-  // before it. Searched starting from finalizeCall, not from the start of
-  // the route -- an earlier, separate replay-tolerance branch (an
-  // already-completed connection being safely re-confirmed without
-  // re-running finalizeConnection) legitimately contains the same
-  // `const success = new URL(state.redirectUri)` pattern before this point,
-  // and is not the occurrence this assertion is about.
-  const successRedirect = callbackRoute.indexOf('const success = new URL(state.redirectUri)', finalizeCall)
-  assert.ok(successRedirect > finalizeCall)
+  assert.doesNotMatch(callbackRoute, /providerAdapter\(provider\)\.completeCallback\(/, 'completeCallback() must be invoked from inside completeConnectorCallback(), never directly from the route handler')
+  assert.doesNotMatch(callbackRoute, /store\.finalizeConnection\(/, 'finalizeConnection() must be invoked from inside completeConnectorCallback(), never directly from the route handler')
+  assert.doesNotMatch(callbackRoute, /store\.(?:consume|claim)PendingConnectionSetup\(/, 'nonce claiming must happen inside completeConnectorCallback(), never directly from the route handler')
+  assert.match(callbackRoute, /await completeConnectorCallback\(/)
 })
 
 test('the provider callback route never reflects a caller-controlled value into the failure redirect copy, for any error code', () => {
@@ -198,8 +169,9 @@ test('the provider callback route appends ?provider= to the success redirect so 
     callbackStart,
     serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
   )
-  const finalizeCall = callbackRoute.indexOf('await store.finalizeConnection(')
-  const successBlock = callbackRoute.slice(finalizeCall)
+  const completeCall = callbackRoute.indexOf('await completeConnectorCallback(')
+  const successBlock = callbackRoute.slice(completeCall)
+  assert.match(successBlock, /completed\.outcome === 'error'/, 'the error branch must be checked before ever building the success redirect')
   assert.match(successBlock, /const success = new URL\(state\.redirectUri\)/)
   assert.match(successBlock, /success\.searchParams\.set\('provider', provider\)/)
   assert.match(successBlock, /Location: success\.toString\(\)/)
