@@ -46,14 +46,18 @@ export interface ExternalTransaction { externalId: string; externalAccountId: st
 export interface SyncPayload { connection: ConnectorConnection; accounts: ExternalAccount[]; transactions: ExternalTransaction[] }
 export interface SyncPreview { accountsToCreate: Account[]; transactionsToImport: Transaction[]; duplicateCount: number; pendingCount: number; quality: BankImportQuality }
 
-// startConnector()'s result. When a real browser allows a popup, provider
-// authorization is moved into that popup so the already-unlocked Finance
-// Planner tab is never unloaded and its in-memory vault key remains intact.
-// The popup return is bridged back through providerReturnBridge.ts and the
-// existing callback/sync UI is remounted by ConnectionsPanel. If a popup is
-// blocked, existing behavior remains the fallback: Enable Banking can use its
-// embedded Auth Flow widget and other providers use the normal same-tab
-// redirect. No vault password/key is persisted to achieve this.
+// startConnector()'s result. In production, provider authorization always
+// moves into a separate popup so the already-unlocked Finance Planner tab is
+// never unloaded and its in-memory vault key remains intact. The popup
+// return is bridged back through providerReturnBridge.ts and the existing
+// callback/sync UI is remounted by ConnectionsPanel. If the browser blocks
+// the popup, or a tab-local return binding cannot be created, startConnector
+// fails closed (see below) -- it never falls back to an embedded widget or a
+// same-tab redirect in production, since either would risk unloading the
+// document and destroying the memory-only vault key. Acceptance fixtures are
+// the one exception: they skip real popups entirely and exercise the
+// embedded-auth/redirect result shapes deterministically. No vault
+// password/key is persisted to achieve any of this.
 //
 // 'popup' is distinct from 'redirect': for 'redirect', the CURRENT tab is
 // about to navigate away (nothing left to do here). For 'popup', the
@@ -211,22 +215,22 @@ export async function startConnector(provider: ConnectorProvider, context: Conne
   // protection. Acceptance fixtures deliberately keep their deterministic
   // embedded/same-tab behavior and never create real browser windows.
   //
-  // Fixed 2026-08-25: beginConnectorPopupAttempt() throws when the browser
-  // actually blocks the popup (or can't create the sessionStorage return
-  // binding) -- calling it unguarded meant that throw propagated straight
-  // out of startConnector() before /start was ever contacted, silently
-  // skipping the embedded-widget/same-tab-redirect fallback documented
-  // below and leaving a blocked-popup user with nothing but a raw
-  // "allow pop-ups" error. Falling through to `popupAttempt = null` here
-  // is exactly what the acceptance-fixture branch already does, so the
-  // fallback path this file's own comments describe is actually reachable.
+  // Fixed 2026-08-25 (production invariant, not just a UX nicety):
+  // beginConnectorPopupAttempt() throws when the browser blocks the popup or
+  // can't create the sessionStorage return binding. In production that throw
+  // must propagate out of startConnector() BEFORE /start is ever contacted --
+  // /start creates a provider authorization nonce, and this function's only
+  // safe way to consume a redirect it returns is to hand it to a popup that
+  // never unloads this document. Catching this failure and falling through
+  // to /start would (re)create the exact regression this bridge exists to
+  // fix: a same-tab redirect (or, previously, the embedded widget) that
+  // unloads the SPA and destroys the memory-only, non-extractable vault key,
+  // forcing an unnecessary re-unlock on return. So there is deliberately no
+  // try/catch here outside acceptance-fixture mode -- popup creation failure
+  // is a fail-closed, retryable start failure, not a silent fallback.
   let popupAttempt: ConnectorPopupAttempt | null = null
   if (import.meta.env.VITE_ACCEPTANCE_FIXTURES !== 'true') {
-    try {
-      popupAttempt = beginConnectorPopupAttempt(provider)
-    } catch {
-      popupAttempt = null
-    }
+    popupAttempt = beginConnectorPopupAttempt(provider)
   }
   try {
     const result = await requestJson<{ redirectUrl?: string; authFlow?: { provider?: string; authorizationId?: string; origin?: string; sandbox?: boolean } }>(`/api/connectors/${provider}/start`, {
@@ -248,8 +252,11 @@ export async function startConnector(provider: ConnectorProvider, context: Conne
     }
 
     const authFlow = result.authFlow
-    // Popup blocked: preserve the existing Enable Banking widget fallback.
-    // Every field is re-validated here, client-side, even though the server
+    // popupAttempt is only ever null here in acceptance-fixture mode (a real
+    // popup-creation failure above already rejected before /start was
+    // called), so this embedded-widget/same-tab-redirect branch only runs
+    // under the deterministic test harness, never in production. Every field
+    // is still re-validated here, client-side, even though the server
     // already validated them -- this function's contract must never hand the
     // widget a value it can't itself vouch for, regardless of what the network
     // layer in between claims the response shape was.

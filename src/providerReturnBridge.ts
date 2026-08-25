@@ -26,6 +26,21 @@ function validAttemptId(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9_-]{16,128}$/.test(value)
 }
 
+// The bridge's whole security story rests on "only bounded callback
+// metadata crosses this boundary" -- provider must be one of Finance
+// Planner's own known connector ids (never an arbitrary/attacker-chosen
+// string) and error must look like a short machine error code, never
+// free text, HTML, a URL, or anything else that could carry
+// error_description-shaped or injected content.
+const VALID_PROVIDERS = new Set(['enablebanking', 'gocardless', 'finapi', 'paypal'])
+function validProvider(value: unknown): value is string {
+  return typeof value === 'string' && VALID_PROVIDERS.has(value)
+}
+const ERROR_CODE_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/
+function validErrorCode(value: unknown): value is string {
+  return typeof value === 'string' && ERROR_CODE_PATTERN.test(value)
+}
+
 function createAttemptId(): string {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
   const bytes = crypto.getRandomValues(new Uint8Array(24))
@@ -57,8 +72,8 @@ function parseSignal(value: unknown): ConnectorReturnSignal | null {
   if (!value || typeof value !== 'object') return null
   const candidate = value as Partial<ConnectorReturnSignal>
   if (candidate.type !== 'finance-planner:connector-return' || !validAttemptId(candidate.attemptId)) return null
-  if (candidate.provider !== undefined && (typeof candidate.provider !== 'string' || !candidate.provider)) return null
-  if (candidate.error !== undefined && (typeof candidate.error !== 'string' || !candidate.error)) return null
+  if (candidate.provider !== undefined && !validProvider(candidate.provider)) return null
+  if (candidate.error !== undefined && !validErrorCode(candidate.error)) return null
   if (!candidate.provider && !candidate.error) return null
   return {
     type: 'finance-planner:connector-return',
@@ -130,13 +145,19 @@ export function abandonConnectorPopupAttempt(attempt: ConnectorPopupAttempt | nu
 // browser tab (acceptConnectorReturnSignal()/takeBufferedConnectorReturn()
 // only check attemptId/provider, never which account is currently
 // authenticated -- that binding is enforced server-side, via the signed
-// state's own `sub` claim, not by this client-side bridge). Only removes
-// the tab-local pending-attempt binding -- without it, no future return
-// signal can ever be accepted (acceptConnectorReturnSignal/
-// takeBufferedConnectorReturn both fail closed once readPendingAttempt()
-// has nothing to match against) -- so any already-written localStorage
-// return record for that attempt is simply inert, not touched here.
+// state's own `sub` claim, not by this client-side bridge). Removes both the
+// tab-local pending-attempt binding and any already-buffered localStorage
+// return record for that same attempt, so nothing readable survives logout
+// for a later session to stumble across -- read-then-delete, not a blind
+// removeItem, since the buffered record is keyed by attemptId, not by a
+// fixed name. Best-effort throughout: readPendingAttempt() already never
+// throws, and a browser with unavailable storage must still let logout
+// complete.
 export function clearPendingConnectorAttempt(): void {
+  const pending = readPendingAttempt()
+  if (pending) {
+    try { localStorage.removeItem(`${RETURN_STORAGE_PREFIX}${pending.attemptId}`) } catch { /* best-effort */ }
+  }
   try { sessionStorage.removeItem(PENDING_STORAGE_KEY) } catch { /* best-effort */ }
 }
 

@@ -475,9 +475,16 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
         setBusy(false)
       }
       // A plain 'redirect' result means this tab really is navigating away
-      // (every non-Enable-Banking provider, or Enable Banking with a popup
-      // blocked and no widget descriptor) -- busy correctly stays true.
+      // -- busy correctly stays true. In production this only happens for
+      // providers without an embedded widget, since a real popup either
+      // opens (handled above) or startConnector() rejects before /start is
+      // ever called (handled in the catch below); the redirect/embedded
+      // fallback for a blocked popup only exists under acceptance fixtures.
     } catch (reason) {
+      // Also reached when startConnector() fails closed because the browser
+      // blocked the popup or couldn't create the tab-local return binding --
+      // that is a normal, retryable start failure here, not a crash: the
+      // user can allow pop-ups / site storage and press the button again.
       onError(reason instanceof Error ? reason.message : 'The connection could not be started.')
       setBusy(false)
     }

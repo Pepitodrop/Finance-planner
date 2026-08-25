@@ -157,15 +157,28 @@ describe('provider return bridge', () => {
     expect(localStorage.getItem(`${RETURN_STORAGE_PREFIX}${attempt.attemptId}`)).toBeNull()
   })
 
-  it('clearPendingConnectorAttempt (logout) removes the pending binding so no future return signal for it can ever be accepted', () => {
+  it('clearPendingConnectorAttempt (logout) removes both the pending binding and any already-buffered return for it, not just the binding', () => {
     const { popup } = fakePopup()
     vi.spyOn(window, 'open').mockReturnValue(popup)
     const attempt = beginConnectorPopupAttempt('enablebanking')
+    localStorage.setItem(`${RETURN_STORAGE_PREFIX}${attempt.attemptId}`, JSON.stringify({ type: 'finance-planner:connector-return', attemptId: attempt.attemptId, provider: 'enablebanking' }))
 
     clearPendingConnectorAttempt()
 
     expect(sessionStorage.getItem(PENDING_STORAGE_KEY)).toBeNull()
+    expect(localStorage.getItem(`${RETURN_STORAGE_PREFIX}${attempt.attemptId}`)).toBeNull()
     expect(acceptConnectorReturnSignal({ type: 'finance-planner:connector-return', attemptId: attempt.attemptId, provider: 'enablebanking' })).toBeNull()
+  })
+
+  it('clearPendingConnectorAttempt is a no-op when there is no pending attempt, and never throws', () => {
+    expect(() => clearPendingConnectorAttempt()).not.toThrow()
+    expect(sessionStorage.getItem(PENDING_STORAGE_KEY)).toBeNull()
+  })
+
+  it('clearPendingConnectorAttempt never throws even when storage access fails (logout must always complete)', () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('storage disabled') })
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => { throw new Error('storage disabled') })
+    expect(() => clearPendingConnectorAttempt()).not.toThrow()
   })
 
   it('delivers a matching return via BroadcastChannel to a subscriber, with the payload intact', async () => {
@@ -205,5 +218,78 @@ describe('provider return bridge', () => {
     channel.close()
     unsubscribe()
     expect(received).toEqual([])
+  })
+
+  // Fixed 2026-08-25 (review on PR #154): parseSignal() previously accepted
+  // any non-empty provider/error string, so the "only bounded callback
+  // metadata crosses this boundary" claim above wasn't actually enforced.
+  // provider must be one of Finance Planner's own known connector ids;
+  // error must look like a short machine error code, never free text, an
+  // oversized value, or anything URL/HTML-shaped.
+  describe('bounded provider/error validation', () => {
+    it('accepts each of the four known connector providers', () => {
+      const { popup } = fakePopup()
+      vi.spyOn(window, 'open').mockReturnValue(popup)
+      for (const provider of ['enablebanking', 'gocardless', 'finapi', 'paypal']) {
+        sessionStorage.clear()
+        const attempt = beginConnectorPopupAttempt(provider)
+        const signal: ConnectorReturnSignal = { type: 'finance-planner:connector-return', attemptId: attempt.attemptId, provider }
+        expect(acceptConnectorReturnSignal(signal)).toEqual(signal)
+      }
+    })
+
+    it('rejects an unknown provider name from the URL, publishing nothing', () => {
+      const attemptId = '1234567890abcdef1234567890abcdef'
+      window.history.replaceState({}, document.title, `/?fp_connection_attempt=${attemptId}&provider=not-a-real-provider`)
+      expect(publishConnectorReturnFromPopup()).toBe(false)
+      expect(localStorage.getItem(`${RETURN_STORAGE_PREFIX}${attemptId}`)).toBeNull()
+    })
+
+    it('rejects a provider value containing free text/spaces', () => {
+      const attemptId = '1234567890abcdef1234567890abcdef'
+      window.history.replaceState({}, document.title, `/?fp_connection_attempt=${attemptId}&provider=${encodeURIComponent('enable banking please')}`)
+      expect(publishConnectorReturnFromPopup()).toBe(false)
+    })
+
+    it('rejects an oversized provider value', () => {
+      const attemptId = '1234567890abcdef1234567890abcdef'
+      window.history.replaceState({}, document.title, `/?fp_connection_attempt=${attemptId}&provider=${'enablebanking'.repeat(20)}`)
+      expect(publishConnectorReturnFromPopup()).toBe(false)
+    })
+
+    it('accepts an ordinary OAuth-style machine error code', () => {
+      const { popup } = fakePopup()
+      vi.spyOn(window, 'open').mockReturnValue(popup)
+      const attempt = beginConnectorPopupAttempt('enablebanking')
+      const signal: ConnectorReturnSignal = { type: 'finance-planner:connector-return', attemptId: attempt.attemptId, error: 'access_denied' }
+      expect(acceptConnectorReturnSignal(signal)).toEqual(signal)
+    })
+
+    it('rejects an error value containing spaces/free text', () => {
+      const attemptId = '1234567890abcdef1234567890abcdef'
+      window.history.replaceState({}, document.title, `/?fp_connection_attempt=${attemptId}&error=${encodeURIComponent('the user said no thanks')}`)
+      expect(publishConnectorReturnFromPopup()).toBe(false)
+    })
+
+    it('rejects an oversized error value', () => {
+      const attemptId = '1234567890abcdef1234567890abcdef'
+      window.history.replaceState({}, document.title, `/?fp_connection_attempt=${attemptId}&error=${'a'.repeat(65)}`)
+      expect(publishConnectorReturnFromPopup()).toBe(false)
+    })
+
+    it('never delivers code/state/error_description through BroadcastChannel, only the bounded provider metadata', async () => {
+      const attemptId = '1234567890abcdef1234567890abcdef'
+      window.history.replaceState({}, document.title, `/?fp_connection_attempt=${attemptId}&provider=enablebanking&code=secret-code&state=secret-state&error_description=secret-detail`)
+
+      const delivered = new Promise<ConnectorReturnSignal>((resolve) => {
+        const unsubscribe = subscribeConnectorReturns((signal) => { unsubscribe(); resolve(signal) })
+      })
+
+      expect(publishConnectorReturnFromPopup()).toBe(true)
+
+      const signal = await delivered
+      expect(signal).toEqual({ type: 'finance-planner:connector-return', attemptId, provider: 'enablebanking' })
+      expect(JSON.stringify(signal)).not.toMatch(/secret-code|secret-state|secret-detail/)
+    })
   })
 })
