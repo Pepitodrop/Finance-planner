@@ -19,4 +19,8 @@ Until this fix, no adapter in [[providers.js]] implemented `disconnect()` at all
 
 Verification: `server/test/provider-disconnect.test.js` (GoCardless success/404-idempotent/failure/token-refresh/no-requisition, PayPal owner+partner, base-provider default), `server/test/open-banking-server-boundary.test.js` (credential lookup precedes the revoke attempt, local removal is never inside the revoke `try` block, `providerRevoked` is derived not hardcoded), `src/features/connections/ConnectionsPage.test.tsx` (honest-failure-message case). Still unverified against a real GoCardless sandbox -- see [[Provider Status]].
 
-Related: [[Bank Connections]] · [[Connections Page]] · [[postgres-store.js]] · [[Provider Institution Selection Contract]] · [[Provider Status]]
+## Interaction with per-account sync exclusion (added 2026-08-27)
+
+Disconnecting a provider deletes the *entire* stored connector row, which correctly wipes any `excludedStableAccountIds` merged into that same row by Dashboard's "Remove account" feature (see [[Stable Account Identity and Reconnect Reconciliation]]) -- confirmed by adversarial review, since nothing in `start()`/`completeCallback()`/`finalizeConnection()` reads a previous row's exclusions. **Accepted, documented limitation:** reconnecting the same real bank after a full disconnect therefore does not carry forward a previous exclusion decision -- a previously-removed account can reappear. This is read as correct: a full disconnect is itself an explicit "start over" action, distinct from an ordinary sync of an still-active connection (which must never silently resurrect a removed account, and does not).
+
+Related: [[Bank Connections]] · [[Connections Page]] · [[postgres-store.js]] · [[Provider Institution Selection Contract]] · [[Provider Status]] · [[Stable Account Identity and Reconnect Reconciliation]]

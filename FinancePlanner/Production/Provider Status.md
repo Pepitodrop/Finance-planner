@@ -15,16 +15,18 @@ For first-party internal flows with no external provider (for example Finance Pl
 Implementation: **implemented** (real Enable Banking API client, `server/src/providers.js` `EnableBankingProvider`, `server/src/enable-banking-jwt.js`)
 Configuration: **optional** (requires `ENABLE_BANKING_APPLICATION_ID` + `ENABLE_BANKING_PRIVATE_KEY_FILE` or `ENABLE_BANKING_PRIVATE_KEY`)
 Provider-dependent: yes
-Runtime verified: **partial — see live verification matrix, updated for the sixth pass (2026-08-26)**. Summary status:
+Runtime verified: **partial — see live verification matrix, updated for the seventh pass (2026-08-27)**. Summary status:
 - **Discovery: previously runtime verified.**
 - **Authorization/callback/persistence: previously runtime verified** — the fourth pass (Mock ASPSP, no real bank credentials) completed authorization, callback, and persisted a real `enablebanking` connector connection for the first time in this codebase's history.
-- **No-reunlock popup return: LIVE VERIFIED** (fifth pass, reconfirmed sixth pass) — a temporary deployment against the real Mock ASPSP sandbox (Firefox) confirmed the separate provider popup opens correctly, the original Finance Planner SPA remains mounted throughout, and the original vault remains unlocked throughout — the original same-tab vault-reset regression this whole mechanism exists to prevent did not reproduce. This specifically verifies the mechanism fixed across the second and third PR #154 review rounds (see [[Provider Authorization Popup Bridge]] for the full bug history: an unreachable popup-blocked fallback and a silently-never-executing test suite; that fallback itself being wrong for production and replaced with a genuine fail-closed rejection; `Window.closed` polling being unreliable under this app's COOP policy and removed; the pre-React bootstrap short-circuit being bound to the popup's own browsing context; logout cleanup running even when the logout request fails).
-- **Concurrent-duplicate-callback race fix: LIVE VERIFIED (sixth pass, 2026-08-26).** Found live on the fifth pass and code-fixed via a claim lifecycle (8fe1067, `oauth_nonces.claim_token` migration 010); the sixth pass's deployment confirmed it working exactly as designed under real duplicate delivery — two `GET /api/connectors/callback` deliveries occurred for one authorization, the claimer resolved `result=claimed` → 302 success (~331ms), the duplicate resolved `result=in_progress` → wait → `result=not_found` → 302 (~460ms); the old spurious `invalid_state` did not appear. Full detail in [[Provider Callback Binding]]'s "Fixed 2026-08-25: concurrent-duplicate-callback race" section. **Do not regress this implementation.**
-- **Account/balance/transaction sync: LIVE VERIFIED (sixth pass, 2026-08-26).** The fourth-pass account-handling 422 fix and the first-sync path both held live: `POST /api/connectors/sync` returned 200 (~2375ms), "5 transaction(s) and 1 selected account(s) were imported," and the dashboard rendered real imported data (Net worth ~€6,959.50). The `CNCL`/`HOLD`/`OTHR`/`RJCT`/`SCHD` transaction-status filtering itself is **not** claimed live-verified from this pass — the Mock ASPSP fixture used has not been proven to contain any of those five statuses; that mapping remains code/test-verified only.
-- **Cloud persistence: found broken live (sixth pass, 2026-08-26), code-fixed same day, awaiting runtime re-verification.** Immediately after the successful first sync above, Finance Planner entered LOCAL MODE with "Unexpected accounts[0] field: externalId"; `POST /api/finance/state` returned 400 repeatedly. This was not a provider/Enable Banking defect — the bank sync itself succeeded and data reached local state; the failure was purely a stale server-side cloud-state schema (`validateAccount()`'s allow-list hadn't kept up with the Account domain type's connector-metadata fields). Root cause, fix, and test detail in [[user_finance_state (table)]]. **Do not claim the cloud-state fix itself live-verified until the next deployment exercises it.**
-- **Second-sync deduplication: awaiting runtime verification** — blocked on cloud persistence succeeding live (see above).
+- **No-reunlock popup return: LIVE VERIFIED** (fifth pass, reconfirmed sixth/seventh passes) — a temporary deployment against the real Mock ASPSP sandbox (Firefox) confirmed the separate provider popup opens correctly, the original Finance Planner SPA remains mounted throughout, and the original vault remains unlocked throughout — the original same-tab vault-reset regression this whole mechanism exists to prevent did not reproduce.
+- **Concurrent-duplicate-callback race fix: LIVE VERIFIED (sixth pass, 2026-08-26).** Found live on the fifth pass and code-fixed via a claim lifecycle (8fe1067, `oauth_nonces.claim_token` migration 010); confirmed working exactly as designed under real duplicate delivery. Full detail in [[Provider Callback Binding]]'s "Fixed 2026-08-25: concurrent-duplicate-callback race" section. **Do not regress this implementation.**
+- **Account/balance/transaction sync: LIVE VERIFIED (sixth pass, reconfirmed seventh pass).** `POST /api/connectors/sync` returns 200 and imports real accounts/transactions/one pending-excluded transaction. The `CNCL`/`HOLD`/`OTHR`/`RJCT`/`SCHD` transaction-status filtering itself remains code/test-verified only — the fixture used has not been proven to contain any of those five statuses.
+- **Cloud persistence: LIVE VERIFIED (seventh pass, 2026-08-27).** Found broken live on the sixth pass (`POST /api/finance/state` 400, "Unexpected accounts[0] field: externalId", forcing LOCAL MODE); fixed same day. The seventh pass's deployment confirmed `POST /api/finance/state` succeeding both before and immediately after a fresh connector import — the old LOCAL MODE condition did not recur. Root cause, fix, and test detail in [[user_finance_state (table)]].
+- **Reconnect account-identity/dedup: found broken live (seventh pass, 2026-08-27), code-fixed same day, awaiting runtime re-verification.** Reconnecting the same Mock ASPSP account (this pass started with the sixth pass's imported state already present) produced a duplicate account and doubled every historical transaction/balance/total. This was a financial-data-correctness defect, not a provider issue — see [[Stable Account Identity and Reconnect Reconciliation]] for the full root cause, fix (a provider-agnostic stable identity derived from Enable Banking's `identification_hash`), and the account-collision bug adversarial review found and fixed in the first version of that fix. **Do not claim this fix live-verified until the next deployment explicitly exercises a reconnect of the same Mock account.**
+- **ConnectionsPage persisted-connection display: found broken live (seventh pass, 2026-08-27), code-fixed same day, awaiting runtime re-verification.** Navigating away from and back to Connections made a genuinely still-connected card disappear. Not a provider defect — see [[Connections Page]]'s seventh-pass entry for the full fix (a new stored-connections overview endpoint) and the disconnect-race bug adversarial review found and fixed in it.
+- **Second-sync deduplication: awaiting runtime verification** — blocked on the reconnect-identity fix above being re-verified live first (a routine second sync of the *same* unchanged session was never itself the blocker; the seventh pass's specific failure was a reconnect under a new session).
 - **Disconnect/provider revocation: awaiting runtime verification** — never yet reached.
-Production verified: **no evidence found** for the second-sync-dedup/disconnect/cloud-persistence-fix path. Institution discovery, logos, `/auth` acceptance, real bank authentication screens, authorization/callback/persistence, the no-reunlock popup mechanism, the concurrent-callback-race fix, and first account/balance/transaction sync WERE exercised against sequential temporary production deployments (`finance.luisbenedikt.de`) of this codebase, against the real configured Enable Banking sandbox application — see matrix below.
+Production verified: **no evidence found** for the reconnect-identity-fix/persisted-connection-fix/second-sync-dedup/disconnect path. Institution discovery, logos, `/auth` acceptance, real bank authentication screens, authorization/callback/persistence, the no-reunlock popup mechanism, the concurrent-callback-race fix, first account/balance/transaction sync, and cloud persistence WERE exercised against sequential temporary production deployments (`finance.luisbenedikt.de`) of this codebase, against the real configured Enable Banking sandbox application — see matrix below.
 
 ### Live verification matrix (PR #144, three sequential temporary deployments against finance.luisbenedikt.de, 2026-08-21/22)
 
@@ -116,6 +118,50 @@ Transactions: LIVE VERIFIED = YES (sixth pass)
 CNCL/HOLD/OTHR/RJCT/SCHD status filtering: NO -- not proven present in the Mock ASPSP fixture used; code/test-verified only
 Cloud persistence (POST /api/finance/state after a connector import): NO -- found broken live (sixth pass), code-fixed, awaiting re-verification
 Second-sync deduplication: NO -- blocked on cloud persistence succeeding live
+Disconnect: NO -- awaiting runtime verification
+Official Auth Flow widget: IMPLEMENTED / LOCALLY VERIFIED only, not yet redeployed and actually tested.
+```
+
+## Seventh live pass (2026-08-27): cloud-state fix verifies live; reconnect duplicates an account, ConnectionsPage loses its connected display
+
+A temporary deployment (head `129d8f62829097b28d831604cae0c32ed06ca550`) confirmed the sixth pass's fix and found two new, unrelated defects.
+
+**Verified live:** `POST /api/finance/state` succeeded both before and immediately after a fresh connector import — the sixth pass's LOCAL MODE defect did not recur. **The connector Account.externalId cloud-state fix is now LIVE VERIFIED.** First sync also succeeded (5 transactions, 1 account, 1 pending transaction excluded, consistent with PDNG handling).
+
+**New defect 1 (financial-data correctness, not a provider failure):** this pass started with the sixth pass's imported state already present. Reconnecting the same Mock ASPSP account produced a *second*, duplicate account and re-imported all five historical transactions on top of it, exactly doubling every balance/total (~€6,959.50 → €13,919.00; +€2,550.00 → +€5,100.00; -€259.99 → -€519.98). Root-caused to account identity being keyed only to Enable Banking's session-scoped `uid`, which changes on every reauthorization. **Fixed** with a provider-agnostic stable identity (`stableAccountId()` in `providers.js`, derived from Enable Banking's documented `identification_hash`) and a reconciliation update in `buildSyncPreview()` — full detail in [[Stable Account Identity and Reconnect Reconciliation]]. Adversarial review of the first version of this fix found and fixed one further real bug: two different external accounts sharing one stableId in the same sync could otherwise both match the same existing account, merging their transaction histories.
+
+**New defect 2 (UI state, not a provider failure):** immediately after import, the Connections page showed "Bank connection / Connected"; navigating to Subscriptions and back made the card disappear and show the empty "Connect your financial accounts" state, with no `DELETE` request in the server log. Root-caused to `GET /api/connectors` never exposing the user's persisted connector rows, so a fresh `ConnectionsPage` mount had nothing to populate its local `connections` state from. **Fixed** with a new `GET /api/connectors/connections` endpoint — full detail in [[Connections Page]]'s seventh-pass entry. Adversarial review found and fixed one further real bug: the mount-time fetch could resolve after a disconnect completed while it was in flight, which would have resurrected the just-disconnected connection in the UI.
+
+**Not yet verified from this pass:** second-sync deduplication of an *unchanged* session; disconnect/provider revocation; the reconnect fix and the persisted-connection fix themselves (both code-fixed, test-verified only).
+
+**Status: both fixes code-fixed, test-verified only (adversarially reviewed — two real findings, both fixed and regression-tested; two lower-severity findings accepted as documented limitations, see [[Stable Account Identity and Reconnect Reconciliation]] and [[Bank Disconnect Flow]]) — NOT yet live-verified.** Do not claim either fix live-verified until the next deployment explicitly exercises a reconnect of the same Mock account and a Connections page navigate-away-and-back.
+
+Current exact matrix as of this pass:
+
+```
+Enable Banking configuration: LIVE VERIFIED = YES
+/aspsps: LIVE VERIFIED = YES
+Bank family discovery: LIVE VERIFIED = YES
+Search: LIVE VERIFIED = YES
+Exact bank selection: LIVE VERIFIED = YES
+Real bank logos: LIVE VERIFIED = YES
+Logo proxy: LIVE VERIFIED = YES
+POST /auth request reaches Enable Banking: LIVE VERIFIED = YES
+POST /auth accepted: LIVE VERIFIED = YES
+Enable Banking pre-auth page reached: LIVE VERIFIED = YES
+Bank authentication page reached: LIVE VERIFIED = YES
+Authorization successfully completed: LIVE VERIFIED = YES (fourth pass, Mock ASPSP)
+Callback: LIVE VERIFIED = YES (fourth pass) -- connection persisted
+POST /sessions: LIVE VERIFIED = YES (fourth pass, implied)
+No-reunlock popup return: LIVE VERIFIED = YES (fifth pass, reconfirmed sixth/seventh)
+Concurrent-duplicate-callback race fix: LIVE VERIFIED = YES (sixth pass)
+Balances: LIVE VERIFIED = YES (sixth pass, reconfirmed seventh)
+Transactions: LIVE VERIFIED = YES (sixth pass, reconfirmed seventh)
+Cloud persistence (POST /api/finance/state after a connector import): LIVE VERIFIED = YES (seventh pass)
+CNCL/HOLD/OTHR/RJCT/SCHD status filtering: NO -- not proven present in the Mock ASPSP fixture used; code/test-verified only
+Reconnect account-identity/dedup: NO -- found broken live (seventh pass), code-fixed, awaiting re-verification
+ConnectionsPage persisted-connection display: NO -- found broken live (seventh pass), code-fixed, awaiting re-verification
+Second-sync deduplication (unchanged session): NO -- awaiting runtime verification
 Disconnect: NO -- awaiting runtime verification
 Official Auth Flow widget: IMPLEMENTED / LOCALLY VERIFIED only, not yet redeployed and actually tested.
 ```
@@ -243,4 +289,4 @@ Relevant code/docs: `src/aiModels.ts`, `README.md` ("AI architecture")
 
 [[Providers Index]] mirrors this note's verification table as individually-linkable atomic nodes (one per provider, each with its own implementation/config/test/verification-state breakdown) so a specific provider can be reached directly from [[Pages Index]], [[Flows Index]], or [[Security Index]] without returning here first.
 
-Related: [[Authentication]], [[Bank Connections]], [[Enable Banking]], [[PayPal]], [[AI System]], [[Known Issues and Limitations]], [[Rejected Approaches]], [[Providers Index]], [[Provider Callback Binding]], [[Bank Disconnect Flow]], [[Rate Limiting]], [[Institution Logo Proxy]], [[Enable Banking Auth Flow Widget]], [[Provider Authorization Popup Bridge]], [[user_finance_state (table)]]
+Related: [[Authentication]], [[Bank Connections]], [[Enable Banking]], [[PayPal]], [[AI System]], [[Known Issues and Limitations]], [[Rejected Approaches]], [[Providers Index]], [[Provider Callback Binding]], [[Bank Disconnect Flow]], [[Rate Limiting]], [[Institution Logo Proxy]], [[Enable Banking Auth Flow Widget]], [[Provider Authorization Popup Bridge]], [[user_finance_state (table)]], [[Stable Account Identity and Reconnect Reconciliation]], [[Connections Page]]
