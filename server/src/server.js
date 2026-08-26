@@ -2,6 +2,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
 import { URL } from 'node:url'
 import { deleteAccountData } from './account-deletion.js'
+import { addExcludedStableAccountId, applyAccountExclusions, isValidStableAccountId } from './account-exclusions.js'
 import { createAiRouter } from './ai-router.js'
 import { createAuthRouter } from './auth-router.js'
 import { behaviorEventsFromFinanceState } from './budget-learning.js'
@@ -204,6 +205,28 @@ function connection(provider, stored, error) {
   }
 }
 
+// Read-only connector-overview boundary for a normal Connections page mount
+// (fixed 2026-08-27, PR #154, seventh Mock ASPSP pass): GET /api/connectors
+// only ever returned provider descriptors, never the user's own persisted
+// connector rows, so a ConnectionsPage remount (its `connections` state is
+// plain useState, destroyed on unmount) had no way to learn an Enable
+// Banking connection already existed without re-running a full provider
+// synchronization -- the connected card simply vanished on navigation, even
+// though nothing was ever disconnected. Reuses the exact same connection()
+// helper buildSyncPayload() already trusts for its own connection summaries
+// -- id/provider/displayName/status/lastSyncAt/consentExpiresAt/
+// institutionId/error only, never a credential/session/token field -- so
+// this adds no new secret-exposure surface, only a new, cheaper way to read
+// the same bounded shape without touching any provider network API.
+async function listStoredConnections(user) {
+  const results = []
+  for (const { id: provider } of providerRegistry.list()) {
+    const stored = await store.get(user, provider)
+    if (stored) results.push(connection(provider, stored))
+  }
+  return results
+}
+
 async function start(provider, request, response) {
   const user = userId(request)
   const adapter = providerAdapter(provider)
@@ -263,9 +286,10 @@ async function buildSyncPayload(user) {
       authorizeProviderUser(adapter, user, env)
       const synced = await adapter.sync(stored)
       const lastSyncAt = new Date().toISOString()
-      await store.set(user, provider, { ...synced.credential, consentId: stored.consentId, redirectUri: stored.redirectUri, lastSyncAt, consentExpiresAt: synced.consentExpiresAt })
+      await store.set(user, provider, { ...synced.credential, consentId: stored.consentId, redirectUri: stored.redirectUri, lastSyncAt, consentExpiresAt: synced.consentExpiresAt, excludedStableAccountIds: stored.excludedStableAccountIds })
       metrics.recordBank(provider, 'success')
-      results.push({ connection: { ...connection(provider, stored), lastSyncAt, consentExpiresAt: synced.consentExpiresAt }, accounts: synced.accounts, transactions: synced.transactions, reconciliation: synced.reconciliation })
+      const filtered = applyAccountExclusions(stored, synced.accounts, synced.transactions)
+      results.push({ connection: { ...connection(provider, stored), lastSyncAt, consentExpiresAt: synced.consentExpiresAt }, accounts: filtered.accounts, transactions: filtered.transactions, reconciliation: synced.reconciliation })
     } catch (error) {
       metrics.recordBank(provider, /consent.*expired/i.test(String(error?.message || error)) ? 'expired' : 'failure')
       results.push({ connection: connection(provider, stored, error instanceof Error ? error.message : 'Synchronization failed.'), accounts: [], transactions: [] })
@@ -401,6 +425,29 @@ const server = createServer(async (request, response) => {
       const user = userId(request)
       const providers = providerRegistry.adapters().map((adapter) => describeProviderForUser(adapter, user, env))
       return send(response, 200, { providers })
+    }
+    // Read-only stored-connection overview: see listStoredConnections()
+    // above. Explicit literal path (not a provider-id regex match) so it
+    // can never collide with a real provider id.
+    if (request.method === 'GET' && url.pathname === '/api/connectors/connections') {
+      const user = userId(request)
+      const connections = await listStoredConnections(user)
+      return send(response, 200, { connections })
+    }
+    const exclusionMatch = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})\/exclusions$/)
+    if (request.method === 'POST' && exclusionMatch) {
+      const user = userId(request)
+      const provider = exclusionMatch[1]
+      const adapter = providerAdapter(provider)
+      authorizeProviderUser(adapter, user, env)
+      const stored = await store.get(user, provider)
+      if (!stored) throw new HttpError(404, 'connector_not_connected', 'No stored connection for this provider.')
+      const input = await body(request)
+      const stableAccountId = String(input.stableAccountId || '')
+      if (!isValidStableAccountId(stableAccountId)) throw new HttpError(400, 'invalid_stable_account_id', 'Invalid stable account id.')
+      const excludedStableAccountIds = addExcludedStableAccountId(stored.excludedStableAccountIds, stableAccountId)
+      await store.set(user, provider, { ...stored, excludedStableAccountIds })
+      return send(response, 200, { excluded: true })
     }
     const institutionsMatch = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})\/institutions$/)
     if (request.method === 'GET' && institutionsMatch) {

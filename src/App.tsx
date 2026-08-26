@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Plus, Undo2 } from 'lucide-react'
 import { AccountPage } from './AccountPage'
+import { removeAccountFromState, restoreAccountToState } from './accountState'
 import { AiPanel, type AiPanelAcceptanceMode } from './AiPanel'
 import type { AiSuggestion } from './ai'
 import type { AuthUser } from './AuthGate'
 import { learnBehavior } from './behavior'
 import { ConnectionsPanel } from './ConnectionsPanel'
+import { connectorProviderFromAccountId, excludeProviderAccount } from './connectors'
 import type { ConnectionsAcceptanceMode } from './features/connections/connectionsAcceptanceFixtures'
 import { DataTools, type DataToolsAcceptanceMode } from './DataTools'
 import { accountsAcceptanceState, initialState, planningAcceptanceState } from './data'
@@ -19,7 +21,7 @@ import { RecurringPaymentsPage } from './features/recurring/RecurringPaymentsPag
 import { SubscriptionsPage, type SubscriptionsAcceptanceMode } from './features/subscriptions/SubscriptionsPage'
 import { loadState, resetStoredState, saveState } from './storage'
 import { addTransactionToState, deleteTransactionFromState, updateTransactionInState } from './transactionState'
-import type { AppState, Transaction, TransactionType } from './types'
+import type { Account, AppState, Transaction, TransactionType } from './types'
 import { validateTransactionInput } from './validation'
 import { ApplicationShell } from './app/ApplicationShell'
 import { initialTabFromSearch, type DestinationId } from './app/navigation'
@@ -42,6 +44,7 @@ function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
   const [transactionType, setTransactionType] = useState<TransactionType>('expense')
   const [formError, setFormError] = useState('')
   const [deletedTransaction, setDeletedTransaction] = useState<Transaction | null>(null)
+  const [removedManualAccount, setRemovedManualAccount] = useState<{ account: Account; transactions: Transaction[] } | null>(null)
   const [requestedTransactionAccount, setRequestedTransactionAccount] = useState<string | null>(null)
   const [accountsAcceptanceMode, setAccountsAcceptanceMode] = useState<'accounts' | 'empty' | 'detail' | 'credit' | null>(null)
   const [planningAcceptanceMode, setPlanningAcceptanceMode] = useState<'goals' | 'goals-empty' | 'goal-editor' | 'recurring' | 'recurring-empty' | 'budget-consent' | 'budget-result' | null>(null)
@@ -152,6 +155,42 @@ function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
     setDeletedTransaction(null)
   }
 
+  // Dashboard's "Remove account" -- see accountState.ts's doc comments for
+  // why this never touches the provider connection itself. Provider-linked
+  // accounts (any id in the connector:${provider}:${externalId} shape) get
+  // a best-effort server-side exclusion call so the same economic account
+  // isn't silently re-imported on the connection's next sync (see
+  // buildSyncPreview()'s reconnect reconciliation and applyAccountExclusions()
+  // in server/src/server.js) -- this never blocks or reverts the local
+  // removal if the network call fails, matching this codebase's existing
+  // "local action always wins, remote confirmation is best-effort" pattern
+  // (e.g. provider disconnect revocation). No stableId means the provider
+  // offered no trustworthy cross-session identity for this account, so
+  // there is nothing to exclude by -- the account is still removed locally.
+  //
+  // Only manual accounts (no provider) get the short-lived Undo toast: a
+  // provider account's removal already made a best-effort, fire-and-forget
+  // server call by the time Undo could be pressed, so restoring local state
+  // alone could not correctly guarantee it staying un-excluded too -- see
+  // restoreAccountToState()'s doc comment.
+  const removeAccount = (accountId: string) => {
+    setState((current) => {
+      const result = removeAccountFromState(current, accountId)
+      const provider = connectorProviderFromAccountId(accountId)
+      if (provider && result.deletedAccount.stableId) {
+        void excludeProviderAccount(provider, result.deletedAccount.stableId).catch(() => {})
+      }
+      if (!provider) setRemovedManualAccount({ account: result.deletedAccount, transactions: result.deletedTransactions })
+      return result.state
+    })
+  }
+
+  const undoRemoveAccount = () => {
+    if (!removedManualAccount) return
+    setState((current) => restoreAccountToState(current, removedManualAccount.account, removedManualAccount.transactions))
+    setRemovedManualAccount(null)
+  }
+
   const applyAiSuggestion = (transactionId: string, suggestion: AiSuggestion) => {
     const source = state.transactions.find((transaction) => transaction.id === transactionId)
     if (source) learnBehavior(source, suggestion.category, suggestion.recurringProbability >= 75)
@@ -203,7 +242,7 @@ function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
         {tab === 'ai' && <button type="button" className="primary" onClick={openNewTransaction}><Plus size={18}/> Manual entry</button>}
       </header>}
 
-      {tab === 'dashboard' && <Dashboard state={state} userName={userName} onAddTransaction={openNewTransaction} onEditTransaction={openEditTransaction} onNavigate={navigate}/>}
+      {tab === 'dashboard' && <Dashboard state={state} userName={userName} onAddTransaction={openNewTransaction} onEditTransaction={openEditTransaction} onNavigate={navigate} onRemoveAccount={removeAccount}/>}
 
       {tab === 'transactions' && <TransactionsPage
         transactions={state.transactions}
@@ -226,6 +265,11 @@ function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
     {deletedTransaction && <div className="undo-toast" role="status">
       <span>“{deletedTransaction.description}” was deleted.</span>
       <button type="button" onClick={undoDelete}><Undo2 size={16}/> Undo</button>
+    </div>}
+
+    {removedManualAccount && <div className="undo-toast" role="status">
+      <span>“{removedManualAccount.account.name}” was removed.</span>
+      <button type="button" onClick={undoRemoveAccount}><Undo2 size={16}/> Undo</button>
     </div>}
 
     {dialogOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setDialogOpen(false)}>

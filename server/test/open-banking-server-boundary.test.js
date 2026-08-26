@@ -291,3 +291,54 @@ test('core readiness is independent from optional bank capability readiness', ()
   assert.doesNotMatch(readinessRoute, /capabilities\.production/)
   assert.match(serverSource, /capabilities\.ready \? 200 : 503/)
 })
+
+// Regression guard for the "connection disappears on ConnectionsPage
+// remount" defect (2026-08-27, PR #154, seventh Mock ASPSP pass): a fresh
+// mount had no way to list an already-persisted connector connection
+// without triggering a real provider synchronization.
+test('the stored-connections overview endpoint authenticates before reading any stored connection, and never triggers a provider sync', () => {
+  const route = serverSource.slice(
+    serverSource.indexOf("url.pathname === '/api/connectors/connections'"),
+    serverSource.indexOf('const exclusionMatch'),
+  )
+  assert.ok(route.length > 0, 'the /api/connectors/connections route was not found')
+  const authentication = route.indexOf('const user = userId(request)')
+  const listCall = route.indexOf('listStoredConnections(user)')
+  assert.ok(authentication >= 0 && listCall >= 0)
+  assert.ok(authentication < listCall, 'must authenticate before listing stored connections')
+  assert.doesNotMatch(route, /adapter\.sync\(/, 'listing existing connections must never trigger a provider synchronization')
+})
+
+test('listStoredConnections() is built from the same connection() summary buildSyncPayload() uses -- id/provider/displayName/status/lastSyncAt/consentExpiresAt/institutionId/error only, never a raw stored credential', () => {
+  const helper = serverSource.slice(
+    serverSource.indexOf('async function listStoredConnections(user)'),
+    serverSource.indexOf('async function start(provider, request, response)'),
+  )
+  assert.match(helper, /connection\(provider, stored\)/, 'must reuse the vetted connection() summary helper')
+  assert.doesNotMatch(helper, /\.\.\.stored\b/, 'must never spread the raw stored credential into the response')
+})
+
+// Regression guard for Dashboard's "Remove account" -> excludeProviderAccount()
+// (2026-08-27, PR #154): the exclusion endpoint mutates a stored, encrypted
+// connector credential, so it must authenticate/authorize and validate its
+// input the same way every other connector-scoped route does.
+test('the account-exclusion endpoint authenticates, authorizes, requires an existing stored connection, and validates the stable-account-id shape before ever writing to the store', () => {
+  const route = serverSource.slice(
+    serverSource.indexOf('const exclusionMatch = url.pathname.match'),
+    serverSource.indexOf('const institutionsMatch = url.pathname.match'),
+  )
+  assert.ok(route.length > 0, 'the /api/connectors/:provider/exclusions route was not found')
+  const authentication = route.indexOf('const user = userId(request)')
+  const authorization = route.indexOf('authorizeProviderUser(adapter, user, env)')
+  const storedLookup = route.indexOf('const stored = await store.get(user, provider)')
+  const notConnectedGuard = route.indexOf("throw new HttpError(404, 'connector_not_connected'")
+  const shapeValidation = route.indexOf('isValidStableAccountId(stableAccountId)')
+  const write = route.indexOf('await store.set(user, provider,')
+  assert.ok([authentication, authorization, storedLookup, notConnectedGuard, shapeValidation, write].every((index) => index >= 0))
+  assert.ok(authentication < authorization, 'must authenticate before authorizing')
+  assert.ok(authorization < storedLookup, 'must authorize before reading the stored connection')
+  assert.ok(storedLookup < notConnectedGuard, 'must fail closed when no connection is stored for this provider')
+  assert.ok(notConnectedGuard < shapeValidation, 'must confirm a connection exists before validating the request body')
+  assert.ok(shapeValidation < write, 'must validate the stable-account-id shape before ever writing to the store')
+  assert.match(route, /addExcludedStableAccountId\(stored\.excludedStableAccountIds, stableAccountId\)/, 'must build the new list via the pure, unit-tested addExcludedStableAccountId() helper, not inline logic')
+})

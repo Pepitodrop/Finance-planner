@@ -54,6 +54,7 @@ export const ACCEPTANCE_SYNC_PREVIEWS: SyncPreview[] = [{
     { id: 'accept-sync-savings', name: 'Savings account', type: 'savings', balanceCents: 825_000, currency: 'EUR', lastSyncedAt: '2026-08-05T09:15:00.000Z' },
     { id: 'accept-sync-card', name: 'Credit card', type: 'credit-card', balanceCents: -120_435, currency: 'EUR', lastSyncedAt: '2026-08-05T09:15:00.000Z', creditCard: { amountOwedCents: 120_435, creditLimitCents: 300_000, availableCreditCents: 179_565, pendingAmountCents: 0 } },
   ],
+  accountsToUpdate: [],
   transactionsToImport: [
     { id: 'accept-sync-tx-1', accountId: 'accept-sync-checking', description: 'Grocery store', category: 'Groceries', type: 'expense', amountCents: 4_832, date: '2026-08-01' },
     { id: 'accept-sync-tx-2', accountId: 'accept-sync-checking', description: 'Salary payment', category: 'Income', type: 'income', amountCents: 218_000, date: '2026-08-03' },

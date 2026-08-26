@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import type { ProviderDescriptor, ProviderInstitution } from '../../connectors'
+import type { ConnectorConnection, ProviderDescriptor, ProviderInstitution } from '../../connectors'
 import type { AppState } from '../../types'
 import { ConnectionsPage } from './ConnectionsPage'
 
@@ -34,6 +34,11 @@ vi.mock('../../connectors', async (importOriginal) => {
     disconnectConnector: vi.fn(async () => ({ disconnected: true, providerRevoked: true, providerRevokeReason: 'confirmed' as const })),
     fetchProviderStatus: vi.fn(async () => DEFAULT_PROVIDER_STATUS),
     fetchProviderInstitutions: vi.fn(async (): Promise<ProviderInstitution[]> => []),
+    // No stored connections by default -- tests covering the persisted-
+    // connection-survives-remount contract (defect: connection disappears
+    // on navigation) override this per-test.
+    fetchStoredConnections: vi.fn(async () => []),
+    excludeProviderAccount: vi.fn(async () => undefined),
   }
 })
 
@@ -55,7 +60,7 @@ vi.mock('../../manualCreditCard', async (importOriginal) => {
   }
 })
 
-import { disconnectConnector, fetchProviderInstitutions, fetchProviderStatus, startConnector, synchronizeConnections } from '../../connectors'
+import { disconnectConnector, fetchProviderInstitutions, fetchProviderStatus, fetchStoredConnections, startConnector, synchronizeConnections } from '../../connectors'
 
 const baseState: AppState = { accounts: [], transactions: [], goals: [] }
 
@@ -1193,6 +1198,32 @@ describe('synchronization preview and account selection', () => {
     expect(onApply).toHaveBeenCalledTimes(2)
     expect(onApply.mock.calls[1][0]).toEqual(baseState)
   })
+
+  // Design review, 2026-08-27: a reconnect's stableId-matched account
+  // reconciliation (see buildSyncPreview() in connectors.ts) is safe but
+  // silent -- without a visible cue, a user reconnecting a bank sees their
+  // own existing account re-listed with no way to tell it isn't a
+  // duplicate. The sync-selection screen now labels a reconnect-matched row
+  // distinctly from a genuinely new account.
+  it('labels a reconnect-matched account distinctly from a genuinely new one, so the reconciliation is never a silent surprise', async () => {
+    window.history.pushState({}, '', '/?provider=enablebanking')
+    const existingAccountId = 'connector:enablebanking:old-session-uid'
+    const stateWithExistingAccount: AppState = {
+      accounts: [{ id: existingAccountId, externalId: 'old-session-uid', stableId: 'a'.repeat(64), name: 'Girokonto', type: 'checking', balanceCents: 100_000, currency: 'EUR' }],
+      transactions: [],
+      goals: [],
+    }
+    ;(synchronizeConnections as Mock).mockResolvedValueOnce([{
+      connection: { id: 'enablebanking', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [{ externalId: 'new-session-uid', stableId: 'a'.repeat(64), name: 'Girokonto', type: 'checking', balanceCents: 150_000, currency: 'EUR' }],
+      transactions: [],
+    }])
+
+    renderConnections({ state: stateWithExistingAccount })
+    await waitFor(() => expect(screen.getByText('Choose accounts')).toBeInTheDocument())
+    expect(screen.getByText('Already in Finance Planner — refreshing balance')).toBeInTheDocument()
+    expect(screen.queryByText('Checking', { selector: 'small' })).not.toBeInTheDocument()
+  })
 })
 
 describe('connection attention, reconnect and disconnect', () => {
@@ -1351,5 +1382,100 @@ describe('dialog accessibility', () => {
     await user.keyboard('{Escape}')
     await waitFor(() => expect(trigger).toHaveFocus())
     expect(document.getElementById('main-content')).not.toHaveAttribute('inert')
+  })
+})
+
+// Fixed 2026-08-27 (PR #154, seventh Mock ASPSP pass): `connections` was
+// plain React state, destroyed on unmount -- navigating away and back made
+// a genuinely still-connected "Bank connection / Connected" card disappear
+// even though nothing was ever disconnected server-side. Fixed with a
+// dedicated GET /api/connectors/connections mount fetch, independent of
+// provider-status loading and never triggering a provider sync merely to
+// list what's already stored.
+describe('persisted connections survive page remount (defect: connection disappears on navigation)', () => {
+  const STORED_ENABLEBANKING: ConnectorConnection = { id: 'enablebanking', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected', lastSyncAt: '2026-08-26T14:19:00.000Z' }
+
+  it('a stored connection appears on a fresh mount, without any provider sync being triggered', async () => {
+    ;(fetchStoredConnections as Mock).mockResolvedValueOnce([STORED_ENABLEBANKING])
+    renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+    expect(screen.getAllByText('Connected').length).toBeGreaterThan(0)
+    expect(synchronizeConnections).not.toHaveBeenCalled()
+  })
+
+  it('navigating away (unmount) and back (remount) still shows the connection', async () => {
+    ;(fetchStoredConnections as Mock).mockResolvedValue([STORED_ENABLEBANKING])
+    const first = renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+    first.unmount()
+
+    renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+  })
+
+  it('no stored connection -> the normal empty state, not an error', async () => {
+    ;(fetchStoredConnections as Mock).mockResolvedValueOnce([])
+    renderConnections()
+    await waitFor(() => expect(fetchStoredConnections).toHaveBeenCalled())
+    expect(screen.getByRole('heading', { name: 'Connect your financial accounts' })).toBeInTheDocument()
+    expect(screen.queryByText('Bank connection')).not.toBeInTheDocument()
+  })
+
+  it('a failed stored-connections request does not crash the page and leaves the normal empty state (never erases a connection it never had)', async () => {
+    ;(fetchStoredConnections as Mock).mockRejectedValueOnce(new Error('network error'))
+    renderConnections()
+    await waitFor(() => expect(fetchStoredConnections).toHaveBeenCalled())
+    expect(screen.getByRole('heading', { name: 'Connect your financial accounts' })).toBeInTheDocument()
+  })
+
+  // Found by adversarial review (2026-08-27): listStoredConnections()
+  // awaits each provider's stored row sequentially server-side, so the
+  // mount-time fetchStoredConnections() request can still be in flight when
+  // the user disconnects a connection that a FASTER synchronize() call
+  // already surfaced. Without tracking this, the slow fetch resolving
+  // afterward with its now-stale pre-disconnect snapshot would resurrect a
+  // connection in the UI that was genuinely just deleted server-side.
+  it('a disconnect completing before the mount-time stored-connections fetch resolves is not undone when that stale fetch finally lands', async () => {
+    window.history.pushState({}, '', '/?provider=enablebanking')
+    let resolveStored!: (value: ConnectorConnection[]) => void
+    ;(fetchStoredConnections as Mock).mockImplementation(() => new Promise((resolve) => { resolveStored = resolve }))
+    ;(synchronizeConnections as Mock).mockResolvedValueOnce([{ connection: STORED_ENABLEBANKING, accounts: [], transactions: [] }])
+    ;(disconnectConnector as Mock).mockResolvedValueOnce({ disconnected: true, providerRevoked: true, providerRevokeReason: 'confirmed' })
+
+    renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Bank connection').closest('button')!)
+    await user.click(screen.getByRole('button', { name: /^Disconnect$/ }))
+    await user.click(screen.getByRole('button', { name: 'Yes, disconnect' }))
+    await waitFor(() => expect(disconnectConnector).toHaveBeenCalledWith('enablebanking'))
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Connect your financial accounts' })).toBeInTheDocument())
+
+    // The slow mount-time fetch (issued before the disconnect) now resolves
+    // with the stale, still-connected snapshot -- it must not resurrect it.
+    resolveStored([STORED_ENABLEBANKING])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.getByRole('heading', { name: 'Connect your financial accounts' })).toBeInTheDocument()
+    expect(screen.queryByText('Bank connection')).not.toBeInTheDocument()
+  })
+
+  it('a fresher post-sync connection result is never clobbered by a slower, now-stale stored-connections fetch resolving after it', async () => {
+    window.history.pushState({}, '', '/?provider=enablebanking')
+    let resolveStored!: (value: ConnectorConnection[]) => void
+    ;(fetchStoredConnections as Mock).mockImplementation(() => new Promise((resolve) => { resolveStored = resolve }))
+    ;(synchronizeConnections as Mock).mockResolvedValueOnce([{ connection: { ...STORED_ENABLEBANKING, lastSyncAt: '2026-08-27T09:00:00.000Z' }, accounts: [], transactions: [] }])
+
+    renderConnections()
+    // synchronize() (triggered by the ?provider= callback-return effect)
+    // resolves on its own microtask queue; wait for its result to land.
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+
+    // The stored-connections fetch (issued at mount, in parallel) resolves
+    // LATE, with a stale pre-sync snapshot -- it must not overwrite the
+    // fresher post-sync connection state that's already showing.
+    resolveStored([{ ...STORED_ENABLEBANKING, lastSyncAt: '2026-08-20T00:00:00.000Z' }])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.getByText('Bank connection')).toBeInTheDocument()
   })
 })

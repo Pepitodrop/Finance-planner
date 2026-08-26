@@ -11,6 +11,19 @@ import type { Account, AppState, CreditCardDetails, Transaction } from './types'
 export type ConnectorProvider = 'enablebanking' | 'gocardless' | 'finapi' | 'paypal'
 export type ConnectorStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 export type ConnectorAccountType = 'checking' | 'savings' | 'credit-card' | 'investment'
+const CONNECTOR_PROVIDERS: ReadonlySet<string> = new Set<ConnectorProvider>(['enablebanking', 'gocardless', 'finapi', 'paypal'])
+
+// Recovers the provider a connector-imported Account belongs to from its id
+// (buildSyncPreview() always mints `connector:${provider}:${externalId}`).
+// Returns undefined for a manual account (any id not in that shape) --
+// used by Dashboard's "Remove account" action to decide whether removal
+// also needs excludeProviderAccount(), never by anything security-relevant
+// (the server independently derives its own provider/stableId pairing; this
+// is purely a UI convenience for routing the right follow-up call).
+export function connectorProviderFromAccountId(accountId: string): ConnectorProvider | undefined {
+  const provider = accountId.startsWith('connector:') ? accountId.slice('connector:'.length).split(':')[0] : undefined
+  return provider && CONNECTOR_PROVIDERS.has(provider) ? provider as ConnectorProvider : undefined
+}
 
 export interface ConnectorStartContext {
   institutionId?: string
@@ -29,6 +42,12 @@ export interface ProviderInstitution { id: string; name: string; bic?: string; l
 export interface ProviderDescriptor { id: ConnectorProvider; displayName: string; kind: string; available: boolean; configured: boolean; mode?: 'owner' | 'partner'; reason?: string }
 export interface ExternalAccount {
   externalId: string
+  // Server-derived, provider-agnostic identity for the same real-world
+  // account across separate sessions/consents -- see the matching doc
+  // comment on Account.stableId in src/domain/finance/types.ts and
+  // stableAccountId() in server/src/providers.js. Undefined when the
+  // provider offered no trustworthy stable identifier for this account.
+  stableId?: string
   name: string
   type: Account['type']
   balanceCents: number
@@ -44,7 +63,21 @@ export interface ExternalAccount {
 }
 export interface ExternalTransaction { externalId: string; externalAccountId: string; description: string; category?: string; amountCents: number; currency: 'EUR'; bookingDate: string; pending?: boolean }
 export interface SyncPayload { connection: ConnectorConnection; accounts: ExternalAccount[]; transactions: ExternalTransaction[] }
-export interface SyncPreview { accountsToCreate: Account[]; transactionsToImport: Transaction[]; duplicateCount: number; pendingCount: number; quality: BankImportQuality }
+export interface SyncPreview {
+  accountsToCreate: Account[]
+  // Accounts matched to an ALREADY-existing Finance Planner account via
+  // stable identity (a reconnect under a new provider session/externalId,
+  // see buildSyncPreview()) -- their externalId/balance/metadata is
+  // refreshed in place under the original account id, never duplicated.
+  // Found live 2026-08-26/27 (PR #154, seventh Mock ASPSP pass): without
+  // this, a reconnect minted a new account id and doubled every historical
+  // transaction on top of it.
+  accountsToUpdate: Account[]
+  transactionsToImport: Transaction[]
+  duplicateCount: number
+  pendingCount: number
+  quality: BankImportQuality
+}
 
 // startConnector()'s result. In production, provider authorization always
 // moves into a separate popup so the already-unlocked Finance Planner tab is
@@ -117,25 +150,69 @@ export function normalizeCreditCard(external: ExternalAccount): { balanceCents: 
 }
 
 export function buildSyncPreview(state: AppState, payload: SyncPayload): SyncPreview {
-  const accountMap = new Map<string, string>(); const accountsToCreate: Account[] = []
+  const accountMap = new Map<string, string>(); const accountsToCreate: Account[] = []; const accountsToUpdate: Account[] = []
+  // Found by adversarial review (2026-08-27): without tracking which
+  // existing Finance Planner account ids this sync has already matched,
+  // two DIFFERENT external accounts that happen to share one stableId
+  // (e.g. GoCardless is documented to expose sub-accounts sharing a single
+  // IBAN for some banks) would BOTH match the same existing account below
+  // and collapse two distinct real accounts' transactions into one Finance
+  // Planner account -- the exact class of financial-data-corruption bug
+  // this reconnect fix exists to prevent, approached from the opposite
+  // direction. Once an existing account id is claimed (by id or by
+  // stableId) for this sync, a second external account cannot also claim
+  // it -- it falls through to creating its own new account instead, never
+  // a merge.
+  const claimedAccountIds = new Set<string>()
   for (const external of payload.accounts) {
     const deterministicId = `connector:${payload.connection.provider}:${external.externalId}`
-    const existing = state.accounts.find((account) => account.id === deterministicId)
-    accountMap.set(external.externalId, deterministicId)
-    if (!existing) {
-      const normalized = normalizeCreditCard(external)
-      accountsToCreate.push({
-        id: deterministicId,
+    const existingById = state.accounts.find((account) => account.id === deterministicId)
+    if (existingById) { accountMap.set(external.externalId, deterministicId); claimedAccountIds.add(deterministicId); continue }
+    // Reconnect reconciliation (found live 2026-08-26/27, PR #154, seventh
+    // Mock ASPSP pass): the provider-session externalId above changes on
+    // reauthorization, so it alone can never detect "this is the same real
+    // account I already imported." stableId is a provider-agnostic identity
+    // for the same real-world account across sessions (see
+    // ExternalAccount.stableId / Account.stableId) -- when it matches an
+    // account already in state, this is a reconnect, not a new account:
+    // reuse the EXISTING Finance Planner account id (so transaction
+    // fingerprinting below naturally dedupes against its history) and
+    // refresh its externalId/balance/metadata in place rather than creating
+    // a second account. No stableId on either side -> no unsafe automatic
+    // merge; falls through to a normal new-account create, exactly like
+    // before this fix.
+    const reconnected = external.stableId
+      ? state.accounts.find((account) => account.stableId && account.stableId === external.stableId && !claimedAccountIds.has(account.id))
+      : undefined
+    const normalized = normalizeCreditCard(external)
+    if (reconnected) {
+      accountMap.set(external.externalId, reconnected.id)
+      claimedAccountIds.add(reconnected.id)
+      accountsToUpdate.push({
+        ...reconnected,
         externalId: external.externalId,
-        institutionId: external.institutionId,
-        name: external.name,
-        type: external.type,
+        stableId: external.stableId ?? reconnected.stableId,
+        institutionId: external.institutionId ?? reconnected.institutionId,
         balanceCents: normalized.balanceCents,
-        currency: 'EUR',
         lastSyncedAt: new Date().toISOString(),
         creditCard: normalized.creditCard,
       })
+      continue
     }
+    accountMap.set(external.externalId, deterministicId)
+    claimedAccountIds.add(deterministicId)
+    accountsToCreate.push({
+      id: deterministicId,
+      externalId: external.externalId,
+      stableId: external.stableId,
+      institutionId: external.institutionId,
+      name: external.name,
+      type: external.type,
+      balanceCents: normalized.balanceCents,
+      currency: 'EUR',
+      lastSyncedAt: new Date().toISOString(),
+      creditCard: normalized.creditCard,
+    })
   }
   const known = new Set(state.transactions.map(transactionFingerprint)); const transactionsToImport: Transaction[] = []; let duplicateCount = 0; let pendingCount = 0; let smartCategorized = 0
   for (const external of payload.transactions) {
@@ -152,18 +229,26 @@ export function buildSyncPreview(state: AppState, payload: SyncPayload): SyncPre
     transactionsToImport.push(transaction)
     if (learned) smartCategorized += 1
   }
-  return { accountsToCreate, transactionsToImport, duplicateCount, pendingCount, quality: assessBankImportQuality(transactionsToImport, smartCategorized) }
+  return { accountsToCreate, accountsToUpdate, transactionsToImport, duplicateCount, pendingCount, quality: assessBankImportQuality(transactionsToImport, smartCategorized) }
 }
 
 export function selectSyncPreviewAccounts(preview: SyncPreview, selectedAccountIds: Iterable<string>): SyncPreview {
   const selected = new Set(selectedAccountIds)
   const accountsToCreate = preview.accountsToCreate.filter((account) => selected.has(account.id))
-  const allowed = new Set(accountsToCreate.map((account) => account.id))
+  const accountsToUpdate = preview.accountsToUpdate.filter((account) => selected.has(account.id))
+  const allowed = new Set([...accountsToCreate, ...accountsToUpdate].map((account) => account.id))
   const transactionsToImport = preview.transactionsToImport.filter((transaction) => allowed.has(transaction.accountId))
-  return { ...preview, accountsToCreate, transactionsToImport }
+  return { ...preview, accountsToCreate, accountsToUpdate, transactionsToImport }
 }
 
-export function applySyncPreview(state: AppState, preview: SyncPreview): AppState { return { ...state, accounts: [...state.accounts, ...preview.accountsToCreate], transactions: [...preview.transactionsToImport, ...state.transactions] } }
+export function applySyncPreview(state: AppState, preview: SyncPreview): AppState {
+  const updates = new Map(preview.accountsToUpdate.map((account) => [account.id, account]))
+  return {
+    ...state,
+    accounts: [...state.accounts.map((account) => updates.get(account.id) ?? account), ...preview.accountsToCreate],
+    transactions: [...preview.transactionsToImport, ...state.transactions],
+  }
+}
 
 function delay(milliseconds: number) { return new Promise((resolve) => window.setTimeout(resolve, milliseconds)) }
 function idempotencyKey(): string { if (typeof crypto.randomUUID === 'function') return crypto.randomUUID(); const bytes = crypto.getRandomValues(new Uint8Array(16)); return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('') }
@@ -208,6 +293,19 @@ export async function fetchProviderStatus(): Promise<ProviderDescriptor[]> {
   const result = await requestJson<{ providers?: ProviderDescriptor[] }>('/api/connectors', { method: 'GET' }, { retry: true })
   if (!Array.isArray(result.providers)) throw new Error('The provider status response was invalid.')
   return result.providers
+}
+// Fixed 2026-08-27 (PR #154, seventh Mock ASPSP pass): a normal Connections
+// page mount had no way to learn an already-persisted connector connection
+// existed without running a full provider synchronization -- ConnectionsPage
+// held `connections` as local React state, destroyed on unmount, and
+// fetchProviderStatus() above only ever returns provider descriptors
+// (available/configured), never the user's own stored rows. This reads the
+// same bounded, secret-free connection summary buildSyncPayload() already
+// returns after a sync, but without contacting any provider network API.
+export async function fetchStoredConnections(): Promise<ConnectorConnection[]> {
+  const result = await requestJson<{ connections?: ConnectorConnection[] }>('/api/connectors/connections', { method: 'GET' }, { retry: true })
+  if (!Array.isArray(result.connections)) throw new Error('The stored connections response was invalid.')
+  return result.connections
 }
 export async function fetchProviderInstitutions(provider: ConnectorProvider, country = 'DE'): Promise<ProviderInstitution[]> {
   const result = await requestJson<{ institutions?: ProviderInstitution[] }>(`/api/connectors/${provider}/institutions?country=${encodeURIComponent(country)}`, { method: 'GET' }, { retry: true })
@@ -284,4 +382,18 @@ export async function startConnector(provider: ConnectorProvider, context: Conne
 export async function synchronizeConnections(): Promise<SyncPayload[]> { if (activeSynchronization) return activeSynchronization; const operation = (async () => { const result = await requestJson<{ connections?: SyncPayload[] }>('/api/connectors/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } }, { retry: true, idempotent: true }); if (!Array.isArray(result.connections)) throw new Error('The sync service returned an invalid result.'); return result.connections })(); activeSynchronization = operation; try { return await operation } finally { if (activeSynchronization === operation) activeSynchronization = null } }
 export type DisconnectResult = { disconnected: boolean; providerRevoked: boolean; providerRevokeReason: 'confirmed' | 'not_applicable' | 'not_supported' | 'provider_error' }
 export async function disconnectConnector(provider: ConnectorProvider): Promise<DisconnectResult> { return requestJson<DisconnectResult>(`/api/connectors/${provider}`, { method: 'DELETE' }, { idempotent: true }) }
+// Records that this stable account should no longer be re-imported on
+// future syncs of this connection -- see Account.stableId and the
+// server-side applyAccountExclusions() this feeds. Best-effort from the
+// caller's point of view (Dashboard's "Remove account" already removes the
+// account locally regardless of whether this call succeeds): the exclusion
+// stops a FUTURE resurrection, it is not what makes the current removal
+// take effect.
+export async function excludeProviderAccount(provider: ConnectorProvider, stableAccountId: string): Promise<void> {
+  await requestJson<{ excluded?: boolean }>(`/api/connectors/${provider}/exclusions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stableAccountId }),
+  }, { idempotent: true })
+}
 export function consentDaysRemaining(connection: ConnectorConnection, now = Date.now()): number | null { if (!connection.consentExpiresAt) return null; const expiresAt = Date.parse(connection.consentExpiresAt); if (!Number.isFinite(expiresAt)) return null; return Math.ceil((expiresAt - now) / 86_400_000) }

@@ -297,3 +297,38 @@ test('subscriptions reject unknown fields, invalid enums, and duplicate IDs', ()
     /Subscription IDs must be unique/,
   )
 })
+
+// stableId (2026-08-27, PR #154, reconnect-dedup fix): a server-derived,
+// provider-agnostic identity for the same real-world account across
+// separate sessions/consents (see stableAccountId() in providers.js) --
+// bounded/typed the same way externalId already is, never a raw IBAN or
+// account number by construction upstream of this validator.
+test('cloud payload accepts an account with a stableId and round-trips it exactly', () => {
+  const account = connectorImportedAccount({ stableId: 'a'.repeat(64) })
+  const normalized = validateCloudPayload({ ...payload, state: { ...payload.state, accounts: [...payload.state.accounts, account] } })
+  const imported = normalized.state.accounts.find((entry) => entry.id === 'connector:enablebanking:acct-1')
+  assert.deepEqual(imported, account)
+  const roundTripped = decryptCloudPayload(encryptCloudPayload(normalized, secret, userId), secret, userId)
+  const roundTrippedAccount = roundTripped.state.accounts.find((entry) => entry.id === 'connector:enablebanking:acct-1')
+  assert.deepEqual(roundTrippedAccount, account)
+})
+
+test('an account with no stableId (no trustworthy stable identity available) still validates -- stableId is optional', () => {
+  const normalized = validateCloudPayload({ ...payload, state: { ...payload.state, accounts: [...payload.state.accounts, connectorImportedAccount()] } })
+  const imported = normalized.state.accounts.find((entry) => entry.id === 'connector:enablebanking:acct-1')
+  assert.ok(!('stableId' in imported))
+})
+
+test('rejects an empty (present-but-blank) stableId', () => {
+  assert.throws(
+    () => validateCloudPayload({ ...payload, state: { ...payload.state, accounts: [...payload.state.accounts, connectorImportedAccount({ stableId: '' })] } }),
+    /accounts\[1\]\.stableId/,
+  )
+})
+
+test('rejects an oversized stableId', () => {
+  assert.throws(
+    () => validateCloudPayload({ ...payload, state: { ...payload.state, accounts: [...payload.state.accounts, connectorImportedAccount({ stableId: 'a'.repeat(257) })] } }),
+    /accounts\[1\]\.stableId/,
+  )
+})

@@ -17,15 +17,17 @@ function renderDashboard(state = populatedState) {
   const onAddTransaction = vi.fn()
   const onEditTransaction = vi.fn()
   const onNavigate = vi.fn()
+  const onRemoveAccount = vi.fn()
   render(<Dashboard
     state={state}
     userName="Alex Rivera"
     onAddTransaction={onAddTransaction}
     onEditTransaction={onEditTransaction}
     onNavigate={onNavigate}
+    onRemoveAccount={onRemoveAccount}
     referenceDate={new Date(2026, 7, 4, 19)}
   />)
-  return { onAddTransaction, onEditTransaction, onNavigate }
+  return { onAddTransaction, onEditTransaction, onNavigate, onRemoveAccount }
 }
 
 describe('Dashboard', () => {
@@ -93,5 +95,87 @@ describe('Dashboard', () => {
     expect(onNavigate).toHaveBeenCalledWith('connections')
     await user.click(within(document.querySelector('.dashboard-toolbar')!).getByRole('button', { name: 'Add transaction' }))
     expect(onAddTransaction).toHaveBeenCalledOnce()
+  })
+
+  // "Remove account" (2026-08-27, PR #154): a manual account's row exposes
+  // a discreet, accessibly-named action that opens a confirmation dialog --
+  // never a single unconfirmed click. See src/accountState.ts for the
+  // domain logic these UI tests wire into.
+  describe('Remove account', () => {
+    const manualState: AppState = {
+      accounts: [{ id: 'manual-account', name: 'Bargeld', type: 'cash', balanceCents: 10_000, currency: 'EUR' }],
+      transactions: [
+        { id: 'tx-1', accountId: 'manual-account', description: 'Kaffee', category: 'Sonstiges', type: 'expense', amountCents: 350, date: '2026-08-01' },
+        { id: 'tx-2', accountId: 'manual-account', description: 'Trinkgeld', category: 'Sonstiges', type: 'expense', amountCents: 200, date: '2026-08-02' },
+      ],
+      goals: [],
+    }
+    const providerState: AppState = {
+      accounts: [{ id: 'connector:enablebanking:acct-1', externalId: 'acct-1', stableId: 'a'.repeat(64), name: 'Girokonto', type: 'checking', balanceCents: 50_000, currency: 'EUR' }],
+      transactions: [],
+      goals: [],
+    }
+
+    it('exposes an accessibly-named action for each account row', () => {
+      renderDashboard(manualState)
+      expect(screen.getByRole('button', { name: 'Actions for Bargeld' })).toBeInTheDocument()
+    })
+
+    it('clicking the action opens a confirmation dialog naming the account and the exact transaction count, without removing anything yet', async () => {
+      const user = userEvent.setup()
+      const { onRemoveAccount } = renderDashboard(manualState)
+      await user.click(screen.getByRole('button', { name: 'Actions for Bargeld' }))
+      await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
+      const dialog = screen.getByRole('dialog', { name: 'Remove "Bargeld"?' })
+      expect(dialog).toHaveTextContent('This account has 2 transactions. Removing the account will also remove those 2 transactions.')
+      expect(onRemoveAccount).not.toHaveBeenCalled()
+    })
+
+    it('Cancel closes the dialog without calling onRemoveAccount', async () => {
+      const user = userEvent.setup()
+      const { onRemoveAccount } = renderDashboard(manualState)
+      await user.click(screen.getByRole('button', { name: 'Actions for Bargeld' }))
+      await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
+      await user.click(screen.getByRole('button', { name: 'Cancel' }))
+      expect(onRemoveAccount).not.toHaveBeenCalled()
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+
+    it('confirming calls onRemoveAccount with the account id exactly once', async () => {
+      const user = userEvent.setup()
+      const { onRemoveAccount } = renderDashboard(manualState)
+      await user.click(screen.getByRole('button', { name: 'Actions for Bargeld' }))
+      await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
+      await user.click(screen.getByRole('button', { name: 'Remove account' }))
+      expect(onRemoveAccount).toHaveBeenCalledTimes(1)
+      expect(onRemoveAccount).toHaveBeenCalledWith('manual-account')
+    })
+
+    it('a zero-transaction account shows honest copy, never a false "1 transaction" claim', async () => {
+      const user = userEvent.setup()
+      const emptyState: AppState = { ...manualState, transactions: [] }
+      renderDashboard(emptyState)
+      await user.click(screen.getByRole('button', { name: 'Actions for Bargeld' }))
+      await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
+      expect(screen.getByRole('dialog')).toHaveTextContent('This account has no recorded transactions.')
+    })
+
+    it('a provider-linked account additionally explains the bank connection stays active and the account will not be re-imported', async () => {
+      const user = userEvent.setup()
+      renderDashboard(providerState)
+      await user.click(screen.getByRole('button', { name: 'Actions for Girokonto' }))
+      await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
+      const dialog = screen.getByRole('dialog')
+      expect(dialog).toHaveTextContent('the bank connection itself will remain active')
+      expect(dialog).toHaveTextContent('will not be automatically re-imported')
+    })
+
+    it('a manual account does NOT show the provider-connection caveat', async () => {
+      const user = userEvent.setup()
+      renderDashboard(manualState)
+      await user.click(screen.getByRole('button', { name: 'Actions for Bargeld' }))
+      await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
+      expect(screen.getByRole('dialog')).not.toHaveTextContent('bank connection')
+    })
   })
 })

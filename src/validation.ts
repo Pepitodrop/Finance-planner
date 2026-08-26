@@ -74,6 +74,14 @@ function isCreditCardDetails(value: unknown): value is CreditCardDetails {
     && isOptionalTimestamp(value.paymentDueDate)
 }
 
+// stableId is server-derived (an HMAC-SHA256 hex digest, see
+// server/src/providers.js's stableAccountId()) -- bounded the same as
+// externalId/institutionId rather than to the exact 64-hex-char shape, so a
+// future derivation change can't make a currently-valid state fail this
+// guard while still leaving the server's own stricter check as the
+// authority.
+const MAX_STABLE_ACCOUNT_ID_LENGTH = 256
+
 function isAccount(value: unknown): value is Account {
   if (!isRecord(value)) return false
   return typeof value.id === 'string'
@@ -83,6 +91,7 @@ function isAccount(value: unknown): value is Account {
     && value.currency === 'EUR'
     && isOptionalBoundedString(value.institutionId, MAX_INSTITUTION_ID_LENGTH)
     && isOptionalBoundedString(value.externalId, MAX_EXTERNAL_ID_LENGTH)
+    && isOptionalBoundedString(value.stableId, MAX_STABLE_ACCOUNT_ID_LENGTH)
     && isOptionalTimestamp(value.lastSyncedAt)
     && (value.creditCard === undefined || isCreditCardDetails(value.creditCard))
 }

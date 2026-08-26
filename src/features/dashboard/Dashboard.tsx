@@ -1,12 +1,14 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDownRight,
   ArrowLeftRight,
   ArrowUpRight,
   Landmark,
+  MoreHorizontal,
   PiggyBank,
   Plus,
   Target,
+  Trash2,
   WalletCards,
 } from 'lucide-react'
 import {
@@ -23,9 +25,11 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { ConfirmationDialog } from '../../app/ConfirmationDialog'
+import { connectorProviderFromAccountId } from '../../connectors'
 import { formatMoney } from '../../finance'
 import { MerchantLogo } from '../../MerchantLogo'
-import type { AppState, Transaction } from '../../types'
+import type { Account, AppState, Transaction } from '../../types'
 import type { DestinationId } from '../../app/navigation'
 import { buildDashboardViewModel, isDetectedTransfer } from './dashboardModel'
 
@@ -37,7 +41,41 @@ interface DashboardProps {
   onAddTransaction: () => void
   onEditTransaction: (transaction: Transaction) => void
   onNavigate: (destination: DestinationId) => void
+  onRemoveAccount: (accountId: string) => void
   referenceDate?: Date
+}
+
+// Mirrors TransactionsPage.tsx's TransactionActions -- same "⋯" trigger +
+// dismiss-on-outside-click/Escape menu pattern, reused here instead of a
+// second bespoke implementation. Only one action exists today (Remove
+// account), kept as a menu rather than a bare icon button so a future
+// second per-account action has an obvious place to go, and so the
+// destructive action is never a single unconfirmed click -- this only
+// *opens* the confirmation dialog, it never removes anything itself.
+function DashboardAccountActions({ account, onRequestRemove }: { account: Account; onRequestRemove: (account: Account) => void }) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const close = (event: MouseEvent | KeyboardEvent) => {
+      if (event instanceof KeyboardEvent && event.key === 'Escape') {
+        setOpen(false)
+        requestAnimationFrame(() => triggerRef.current?.focus())
+      } else if (event instanceof MouseEvent && !containerRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', close)
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', close) }
+  }, [open])
+
+  return <div className="dashboard-account-actions" ref={containerRef}>
+    <button ref={triggerRef} type="button" className="dashboard-account-actions-trigger" aria-label={`Actions for ${account.name}`} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((current) => !current)}><MoreHorizontal size={16}/></button>
+    {open && <div className="dashboard-account-actions-menu" role="menu">
+      <button type="button" role="menuitem" onClick={() => { setOpen(false); onRequestRemove(account) }}><Trash2 size={15}/> Remove account</button>
+    </div>}
+  </div>
 }
 
 const ACCOUNT_TYPE_LABELS = {
@@ -53,11 +91,14 @@ function signedMoney(transaction: Transaction): string {
   return `${transaction.type === 'income' ? '+' : '−'}${formatMoney(transaction.amountCents)}`
 }
 
-export function Dashboard({ state, userName, onAddTransaction, onEditTransaction, onNavigate, referenceDate = new Date() }: DashboardProps) {
+export function Dashboard({ state, userName, onAddTransaction, onEditTransaction, onNavigate, onRemoveAccount, referenceDate = new Date() }: DashboardProps) {
   const model = useMemo(() => buildDashboardViewModel(state, referenceDate), [referenceDate, state])
   const firstName = userName?.trim().split(/\s+/)[0] || 'there'
   const categoryTotalCents = model.categories.reduce((sum, category) => sum + category.amountCents, 0)
   const projectedEndCents = Math.round((model.projection.at(-1)?.balance ?? model.totalBalanceCents / 100) * 100)
+  const [removeTarget, setRemoveTarget] = useState<Account | null>(null)
+  const removeTargetTransactionCount = removeTarget ? state.transactions.filter((transaction) => transaction.accountId === removeTarget.id).length : 0
+  const removeTargetProvider = removeTarget ? connectorProviderFromAccountId(removeTarget.id) : undefined
 
   return <div className="dashboard-page" data-dashboard-ready="true" lang="en">
     <header className="dashboard-toolbar">
@@ -149,6 +190,7 @@ export function Dashboard({ state, userName, onAddTransaction, onEditTransaction
             <span className="dashboard-row-icon" aria-hidden="true"><Landmark size={18}/></span>
             <span><strong>{account.name}</strong><small>{ACCOUNT_TYPE_LABELS[account.type]}</small></span>
             <b>{formatMoney(account.balanceCents)}</b>
+            <DashboardAccountActions account={account} onRequestRemove={setRemoveTarget}/>
           </div>)}
         </div> : <div className="dashboard-empty"><strong>No accounts recorded</strong><span>Connect or add an account to include it in your balance.</span><button type="button" onClick={() => onNavigate('connections')}>Open Connections</button></div>}
       </article>
@@ -182,5 +224,21 @@ export function Dashboard({ state, userName, onAddTransaction, onEditTransaction
         </div> : <div className="dashboard-empty"><strong>No transactions yet</strong><span>Use the Add transaction button above to record your first transaction.</span></div>}
       </article>
     </section>
+
+    <ConfirmationDialog
+      open={removeTarget !== null}
+      severity="danger"
+      heading={`Remove "${removeTarget?.name ?? ''}"?`}
+      headingId="dashboard-remove-account-title"
+      confirmLabel="Remove account"
+      onConfirm={() => { if (removeTarget) onRemoveAccount(removeTarget.id); setRemoveTarget(null) }}
+      onClose={() => setRemoveTarget(null)}
+    >
+      <p>This removes the account and its imported/recorded transactions from Finance Planner.</p>
+      <p>{removeTargetTransactionCount === 0
+        ? 'This account has no recorded transactions.'
+        : `This account has ${removeTargetTransactionCount} transaction${removeTargetTransactionCount === 1 ? '' : 's'}. Removing the account will also remove ${removeTargetTransactionCount === 1 ? 'that transaction' : `those ${removeTargetTransactionCount} transactions`}.`}</p>
+      {removeTargetProvider && <p>If this account belongs to a connected bank, the bank connection itself will remain active unless you choose to disconnect it separately. This account will not be automatically re-imported on future syncs of that connection.</p>}
+    </ConfirmationDialog>
   </div>
 }

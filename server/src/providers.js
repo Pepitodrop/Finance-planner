@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto'
 import { assessBankConnectionHealth, chooseBankSyncBackoff } from './bank-sync-health.js'
 import { CobolBankingCore } from './cobol-banking-core.js'
 import { normalizeSignedAmount } from './cobol-engine.js'
@@ -320,6 +321,36 @@ function tokenIsUsable(token, now = Date.now()) {
   if (!token?.access) return false
   if (!token.accessExpiresAt) return true
   return Date.parse(token.accessExpiresAt) - now >= 120_000
+}
+
+// Found live 2026-08-26/27 (PR #154, seventh Mock ASPSP pass): account
+// identity was keyed only to a provider-session-scoped externalId (Enable
+// Banking's `uid`, valid only while that session is AUTHORIZED), so a
+// reconnect of the same real bank account minted a brand-new Finance
+// Planner account id, and every historical transaction re-imported under
+// it -- doubling balances/totals instead of deduplicating.
+//
+// This derives a deterministic, provider-agnostic stable identity for the
+// same real-world account across separate sessions/consents, from a raw
+// provider-supplied identifier documented as stable across reauthorization
+// (Enable Banking's `identification_hash`, itself already a hash of the
+// account number, never the account number itself; GoCardless's IBAN).
+// Keyed with CONNECTOR_MASTER_KEY -- the same secret this codebase already
+// trusts to encrypt every provider credential -- so the value that ever
+// reaches ExternalAccount.stableId (and, from there, the browser and
+// Finance Planner's own encrypted cloud state) is a fresh HMAC digest, not
+// the provider's own hash and never a raw account number. Returns undefined
+// (never throws) when the raw identifier or the master key is unavailable,
+// so a sync with no trustworthy stable identity for an account degrades to
+// the pre-existing externalId-only identity path rather than fabricating
+// one -- see buildSyncPreview() in src/connectors.ts for the "no unsafe
+// automatic merge without a match" contract this feeds.
+export const STABLE_ACCOUNT_RAW_IDENTIFIER_PATTERN = /^[A-Za-z0-9+/=_-]{1,256}$/
+export function stableAccountId(env, provider, rawIdentifier) {
+  if (typeof rawIdentifier !== 'string' || !STABLE_ACCOUNT_RAW_IDENTIFIER_PATTERN.test(rawIdentifier)) return undefined
+  const secret = env.CONNECTOR_MASTER_KEY
+  if (typeof secret !== 'string' || secret.length < 32) return undefined
+  return createHmac('sha256', secret).update(`${provider}:${rawIdentifier}`, 'utf8').digest('hex')
 }
 
 function completedHealth({ completedAt, consentExpiresAt = null, accounts, transactions }) {
@@ -682,7 +713,15 @@ class GoCardlessProvider extends OpenBankingProvider {
       const balance = balances.balances?.find((item) => item.balanceAmount?.currency === 'EUR')?.balanceAmount?.amount ?? '0'
       const type = await normalizeProviderAccountType(account, this.env, this.core)
       const balanceCents = await this.core.normalizeProviderAmount(balance)
-      accounts.push({ externalId: accountId, name: account.name || account.product || account.iban || 'Bankkonto', type, balanceCents, currency: 'EUR' })
+      // GoCardless has no separate cross-session matching hash like Enable
+      // Banking's identification_hash, but its account details response
+      // already documents an `iban` field (the same field this line already
+      // used as a display-name fallback) -- stable for the same real
+      // account across a new requisition/agreement. Absent for an account
+      // with no IBAN (e.g. some card products): stableAccountId() returns
+      // undefined in that case, which is the correct fail-conservative
+      // outcome, not an error.
+      accounts.push({ externalId: accountId, name: account.name || account.product || account.iban || 'Bankkonto', type, balanceCents, currency: 'EUR', stableId: stableAccountId(this.env, 'gocardless', account.iban) })
       for (const [pending, rows] of [[false, tx.transactions?.booked ?? []], [true, tx.transactions?.pending ?? []]]) {
         if (!Array.isArray(rows)) throw new Error('GoCardless transaction response is invalid.')
         for (const item of rows) {
@@ -1071,11 +1110,21 @@ class EnableBankingProvider extends OpenBankingProvider {
     return {
       ...pending,
       sessionId: response.session_id,
+      // identificationHash: Enable Banking's documented identification_hash
+      // (POST /sessions already returns full AccountResource objects,
+      // confirmed against the current official API reference) -- "based on
+      // the account number... can be used for matching accounts between
+      // multiple sessions." Captured raw here (validated/HMAC'd later, only
+      // at the point stableAccountId() actually derives ExternalAccount.
+      // stableId in sync()) so a stored credential always has it available
+      // for a future sync, exactly like uid/name/currency/cashAccountType
+      // already are.
       accounts: response.accounts.map((account) => ({
         uid: account.uid,
         name: account.name,
         currency: account.currency,
         cashAccountType: account.cash_account_type,
+        identificationHash: typeof account.identification_hash === 'string' ? account.identification_hash : undefined,
       })),
       accessValidUntil: response.access?.valid_until || pending.accessValidUntil,
       authorizedAt: new Date().toISOString(),
@@ -1150,7 +1199,7 @@ class EnableBankingProvider extends OpenBankingProvider {
         if (!details?.uid || details.uid !== accountId) {
           throw new Error(`Enable Banking account details response is invalid for account ${accountId}.`)
         }
-        liveAccounts.push({ uid: details.uid, name: details.name, currency: details.currency, cashAccountType: details.cash_account_type })
+        liveAccounts.push({ uid: details.uid, name: details.name, currency: details.currency, cashAccountType: details.cash_account_type, identificationHash: typeof details.identification_hash === 'string' ? details.identification_hash : undefined })
       }
     }
     const liveConsentExpiresAt = session?.access?.valid_until || consentExpiresAt
@@ -1172,7 +1221,7 @@ class EnableBankingProvider extends OpenBankingProvider {
       const balance = selectEnableBankingBalance(balances.balances)
       const type = await normalizeProviderAccountType({ cashAccountType: account.cashAccountType }, this.env, this.core)
       const balanceCents = await this.core.normalizeProviderAmount(balance)
-      accounts.push({ externalId: account.uid, name: account.name || 'Bankkonto', type, balanceCents, currency: 'EUR' })
+      accounts.push({ externalId: account.uid, name: account.name || 'Bankkonto', type, balanceCents, currency: 'EUR', stableId: stableAccountId(this.env, 'enablebanking', account.identificationHash) })
 
       // continuation_key pagination: strategy/date parameters stay
       // identical across every page (Enable Banking's documented

@@ -159,4 +159,23 @@ describe('runtime validation', () => {
       goals: [],
     })).toBe(false)
   })
+
+  // stableId (2026-08-27, PR #154 reconnect-dedup fix): a server-derived
+  // identity for the same real account across sessions -- see the matching
+  // server/src/user-state-store.js validateAccount() allow-list update.
+  it('accepts an account with a stableId', () => {
+    expect(isAppState({
+      accounts: [{ id: 'connector:enablebanking:acct-2', externalId: 'acct-2', stableId: 'a'.repeat(64), name: 'Girokonto', type: 'checking', balanceCents: 100, currency: 'EUR' }],
+      transactions: [],
+      goals: [],
+    })).toBe(true)
+  })
+
+  it('rejects an empty (present-but-blank) stableId', () => {
+    expect(isAppState({
+      accounts: [{ id: 'a', name: 'Test', type: 'checking', balanceCents: 0, currency: 'EUR', stableId: '' }],
+      transactions: [],
+      goals: [],
+    })).toBe(false)
+  })
 })

@@ -417,10 +417,63 @@
 
 .dashboard-account-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: var(--fp-space-3);
   min-height: 3.75rem;
+}
+
+.dashboard-account-actions {
+  position: relative;
+}
+
+.dashboard-account-actions-trigger {
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  place-items: center;
+  border: 0;
+  border-radius: var(--fp-radius-control);
+  color: var(--fp-color-text-muted);
+  background: transparent;
+}
+
+.dashboard-account-actions-trigger:hover,
+.dashboard-account-actions-trigger[aria-expanded="true"] {
+  color: var(--fp-color-text-primary);
+  background: var(--fp-color-surface-hover);
+}
+
+.dashboard-account-actions-menu {
+  position: absolute;
+  z-index: var(--fp-z-dropdown);
+  top: calc(100% + var(--fp-space-1));
+  right: 0;
+  display: grid;
+  min-width: 10rem;
+  padding: var(--fp-space-1);
+  border: 1px solid var(--fp-color-border-strong);
+  border-radius: var(--fp-radius-control);
+  background: var(--fp-color-surface-elevated);
+  box-shadow: var(--fp-shadow-overlay);
+}
+
+.dashboard-account-actions-menu button {
+  display: flex;
+  align-items: center;
+  gap: var(--fp-space-2);
+  width: 100%;
+  padding: var(--fp-space-2) var(--fp-space-3);
+  border: 0;
+  border-radius: var(--fp-radius-control);
+  color: var(--fp-color-expense);
+  background: transparent;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.dashboard-account-actions-menu button:hover {
+  background: var(--fp-color-border);
 }
 
 .dashboard-row-icon {

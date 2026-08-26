@@ -32,6 +32,7 @@ import {
   disconnectConnector,
   fetchProviderInstitutions,
   fetchProviderStatus,
+  fetchStoredConnections,
   providerInstitutionLogoUrl,
   selectSyncPreviewAccounts,
   startConnector,
@@ -145,6 +146,17 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [connections, setConnections] = useState<ConnectorConnection[]>([])
+  // Guards against a real race found by adversarial review (2026-08-27):
+  // the mount-time fetchStoredConnections() request (listStoredConnections()
+  // awaits each provider's store row sequentially server-side, so it can be
+  // slower than a single-provider disconnect) could resolve AFTER the user
+  // disconnects that same provider, and its functional updater's
+  // `current.length ? current : stored` check would then apply `stored`
+  // over an emptied `connections` array -- resurrecting a connection in the
+  // UI that was genuinely just deleted server-side. Tracks every provider
+  // disconnected during this mount so the stored-connections effect can
+  // filter it back out no matter which request resolves last.
+  const disconnectedProvidersRef = useRef<Set<ConnectorProvider>>(new Set())
   const [previews, setPreviews] = useState<SyncPreview[]>([])
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(new Set())
   const [statementPreview, setStatementPreview] = useState<StatementPreview | null>(null)
@@ -288,6 +300,56 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per mount; a fresh acceptanceMode always gets a fresh mount (see the `key` prop where ConnectionsPage is used)
   }, [])
 
+  // Fixed 2026-08-27 (PR #154, seventh Mock ASPSP pass): `connections` is
+  // plain React state, destroyed whenever ConnectionsPage unmounts (e.g.
+  // navigating to Subscriptions and back). It used to only ever get
+  // populated by synchronize()/the provider-return callback flow, so a
+  // fresh mount had no way to learn an already-persisted connector
+  // connection existed -- a real "Connected" card would silently vanish and
+  // re-appear as the empty "Connect your financial accounts" state even
+  // though nothing was ever disconnected. This loads the same bounded,
+  // secret-free connection summary from the persisted server-side row,
+  // independently of provider-status loading (deliberately a *separate*
+  // effect/request, not folded into loadProviderStatus() above) and without
+  // triggering any provider network synchronization merely to list what's
+  // already stored.
+  //
+  // Under acceptance fixtures, every mode that cares about `connections`
+  // already sets it deterministically in the effect above -- skip the real
+  // fetch there entirely so it can never race a fixture's value in a jsdom
+  // test with no real backend.
+  useEffect(() => {
+    if (import.meta.env.VITE_ACCEPTANCE_FIXTURES === 'true' && acceptanceMode) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const stored = await fetchStoredConnections()
+        // Functional updater, not a bare setConnections(stored): if
+        // synchronize() (from an in-flight provider-return callback) has
+        // already populated `connections` with fresher post-sync data by
+        // the time this resolves, that fresher value must win, never be
+        // clobbered by this merely-as-of-mount snapshot. An empty result
+        // here (or this request failing, see catch below) must also never
+        // erase an already-known connection some other path already set.
+        //
+        // Also filters out anything in disconnectedProvidersRef: this
+        // request can resolve AFTER a disconnect that happened while it was
+        // in flight, and without this filter the `current.length ? current
+        // : stored` check above would apply the (now-stale) `stored` list
+        // over the just-emptied `connections` array, resurrecting a
+        // connection in the UI that was genuinely just deleted server-side.
+        const filtered = stored.filter((connection) => !disconnectedProvidersRef.current.has(connection.provider))
+        if (!cancelled) setConnections((current) => (current.length ? current : filtered))
+      } catch {
+        // Best-effort: a failed stored-connections fetch must not erase an
+        // already-known connection, and must not block the rest of the
+        // page (provider status / setup flow) from working.
+      }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per mount, same contract as loadProviderStatus above
+  }, [])
+
   // Same generation-counter contract as loadProviderStatus above: four
   // separate call sites can now trigger a fetch (chooseInstitution,
   // searchLiveDirectory, useGoCardlessFallback, retryLiveInstitutions), so a
@@ -378,7 +440,18 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
 
   const selectedInstitution = syntheticInstitution ?? (selectedInstitutionId ? institutionById(selectedInstitutionId) : undefined)
   const filteredInstitutions = useMemo(() => filterInstitutions(searchTerm, category), [searchTerm, category])
-  const discoveredAccounts = useMemo(() => previews.flatMap((preview) => preview.accountsToCreate), [previews])
+  // Includes accountsToUpdate: a reconnect match (see buildSyncPreview())
+  // still needs to appear in the selection screen and count toward
+  // "Accounts selected: X of Y" -- it is a real account the sync discovered,
+  // just one Finance Planner already knows under a different provider
+  // session id, not a brand-new one.
+  const discoveredAccounts = useMemo(() => previews.flatMap((preview) => [...preview.accountsToCreate, ...preview.accountsToUpdate]), [previews])
+  // Surfaced in SyncSelectionScreen so a reconnect's silent-but-safe account
+  // reconciliation is never invisible to the user -- an ambiguous merge
+  // must be understandable, not a surprise (found during design review,
+  // 2026-08-27): without this, a user reconnecting a bank sees their own
+  // existing account re-listed with no indication it isn't a duplicate.
+  const reconnectedAccountIds = useMemo(() => new Set(previews.flatMap((preview) => preview.accountsToUpdate.map((account) => account.id))), [previews])
   const selection = summarizeAccountSelection(discoveredAccounts.map((account) => account.id), selectedAccountIds)
   const selectedPreviews = useMemo(() => previews.map((preview) => selectSyncPreviewAccounts(preview, selectedAccountIds)), [previews, selectedAccountIds])
   const summary = useMemo(() => selectedPreviews.reduce((result, preview) => ({
@@ -404,7 +477,13 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
       const successful = payloads.filter((payload) => payload.connection.status !== 'error')
       const next = successful.map((payload) => buildSyncPreview(state, payload))
       const failed = payloads.filter((payload) => payload.connection.status === 'error')
-      const discovered = next.flatMap((preview) => preview.accountsToCreate)
+      // Includes accountsToUpdate: a pure reconnect (the sync only found
+      // accounts Finance Planner already has under a different provider
+      // session id, no genuinely new accounts) must still route through the
+      // selection/import step rather than being reported as "No new
+      // accounts were found" -- the refreshed balance/metadata needs the
+      // user's explicit Import, exactly like a brand-new account does.
+      const discovered = next.flatMap((preview) => [...preview.accountsToCreate, ...preview.accountsToUpdate])
       setPreviews(next)
       setSelectedAccountIds(new Set(discovered.map((account) => account.id)))
       if (discovered.length) {
@@ -535,6 +614,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setAttentionError('')
     try {
       const result = await disconnectConnector(provider)
+      disconnectedProvidersRef.current.add(provider)
       setConnections((current) => current.filter((connection) => connection.provider !== provider))
       setMessage(
         result.providerRevokeReason === 'provider_error'
@@ -826,6 +906,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
 
     {screen === 'sync-selection' && <SyncSelectionScreen
       accounts={discoveredAccounts}
+      reconnectedAccountIds={reconnectedAccountIds}
       selectedAccountIds={selectedAccountIds}
       onToggle={toggleAccount}
       selection={selection}
@@ -1456,6 +1537,11 @@ function RedirectConfirmationStep({ institution, resolvedInstitutionName, resolv
 
 interface SyncSelectionScreenProps {
   accounts: Account[]
+  // Account ids buildSyncPreview() matched to an EXISTING Finance Planner
+  // account via stable identity (a reconnect under a new provider session
+  // id), as opposed to a genuinely new account -- see the doc comment on
+  // reconnectedAccountIds above where this is computed.
+  reconnectedAccountIds: Set<string>
   selectedAccountIds: Set<string>
   onToggle: (accountId: string) => void
   selection: { selectedCount: number; totalCount: number }
@@ -1468,7 +1554,7 @@ interface SyncSelectionScreenProps {
   onImport: () => void
 }
 
-function SyncSelectionScreen({ accounts, selectedAccountIds, onToggle, selection, transactionsAvailable, duplicates, pending, quality, warnings, onCancel, onImport }: SyncSelectionScreenProps) {
+function SyncSelectionScreen({ accounts, reconnectedAccountIds, selectedAccountIds, onToggle, selection, transactionsAvailable, duplicates, pending, quality, warnings, onCancel, onImport }: SyncSelectionScreenProps) {
   return <div className="connections-sync-screen">
     <header className="connections-subpage-header"><button type="button" className="connections-back" onClick={onCancel}><ArrowLeft size={18}/> Back</button><h2>Choose accounts</h2></header>
     <p className="connections-setup-subtitle">We discovered the following accounts. Select the ones you want to import.</p>
@@ -1476,7 +1562,7 @@ function SyncSelectionScreen({ accounts, selectedAccountIds, onToggle, selection
       {accounts.map((account) => <label className="connections-account-select-row" key={account.id}>
         <input type="checkbox" checked={selectedAccountIds.has(account.id)} onChange={() => onToggle(account.id)}/>
         <span className="connections-row-icon">{account.type === 'credit-card' ? <CreditCard size={18}/> : <Landmark size={18}/>}</span>
-        <span><strong>{account.name}</strong><small>{account.type === 'credit-card' ? 'Credit card' : account.type === 'savings' ? 'Savings' : account.type === 'investment' ? 'Investment' : 'Checking'}</small></span>
+        <span><strong>{account.name}</strong><small>{reconnectedAccountIds.has(account.id) ? 'Already in Finance Planner — refreshing balance' : account.type === 'credit-card' ? 'Credit card' : account.type === 'savings' ? 'Savings' : account.type === 'investment' ? 'Investment' : 'Checking'}</small></span>
         <span className="connections-account-select-balance"><strong>{formatEuro(account.type === 'credit-card' && account.creditCard ? -account.creditCard.amountOwedCents : account.balanceCents)}</strong><small>Current balance</small></span>
       </label>)}
       {accounts.length === 0 && <p className="connections-empty-copy">No accounts were discovered for the accounts you selected.</p>}

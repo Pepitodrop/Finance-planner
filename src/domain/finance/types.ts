@@ -22,6 +22,19 @@ export interface Account {
   currency: 'EUR'
   institutionId?: string
   externalId?: string
+  /**
+   * Deterministic, provider-agnostic identity for the same real-world
+   * account across separate provider sessions/consents (e.g. a reconnect) --
+   * distinct from externalId, which is session/consent-scoped and expected
+   * to change on reauthorization. Server-derived only (see
+   * server/src/providers.js's stableAccountId()); never a raw IBAN/account
+   * number, and undefined when the provider offered no trustworthy stable
+   * identifier for this account. Used to reconcile reconnected accounts
+   * (see buildSyncPreview() in src/connectors.ts) and to key a user's
+   * per-account sync-exclusion decision so a removed account isn't silently
+   * re-imported.
+   */
+  stableId?: string
   lastSyncedAt?: string
   creditCard?: CreditCardDetails
 }

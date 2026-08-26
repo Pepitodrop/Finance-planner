@@ -144,7 +144,7 @@ function validateJsonValue(value, field, depth = 0, counter = { count: 0 }) {
 // before).
 function validateAccount(value, index) {
   if (!isPlainRecord(value)) throw new HttpError(400, 'invalid_cloud_state', `accounts[${index}] must be an object.`)
-  exactKeys(value, new Set(['id', 'name', 'type', 'balanceCents', 'currency', 'institutionId', 'externalId', 'lastSyncedAt', 'creditCard']), `accounts[${index}]`)
+  exactKeys(value, new Set(['id', 'name', 'type', 'balanceCents', 'currency', 'institutionId', 'externalId', 'stableId', 'lastSyncedAt', 'creditCard']), `accounts[${index}]`)
   const type = boundedString(value.type, `accounts[${index}].type`, 32)
   if (!ACCOUNT_TYPES.has(type)) throw new HttpError(400, 'invalid_cloud_state', `accounts[${index}].type is invalid.`)
   if (value.currency !== 'EUR') throw new HttpError(400, 'invalid_cloud_state', `accounts[${index}].currency must be EUR.`)
@@ -159,6 +159,13 @@ function validateAccount(value, index) {
   if (institutionId !== undefined) result.institutionId = institutionId
   const externalId = optionalBoundedString(value.externalId, `accounts[${index}].externalId`, MAX_EXTERNAL_ID_LENGTH)
   if (externalId !== undefined) result.externalId = externalId
+  // Same bound as externalId/institutionId (see the comment above those
+  // constants) -- deliberately not pinned to the exact 64-hex-char shape
+  // stableAccountId() in providers.js currently produces, so a future
+  // change to that derivation can't retroactively make an already-valid
+  // cloud state fail this check.
+  const stableId = optionalBoundedString(value.stableId, `accounts[${index}].stableId`, MAX_EXTERNAL_ID_LENGTH)
+  if (stableId !== undefined) result.stableId = stableId
   const lastSyncedAt = optionalTimestamp(value.lastSyncedAt, `accounts[${index}].lastSyncedAt`)
   if (lastSyncedAt !== undefined) result.lastSyncedAt = lastSyncedAt
   if (value.creditCard !== undefined) result.creditCard = validateCreditCard(value.creditCard, `accounts[${index}].creditCard`)
