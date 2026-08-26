@@ -12,7 +12,7 @@ import { BudgetProfileStore } from '../src/budget-profile-store.js'
 import { createDatabase, migrateDatabase } from '../src/database.js'
 import { PostgresStore } from '../src/postgres-store.js'
 import { testAccountUserId } from '../src/test-account-provisioning.js'
-import { decryptCloudPayload } from '../src/user-state-store.js'
+import { decryptCloudPayload, validateCloudPayload } from '../src/user-state-store.js'
 
 const execFileAsync = promisify(execFile)
 const serverRoot = fileURLToPath(new URL('../', import.meta.url))
@@ -150,7 +150,10 @@ test('test-account COBOL empty bootstrap, comprehensive seed, and clear workflow
     assert.equal(financeAfter.rowCount, 1)
     assert.equal(Number(financeAfter.rows[0].version), financeBeforeVersion + 1)
     const emptyPayload = decryptCloudPayload(financeAfter.rows[0].encrypted_payload, connectorKey, userId)
-    assert.deepEqual(emptyPayload, { state: { accounts: [], transactions: [], goals: [] }, secureData: {} })
+    // validateCloudPayload() normalizes an absent `subscriptions` to `[]`
+    // (2026-08-26) -- compare against that same normalization rather than a
+    // hand-written literal that would otherwise drift from it again.
+    assert.deepEqual(emptyPayload, validateCloudPayload({ state: { accounts: [], transactions: [], goals: [] }, secureData: {} }))
 
     assert.equal((await pool.query('SELECT count(*)::int AS count FROM connector_connections WHERE user_id=$1', [userId])).rows[0].count, 0)
     assert.equal((await pool.query('SELECT count(*)::int AS count FROM oauth_nonces WHERE user_id=$1', [userId])).rows[0].count, 0)
