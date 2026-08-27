@@ -91,7 +91,41 @@ export interface SyncPreview {
   // this, a reconnect minted a new account id and doubled every historical
   // transaction on top of it.
   accountsToUpdate: Account[]
+  // Found live 2026-08-27 (PR #154, third independent review, Blocker 1):
+  // an account matched by EXACT id (same connection, no reauthorization --
+  // the ordinary "click Refresh" case) previously produced no update at
+  // all, so its balance/lastSyncedAt/creditCard never refreshed and any
+  // genuinely new transaction on it could be silently gated behind a
+  // "choose accounts" screen that only ever showed when accountsToCreate or
+  // accountsToUpdate were non-empty. routineAccountUpdates is therefore a
+  // THIRD, distinct bucket from accountsToUpdate: it is never gated by user
+  // selection (see selectSyncPreviewAccounts()) because refreshing an
+  // account the user is already looking at is not a "new account" decision.
+  // It also backfills stableId onto a legacy account that predates
+  // stableId's introduction (Blocker 2) -- see the doc comment in
+  // buildSyncPreview() below.
+  routineAccountUpdates: Account[]
   transactionsToImport: Transaction[]
+  // Found live 2026-08-27 (PR #154, third independent review, Blocker 2):
+  // backfill-only updates to EXISTING transactions that predate
+  // stableTransactionId's introduction -- an exact provider-transaction-id
+  // match whose local row lacks stableTransactionId gets that field
+  // populated here. Deliberately carries ONLY the id + stableTransactionId,
+  // never economic fields (amount/date/description/category/type), so
+  // applySyncPreview() can never silently rewrite a transaction's financial
+  // meaning while "just" backfilling an identity field.
+  transactionsToUpdate: Pick<Transaction, 'id' | 'stableTransactionId'>[]
+  // Found live 2026-08-27 (PR #154, third independent review, Blocker 2):
+  // existing provider-imported accounts (externalId set) belonging to this
+  // same connection/provider that this sync could neither exact-id-match
+  // nor stableId-match -- e.g. a legacy account with no stableId, reconnected
+  // under a brand-new provider session, where no trustworthy identity link
+  // to the old account could be recovered. Per the explicit requirement,
+  // this must never be silently fuzzy-merged into (or treated as
+  // superseded by) a newly-created account -- it is surfaced here so the UI
+  // can warn the user to check for a duplicate manually (e.g. via the
+  // existing Remove-account flow) rather than the code guessing.
+  unreconciledLegacyAccounts: Account[]
   duplicateCount: number
   pendingCount: number
   quality: BankImportQuality
@@ -169,6 +203,7 @@ export function normalizeCreditCard(external: ExternalAccount): { balanceCents: 
 
 export function buildSyncPreview(state: AppState, payload: SyncPayload): SyncPreview {
   const accountMap = new Map<string, string>(); const accountsToCreate: Account[] = []; const accountsToUpdate: Account[] = []
+  const routineAccountUpdates: Account[] = []
   // Found by adversarial review (2026-08-27): without tracking which
   // existing Finance Planner account ids this sync has already matched,
   // two DIFFERENT external accounts that happen to share one stableId
@@ -182,16 +217,37 @@ export function buildSyncPreview(state: AppState, payload: SyncPayload): SyncPre
   // it -- it falls through to creating its own new account instead, never
   // a merge.
   const claimedAccountIds = new Set<string>()
-  // Which existing Finance Planner account ids were matched via stableId
-  // THIS sync (a genuine reconnect, not a routine same-session re-sync).
-  // Read by the transaction loop below: only for these accounts does the
-  // fuzzy date/amount/description fingerprint fallback get skipped (see
-  // its doc comment there for why).
-  const reconnectedAccountIds = new Set<string>()
   for (const external of payload.accounts) {
     const deterministicId = `connector:${payload.connection.provider}:${external.externalId}`
     const existingById = state.accounts.find((account) => account.id === deterministicId)
-    if (existingById) { accountMap.set(external.externalId, deterministicId); claimedAccountIds.add(deterministicId); continue }
+    if (existingById) {
+      accountMap.set(external.externalId, deterministicId)
+      claimedAccountIds.add(deterministicId)
+      // Routine refresh (found live 2026-08-27, PR #154, third independent
+      // review, Blocker 1): same connection, same provider session -- this
+      // is an ordinary "click Refresh," not a reconnect and not a new
+      // account. Previously this branch did nothing at all, so a routine
+      // sync could never update balance/creditCard/institutionId, and any
+      // new transaction on this account could be silently gated behind the
+      // "choose accounts" screen (which only appeared when accountsToCreate
+      // or accountsToUpdate were non-empty). Also backfills stableId
+      // (Blocker 2): an account created before stableId existed keeps its
+      // existing id/history untouched, but adopts the now-available
+      // stableId so a LATER genuine reconnect (new externalId) can match it
+      // via the stableId path below instead of falling through to
+      // create-new and minting a duplicate.
+      const normalized = normalizeCreditCard(external)
+      routineAccountUpdates.push({
+        ...existingById,
+        externalId: external.externalId,
+        stableId: existingById.stableId ?? external.stableId,
+        institutionId: external.institutionId ?? existingById.institutionId,
+        balanceCents: normalized.balanceCents,
+        lastSyncedAt: new Date().toISOString(),
+        creditCard: normalized.creditCard,
+      })
+      continue
+    }
     // Reconnect reconciliation (found live 2026-08-26/27, PR #154, seventh
     // Mock ASPSP pass): the provider-session externalId above changes on
     // reauthorization, so it alone can never detect "this is the same real
@@ -200,11 +256,11 @@ export function buildSyncPreview(state: AppState, payload: SyncPayload): SyncPre
     // ExternalAccount.stableId / Account.stableId) -- when it matches an
     // account already in state, this is a reconnect, not a new account:
     // reuse the EXISTING Finance Planner account id (so transaction
-    // fingerprinting below naturally dedupes against its history) and
-    // refresh its externalId/balance/metadata in place rather than creating
-    // a second account. No stableId on either side -> no unsafe automatic
-    // merge; falls through to a normal new-account create, exactly like
-    // before this fix.
+    // matching below naturally dedupes against its history) and refresh its
+    // externalId/balance/metadata in place rather than creating a second
+    // account. No stableId on either side -> no unsafe automatic merge;
+    // falls through to a normal new-account create, exactly like before
+    // this fix.
     const reconnected = external.stableId
       ? state.accounts.find((account) => account.stableId && account.stableId === external.stableId && !claimedAccountIds.has(account.id))
       : undefined
@@ -212,7 +268,6 @@ export function buildSyncPreview(state: AppState, payload: SyncPayload): SyncPre
     if (reconnected) {
       accountMap.set(external.externalId, reconnected.id)
       claimedAccountIds.add(reconnected.id)
-      reconnectedAccountIds.add(reconnected.id)
       accountsToUpdate.push({
         ...reconnected,
         externalId: external.externalId,
@@ -239,29 +294,55 @@ export function buildSyncPreview(state: AppState, payload: SyncPayload): SyncPre
       creditCard: normalized.creditCard,
     })
   }
-  // Found live 2026-08-27 (PR #154, reconnect-dedup follow-up, independent
-  // review): the pre-existing fuzzy fingerprint (accountId + date +
-  // amountCents + normalized description) was being relied on as the DE
-  // FACTO reconnect-dedup key once a reconnected account's transactions
-  // shared its (reused) account id with history -- but that fingerprint can
-  // collapse two GENUINELY DIFFERENT same-day/same-amount/same-description
-  // transactions (e.g. two identical REWE purchases), which is exactly the
-  // "do not collapse two legitimate transactions" requirement this whole
-  // fix must not violate.
+  // Found live 2026-08-27 (PR #154, third independent review, Blocker 2):
+  // existing provider-imported accounts (externalId set, so previously
+  // synced from this same provider) for THIS connection that this sync
+  // could not claim by exact id OR by stableId -- e.g. a legacy account
+  // with no stableId, now reconnected under a session whose externalId no
+  // longer matches. There is no trustworthy identity left to link it to
+  // whatever new account this sync may have just created, so it is
+  // surfaced rather than silently merged or silently left to double up.
   //
-  // knownStableIds is checked FIRST and is authoritative when present
-  // (exact match only, never fuzzy) -- see stableTransactionId() in
-  // providers.js. The fuzzy fingerprint fallback is now used ONLY for
-  // accounts that were NOT reconnected this sync (the routine, same-session
-  // case, where account/transaction identity hasn't changed and this
-  // fallback has worked adequately -- pre-existing behavior, unchanged). A
-  // reconnected account's transaction with no stableTransactionId is
-  // imported rather than risking a silent false-duplicate -- conservative
-  // by design, per the explicit requirement to prefer import over silently
-  // losing a real transaction.
-  const knownFingerprints = new Set(state.transactions.map(transactionFingerprint))
+  // Corrected 2026-08-27 (adversarial review follow-up): the id prefix
+  // `connector:${provider}:` only encodes which PROVIDER an account came
+  // from, never which CONNECTION (a user can have two separate GoCardless
+  // bank connections) -- so the original version of this filter flagged
+  // every account from every OTHER live connection of the same provider as
+  // "unreconciled" on every sync, a false positive with nothing to do with
+  // this sync at all. It also had no way to ever stop flagging an account
+  // whose connection the user had genuinely disconnected (disconnect keeps
+  // the account's transaction history, so it would nag on every future
+  // sync of any same-provider connection, forever, with no way to silence
+  // it -- removal requires a stableId this class of account never has).
+  // institutionId is the closest available signal for "same real bank
+  // connection" (both Account and ConnectorConnection carry it) -- when
+  // either side lacks it, this now conservatively does NOT flag rather
+  // than over-flag, since an unwarned missed duplicate is a one-time
+  // inconvenience the existing Remove-account flow can fix, while a
+  // permanent false-positive warning the user can never dismiss is worse.
+  const unreconciledLegacyAccounts = payload.connection.institutionId
+    ? state.accounts.filter((account) => account.externalId && account.institutionId === payload.connection.institutionId && !claimedAccountIds.has(account.id))
+    : []
+  // Found live 2026-08-27 (PR #154, third independent review, Blocker 3):
+  // the fuzzy date/amount/description fingerprint fallback that used to
+  // stand in for reconnect-dedup evidence is REMOVED entirely, for every
+  // account (not just reconnected ones as the previous turn's fix had it).
+  // Two genuinely distinct transactions sharing a day/amount/description
+  // (e.g. two identical REWE purchases) must never be collapsed based on
+  // those economic fields alone. Dedup is authoritative ONLY via an exact
+  // transaction id match (same provider session, literally the same row)
+  // or an exact stableTransactionId match (a provider-documented bank-
+  // assigned reference, namespaced by the account's own stable identity --
+  // see stableTransactionId() in server/src/providers.js). When neither
+  // applies, multiplicity is preserved -- import rather than risk silently
+  // discarding a real transaction. transactionFingerprint() itself is not
+  // deleted: src/statementImport.ts's manual CSV/statement import flow has
+  // no provider identity at all to rely on and legitimately still uses it
+  // there; it is simply no longer treated as authoritative evidence here.
   const knownStableTransactionIds = new Set(state.transactions.filter((transaction) => transaction.stableTransactionId).map((transaction) => transaction.stableTransactionId))
-  const transactionsToImport: Transaction[] = []; let duplicateCount = 0; let pendingCount = 0; let smartCategorized = 0
+  const transactionsToImport: Transaction[] = []
+  const transactionsToUpdate: Pick<Transaction, 'id' | 'stableTransactionId'>[] = []
+  let duplicateCount = 0; let pendingCount = 0; let smartCategorized = 0
   for (const external of payload.transactions) {
     if (external.currency !== 'EUR') continue
     if (external.pending) { pendingCount += 1; continue }
@@ -270,36 +351,63 @@ export function buildSyncPreview(state: AppState, payload: SyncPayload): SyncPre
     const learned = external.category?.trim() ? null : suggestCategoryFromHistory(description, state.transactions)
     const category = external.category?.trim() || learned?.category || 'Unkategorisiert'
     const transaction: Transaction = { id: `connector:${payload.connection.provider}:${external.externalId}`, accountId, description, category, type: external.amountCents >= 0 ? 'income' : 'expense', amountCents: Math.abs(external.amountCents), date: external.bookingDate, recurring: false, stableTransactionId: external.stableTransactionId }
-    if (state.transactions.some((item) => item.id === transaction.id)) { duplicateCount += 1; continue }
+    const existingTransaction = state.transactions.find((item) => item.id === transaction.id)
+    if (existingTransaction) {
+      duplicateCount += 1
+      // Backfill (Blocker 2): the exact same provider transaction row was
+      // already imported before stableTransactionId existed. Only the
+      // identity field is backfilled onto the existing row -- economic
+      // fields (amount/date/description/category/type) are never touched
+      // by this path, so a routine refresh can never silently rewrite what
+      // a transaction actually recorded.
+      if (external.stableTransactionId && !existingTransaction.stableTransactionId) {
+        transactionsToUpdate.push({ id: existingTransaction.id, stableTransactionId: external.stableTransactionId })
+      }
+      continue
+    }
     if (external.stableTransactionId) {
       if (knownStableTransactionIds.has(external.stableTransactionId)) { duplicateCount += 1; continue }
       knownStableTransactionIds.add(external.stableTransactionId)
-    } else if (!reconnectedAccountIds.has(accountId)) {
-      const fingerprint = transactionFingerprint(transaction)
-      if (knownFingerprints.has(fingerprint)) { duplicateCount += 1; continue }
-      knownFingerprints.add(fingerprint)
     }
     transactionsToImport.push(transaction)
     if (learned) smartCategorized += 1
   }
-  return { accountsToCreate, accountsToUpdate, transactionsToImport, duplicateCount, pendingCount, quality: assessBankImportQuality(transactionsToImport, smartCategorized) }
+  return { accountsToCreate, accountsToUpdate, routineAccountUpdates, transactionsToImport, transactionsToUpdate, unreconciledLegacyAccounts, duplicateCount, pendingCount, quality: assessBankImportQuality(transactionsToImport, smartCategorized) }
 }
 
 export function selectSyncPreviewAccounts(preview: SyncPreview, selectedAccountIds: Iterable<string>): SyncPreview {
   const selected = new Set(selectedAccountIds)
   const accountsToCreate = preview.accountsToCreate.filter((account) => selected.has(account.id))
   const accountsToUpdate = preview.accountsToUpdate.filter((account) => selected.has(account.id))
-  const allowed = new Set([...accountsToCreate, ...accountsToUpdate].map((account) => account.id))
+  // routineAccountUpdates are never selection-gated (see the doc comment on
+  // SyncPreview.routineAccountUpdates): refreshing an account the user is
+  // already looking at is not a "new account" decision the selection screen
+  // exists to make.
+  const routineAccountUpdates = preview.routineAccountUpdates
+  const allowed = new Set([...accountsToCreate, ...accountsToUpdate, ...routineAccountUpdates].map((account) => account.id))
   const transactionsToImport = preview.transactionsToImport.filter((transaction) => allowed.has(transaction.accountId))
-  return { ...preview, accountsToCreate, accountsToUpdate, transactionsToImport }
+  // transactionsToUpdate is a pure identity backfill (id + stableTransactionId
+  // only, see its doc comment on SyncPreview) onto a transaction that is
+  // already present locally -- it introduces no new financial data and
+  // does not depend on whether the account it belongs to is selected for
+  // this sync, so it is never filtered by selection here.
+  const transactionsToUpdate = preview.transactionsToUpdate
+  return { ...preview, accountsToCreate, accountsToUpdate, routineAccountUpdates, transactionsToImport, transactionsToUpdate }
 }
 
 export function applySyncPreview(state: AppState, preview: SyncPreview): AppState {
-  const updates = new Map(preview.accountsToUpdate.map((account) => [account.id, account]))
+  const updates = new Map([...preview.accountsToUpdate, ...preview.routineAccountUpdates].map((account) => [account.id, account]))
+  const transactionUpdates = new Map(preview.transactionsToUpdate.map((transaction) => [transaction.id, transaction]))
   return {
     ...state,
     accounts: [...state.accounts.map((account) => updates.get(account.id) ?? account), ...preview.accountsToCreate],
-    transactions: [...preview.transactionsToImport, ...state.transactions],
+    transactions: [
+      ...preview.transactionsToImport,
+      ...state.transactions.map((transaction) => {
+        const update = transactionUpdates.get(transaction.id)
+        return update ? { ...transaction, stableTransactionId: update.stableTransactionId } : transaction
+      }),
+    ],
   }
 }
 

@@ -363,16 +363,34 @@ export function stableAccountId(env, provider, rawIdentifier) {
 // review): the reconnect fix reused transactionFingerprint() (accountId +
 // date + amountCents + description) as its de facto reconnect-dedup key,
 // which can collapse two GENUINELY DIFFERENT same-day/same-amount/same-
-// description transactions (e.g. two identical REWE purchases). Neither
-// Enable Banking's entry_reference nor GoCardless's transactionId is
-// documented as stable across sessions/requisitions the way the account-
-// level identification_hash/iban is -- but both ARE described as assigned
-// by the financial institution itself, not by the session, which is the
-// same structural property already relied on for account-level stability.
-// Namespacing that bank-assigned reference under the account's own proven-
-// stable identity (never the session-scoped account/requisition id) is
-// what turns it into a meaningfully more trustworthy cross-reconnect key
-// than before, without claiming a documented guarantee that doesn't exist.
+// description transactions (e.g. two identical REWE purchases).
+//
+// Enable Banking's `entry_reference` IS confirmed by Enable Banking's own
+// current FAQ to be exactly this kind of stable identity -- verbatim:
+// "for accounts with the same identification hashes, the value is
+// immutable. Therefore, it can reliably be used to match transactions
+// across different sessions when they refer to the same account at the
+// ASPSP side." (The same FAQ also documents the real caveat that some
+// ASPSPs omit entry_reference entirely, or -- rarely -- return duplicate
+// values incorrectly; the absent case is handled by falling back to
+// conservative multiplicity-preserving import rather than a fuzzy
+// heuristic, see buildSyncPreview() in src/connectors.ts. The rare-
+// incorrect-duplicate case is a data-quality issue in the ASPSP's own
+// system, outside what this codebase can detect or correct.)
+//
+// GoCardless's `transactionId`/`internalTransactionId` carries NO
+// equivalent documented guarantee -- GoCardless's own status-incident
+// history includes at least one case of an `internalTransactionId`
+// changing for an existing bank integration, and their docs only describe
+// the field as "provided by the financial institution," not as immutable
+// or cross-requisition-stable. Per explicit review guidance: do not claim
+// GoCardless reconnect transaction identity is equivalent to Enable
+// Banking's without stronger evidence -- GoCardless transactions are
+// therefore NEVER given a stableTransactionId (see GoCardlessProvider.sync()
+// below, which never calls this function), falling back to the same
+// conservative multiplicity-preserving import as the "no trustworthy
+// identity" case generally.
+//
 // Deliberately a SEPARATE function from stableAccountId() (not reused with
 // a colon-joined composite string) because the composite
 // `${accountStableId}:${reference}` would itself fail
@@ -731,6 +749,19 @@ class GoCardlessProvider extends OpenBankingProvider {
     const accounts = []
     const transactions = []
     const seen = new Set()
+    // Corrected 2026-08-27 (PR #154, adversarial review follow-up to the
+    // third independent review's Blocker 3): identical fix to
+    // EnableBankingProvider.sync()'s occurrenceCounts below -- when
+    // transactionId is absent, a per-call occurrence ordinal is appended to
+    // the synthetic date/amount/description key instead of using that key
+    // directly as a `seen`-Set dedup key. The first pass at this fix only
+    // touched EnableBankingProvider.sync(), leaving GoCardless with the
+    // exact same silent-collapse bug for two real, distinct transactions
+    // sharing a day/amount/description -- and now MORE likely to matter,
+    // since stableTransactionId is never computed for GoCardless at all
+    // (see the doc comment on stableTransactionId's derivation below),
+    // removing the other safety net.
+    const occurrenceCounts = new Map()
     for (const accountId of requisition.accounts ?? []) {
       const txUrl = new URL(`${GC_BASE}/accounts/${accountId}/transactions/`)
       txUrl.searchParams.set('date_from', window.dateFrom)
@@ -760,19 +791,33 @@ class GoCardlessProvider extends OpenBankingProvider {
           if (item.transactionAmount?.currency !== 'EUR') continue
           const signedCents = await this.core.normalizeProviderAmount(item.transactionAmount.amount)
           await normalizeSignedAmount(signedCents, this.env)
-          const externalId = item.transactionId || `${accountId}:${item.bookingDate || item.valueDate}:${item.transactionAmount.amount}:${item.remittanceInformationUnstructured || ''}`
-          if (seen.has(externalId)) continue
-          seen.add(externalId)
-          // stableTransactionId (2026-08-27, PR #154 reconnect-dedup follow-
-          // up): GoCardless documents transactionId as "Transaction
-          // identifier provided by the financial institution" -- bank-
-          // assigned, not requisition-scoped -- the same structural
-          // property relied on for Enable Banking's equivalent above. Never
-          // computed from the synthetic date/amount/description fallback
-          // key. See stableTransactionId()'s doc comment in this file for
-          // the full rationale and its conservative-fallback contract.
-          const txStableId = stableTransactionId(this.env, 'gocardless', accountStableId, item.transactionId)
-          transactions.push({ externalId, externalAccountId: accountId, stableTransactionId: txStableId, description: item.creditorName || item.debtorName || item.remittanceInformationUnstructured || item.additionalInformation || 'Banktransaktion', amountCents: signedCents, currency: 'EUR', bookingDate: item.bookingDate || item.valueDate || window.dateTo, pending })
+          const baseSyntheticKey = `${accountId}:${item.bookingDate || item.valueDate}:${item.transactionAmount.amount}:${item.remittanceInformationUnstructured || ''}`
+          let externalId
+          if (item.transactionId) {
+            externalId = item.transactionId
+            if (seen.has(externalId)) continue
+            seen.add(externalId)
+          } else {
+            const ordinal = (occurrenceCounts.get(baseSyntheticKey) ?? 0) + 1
+            occurrenceCounts.set(baseSyntheticKey, ordinal)
+            externalId = `${baseSyntheticKey}:${ordinal}`
+          }
+          // stableTransactionId (corrected 2026-08-27, PR #154, independent
+          // review + provider-evidence follow-up): earlier reasoning treated
+          // GoCardless's transactionId as bank-assigned and therefore as
+          // trustworthy as Enable Banking's entry_reference. Verified
+          // evidence contradicts that: GoCardless's own incident history
+          // documents a real case of an account's internalTransactionId
+          // changing ("UNICREDIT_BACXROBU internalTransactionId will
+          // change"), and GoCardless's docs describe the field only as
+          // "provided by the financial institution" with no immutability or
+          // cross-requisition-stability guarantee -- unlike Enable Banking's
+          // FAQ, which explicitly documents entry_reference as immutable for
+          // same-identification_hash accounts. GoCardless transactions
+          // therefore never get a stableTransactionId; reconnect dedup for
+          // GoCardless falls back to the conservative "no trustworthy
+          // identity" path (preserve multiplicity) in buildSyncPreview().
+          transactions.push({ externalId, externalAccountId: accountId, stableTransactionId: undefined, description: item.creditorName || item.debtorName || item.remittanceInformationUnstructured || item.additionalInformation || 'Banktransaktion', amountCents: signedCents, currency: 'EUR', bookingDate: item.bookingDate || item.valueDate || window.dateTo, pending })
         }
       }
     }
@@ -1256,6 +1301,17 @@ class EnableBankingProvider extends OpenBankingProvider {
     const accounts = []
     const transactions = []
     const seen = new Set()
+    // Corrected 2026-08-27 (PR #154, independent review): when
+    // entry_reference is absent, a per-call occurrence ordinal is appended
+    // to the synthetic date/amount/remittance key below instead of using
+    // that key directly as a `seen`-Set dedup key. The prior code silently
+    // dropped every transaction after the first whenever two real,
+    // distinct transactions shared the same account/date/amount/remittance
+    // (e.g. two identical REWE purchases same day) -- collapsing them
+    // server-side before buildSyncPreview() ever saw more than one. The
+    // ordinal is scoped to this single sync() call only and is never
+    // presented as a stable cross-call identity.
+    const occurrenceCounts = new Map()
     for (const account of liveAccounts ?? []) {
       const balances = await jsonFetch(`${EB_BASE}/accounts/${account.uid}/balances`, { headers: enableBankingHeaders(this.env) }, policy)
       if (!Array.isArray(balances?.balances)) throw new Error('Enable Banking balance response is invalid.')
@@ -1348,42 +1404,49 @@ class EnableBankingProvider extends OpenBankingProvider {
           // entry_reference is the ASPSP transaction identifier in the
           // current official API -- transaction_id is not part of the
           // documented transaction schema (also found during Mock ASPSP
-          // prep). Namespaced with account.uid: Enable Banking documents
+          // prep) and Enable Banking's own FAQ separately warns
+          // transaction_id specifically should NOT be used as a stable
+          // reference since its value may change on re-retrieval.
+          // Namespaced with account.uid: Enable Banking documents
           // entry_reference as scoped to the account it was issued against,
           // never guaranteed unique across accounts, so two different
           // accounts sharing a value could otherwise silently dedupe each
-          // other's transactions away via the shared `seen` set below. Falls
-          // back to the existing deterministic account/date/amount/
-          // description key (already account-namespaced) when absent.
-          const externalId = item.entry_reference
-            ? `${account.uid}:${item.entry_reference}`
-            : `${account.uid}:${item.booking_date || item.value_date}:${item.transaction_amount.amount}:${(item.remittance_information || []).join(' ')}`
-          if (seen.has(externalId)) continue
-          seen.add(externalId)
-          // stableTransactionId (found live 2026-08-27, PR #154, reconnect-
-          // dedup follow-up): the pre-existing externalId above is
-          // namespaced with account.uid, which is session-scoped and
-          // changes on every reauthorization -- so it can never be used to
-          // recognize "this is the same real transaction" across a
-          // reconnect, only within one session. entry_reference itself is
-          // NOT documented by Enable Banking as cross-session stable
-          // (confirmed against the current official API reference: no such
-          // guarantee is stated, unlike the account-level
-          // identification_hash, which explicitly is). What IS true: it is
-          // "the ASPSP transaction identifier" -- assigned by the bank
-          // itself, not by the session -- which is the same structural
-          // property that justified treating identification_hash as
-          // account-stable. Deriving a value from entry_reference
-          // NAMESPACED BY THE ACCOUNT'S OWN STABLE IDENTITY (never the
-          // session-scoped account.uid) turns that bank-assigned reference
-          // into something meaningfully more trustworthy across a reconnect
-          // than before, without claiming a documentation guarantee that
-          // does not exist. Only computed when BOTH the account has a
-          // stableId AND a real entry_reference is present (never for the
-          // synthetic date/amount/description fallback key) -- see
-          // buildSyncPreview() in src/connectors.ts for how the absence of
-          // this value is handled conservatively during a reconnect,
-          // exactly like GoCardless's own equivalent below.
+          // other's transactions away via the shared `seen` set below.
+          //
+          // Corrected 2026-08-27 (PR #154, independent review): when
+          // entry_reference is absent, this key is no longer used as a
+          // `seen`-Set dedup key at all -- see occurrenceCounts above the
+          // account loop. entry_reference IS present for most ASPSPs per
+          // Enable Banking's FAQ, so this fallback path is the exception,
+          // not the common case.
+          const baseSyntheticKey = `${account.uid}:${item.booking_date || item.value_date}:${item.transaction_amount.amount}:${(item.remittance_information || []).join(' ')}`
+          let externalId
+          if (item.entry_reference) {
+            externalId = `${account.uid}:${item.entry_reference}`
+            if (seen.has(externalId)) continue
+            seen.add(externalId)
+          } else {
+            const ordinal = (occurrenceCounts.get(baseSyntheticKey) ?? 0) + 1
+            occurrenceCounts.set(baseSyntheticKey, ordinal)
+            externalId = `${baseSyntheticKey}:${ordinal}`
+          }
+          // stableTransactionId (corrected 2026-08-27, PR #154, independent
+          // review): Enable Banking's own FAQ explicitly documents
+          // entry_reference as immutable "for accounts with the same
+          // identification hashes," stating it "can reliably be used to
+          // match transactions across different sessions when they refer to
+          // the same account at the ASPSP side" -- so unlike the
+          // session-scoped externalId above (namespaced with account.uid,
+          // which changes on every reauthorization), a value derived from
+          // entry_reference NAMESPACED BY THE ACCOUNT'S OWN STABLE IDENTITY
+          // is a genuinely documented cross-reconnect identity, not merely
+          // an inferred one. The same FAQ also documents the real caveat
+          // that some ASPSPs omit entry_reference entirely (handled above
+          // by never treating the synthetic fallback key as authoritative)
+          // or, rarely, return duplicate values incorrectly -- a data-
+          // quality issue in the ASPSP's own system this codebase cannot
+          // detect. Only computed when a real entry_reference is present,
+          // never for the synthetic fallback key.
           const txStableId = stableTransactionId(this.env, 'enablebanking', accountStableId, item.entry_reference)
           transactions.push({
             externalId,

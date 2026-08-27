@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { ConnectorConnection, ProviderDescriptor, ProviderInstitution } from '../../connectors'
 import type { AppState } from '../../types'
@@ -1224,6 +1225,127 @@ describe('synchronization preview and account selection', () => {
     await waitFor(() => expect(screen.getByText('Choose accounts')).toBeInTheDocument())
     expect(screen.getByText('Already in Finance Planner — refreshing balance')).toBeInTheDocument()
     expect(screen.queryByText('Checking', { selector: 'small' })).not.toBeInTheDocument()
+  })
+
+  // Blocker 2 (found by independent review, 2026-08-27, PR #154): an
+  // existing provider account this sync could not reconcile by exact id or
+  // stableId must be surfaced on the Choose-accounts screen itself, where
+  // the user is about to decide whether to import a possibly-duplicate new
+  // account -- not merely computed and left for a `message` banner that
+  // only ever renders on the overview screen the user has already left.
+  it('warns about an unreconciled legacy account directly on the Choose accounts screen, not only after returning to the overview', async () => {
+    window.history.pushState({}, '', '/?provider=enablebanking')
+    const orphanedAccountId = 'connector:enablebanking:orphaned-old-session'
+    const stateWithOrphan: AppState = {
+      accounts: [{ id: orphanedAccountId, externalId: 'orphaned-old-session', institutionId: 'SPARKASSE_AACHEN_AACSDE33', name: 'Altes Konto', type: 'checking', balanceCents: 1_000, currency: 'EUR' }],
+      transactions: [],
+      goals: [],
+    }
+    ;(synchronizeConnections as Mock).mockResolvedValueOnce([{
+      connection: { id: 'enablebanking', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected', institutionId: 'SPARKASSE_AACHEN_AACSDE33' },
+      accounts: [{ externalId: 'genuinely-new-session', stableId: 'b'.repeat(64), institutionId: 'SPARKASSE_AACHEN_AACSDE33', name: 'Girokonto', type: 'checking', balanceCents: 5_000, currency: 'EUR' }],
+      transactions: [],
+    }])
+
+    renderConnections({ state: stateWithOrphan })
+    await waitFor(() => expect(screen.getByText('Choose accounts')).toBeInTheDocument())
+    expect(screen.getByText(/Could not automatically match 1 existing account/)).toBeInTheDocument()
+    expect(screen.getByText(/Altes Konto/)).toBeInTheDocument()
+  })
+
+  // Blocker 1 (found by independent review, 2026-08-27, PR #154): a routine
+  // "Refresh" -- same connection, same provider session/externalId, no
+  // reauthorization -- must apply a balance/transaction update
+  // automatically, never gated behind the "Choose accounts" screen the way
+  // a genuinely new or reconnected account correctly still is. Before this
+  // fix, buildSyncPreview()'s existingById match produced no update at all,
+  // and ConnectionsPage only ever applied anything when accountsToCreate/
+  // accountsToUpdate were non-empty.
+  it('applies a routine same-connection refresh automatically, without ever showing the Choose accounts screen', async () => {
+    window.history.pushState({}, '', '/?provider=enablebanking')
+    const accountId = 'connector:enablebanking:acct-1'
+    const stateWithExistingAccount: AppState = {
+      accounts: [{ id: accountId, externalId: 'acct-1', name: 'Girokonto', type: 'checking', balanceCents: 10_000, currency: 'EUR' }],
+      transactions: [],
+      goals: [],
+    }
+    ;(synchronizeConnections as Mock).mockResolvedValueOnce([{
+      connection: { id: 'enablebanking', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [{ externalId: 'acct-1', name: 'Girokonto', type: 'checking', balanceCents: 12_000, currency: 'EUR' }],
+      transactions: [{ externalId: 'tx-b', externalAccountId: 'acct-1', description: 'Transaction B', amountCents: -500, currency: 'EUR', bookingDate: '2026-08-21' }],
+    }])
+
+    const { onApply } = renderConnections({ state: stateWithExistingAccount })
+    await waitFor(() => expect(onApply).toHaveBeenCalled())
+    expect(screen.queryByText('Choose accounts')).not.toBeInTheDocument()
+    const [nextState] = onApply.mock.calls[0]
+    expect(nextState.accounts).toHaveLength(1)
+    expect(nextState.accounts[0].id).toBe(accountId)
+    expect(nextState.accounts[0].balanceCents).toBe(12_000)
+    expect(nextState.transactions).toHaveLength(1)
+    expect(nextState.transactions[0].description).toBe('Transaction B')
+  })
+
+  // Found by adversarial review (2026-08-27, PR #154): the routine-refresh
+  // auto-apply and a later Choose-accounts confirmation both derive their
+  // base state from the `state` prop -- this is only safe if React has
+  // already re-rendered ConnectionsPage with the routine-updated state
+  // BEFORE the user can click Import, which requires onApply to actually be
+  // wired to update the state passed back in (as it is via App.tsx's bare
+  // setState in production). Uses a real stateful wrapper, not a bare
+  // vi.fn(), specifically to exercise that feedback loop -- a vi.fn() alone
+  // would let this regress silently, since `state` would never advance.
+  it('does not lose or duplicate a routine refresh when a Choose-accounts confirmation for OTHER accounts happens afterward in the same batch', async () => {
+    window.history.pushState({}, '', '/?provider=enablebanking')
+    const user = userEvent.setup()
+    const routineAccountId = 'connector:enablebanking:acct-1'
+    const initialState: AppState = {
+      accounts: [{ id: routineAccountId, externalId: 'acct-1', name: 'Girokonto', type: 'checking', balanceCents: 10_000, currency: 'EUR' }],
+      transactions: [],
+      goals: [],
+    }
+    ;(synchronizeConnections as Mock).mockResolvedValueOnce([{
+      connection: { id: 'enablebanking', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [
+        { externalId: 'acct-1', name: 'Girokonto', type: 'checking', balanceCents: 12_000, currency: 'EUR' },
+        { externalId: 'acct-2', name: 'Tagesgeld', type: 'savings', balanceCents: 3_000, currency: 'EUR' },
+      ],
+      transactions: [
+        { externalId: 'tx-b', externalAccountId: 'acct-1', description: 'Transaction B', amountCents: -500, currency: 'EUR', bookingDate: '2026-08-21' },
+        { externalId: 'tx-c', externalAccountId: 'acct-2', description: 'Transaction C', amountCents: -700, currency: 'EUR', bookingDate: '2026-08-22' },
+      ],
+    }])
+
+    const onApplySpy = vi.fn()
+    function StatefulHarness() {
+      const [state, setState] = useState(initialState)
+      return <ConnectionsPage state={state} onApply={(next) => { onApplySpy(next); setState(next) }}/>
+    }
+    render(<div>
+      <main id="main-content"><button type="button">Outside the dialog</button></main>
+      <nav className="app-mobile-navigation"><button type="button">Nav item</button></nav>
+      <StatefulHarness/>
+    </div>)
+
+    // The routine refresh applies immediately, before the selection screen
+    // for the genuinely-new account appears.
+    await waitFor(() => expect(onApplySpy).toHaveBeenCalledTimes(1))
+    expect(onApplySpy.mock.calls[0][0].accounts[0].balanceCents).toBe(12_000)
+
+    await waitFor(() => expect(screen.getByText('Choose accounts')).toBeInTheDocument())
+    expect(screen.getByRole('status').textContent).toMatch(/1 other account already in Finance Planner was refreshed automatically \(1 new transaction imported\)/)
+
+    await user.click(screen.getByRole('button', { name: 'Import selected accounts' }))
+    expect(onApplySpy).toHaveBeenCalledTimes(2)
+    const finalState = onApplySpy.mock.calls[1][0] as AppState
+    // The routine account/transaction must survive, exactly once each --
+    // never regressed back to its pre-refresh value, never duplicated.
+    expect(finalState.accounts.filter((account) => account.id === routineAccountId)).toHaveLength(1)
+    expect(finalState.accounts.find((account) => account.id === routineAccountId)?.balanceCents).toBe(12_000)
+    expect(finalState.transactions.filter((transaction) => transaction.description === 'Transaction B')).toHaveLength(1)
+    // The genuinely new account/transaction the user just confirmed is also present.
+    expect(finalState.accounts.some((account) => account.name === 'Tagesgeld')).toBe(true)
+    expect(finalState.transactions.filter((transaction) => transaction.description === 'Transaction C')).toHaveLength(1)
   })
 })
 

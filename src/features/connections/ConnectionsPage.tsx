@@ -160,6 +160,14 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   // filter it back out no matter which request resolves last.
   const disconnectedProvidersRef = useRef<Set<ConnectorProvider>>(new Set())
   const [previews, setPreviews] = useState<SyncPreview[]>([])
+  // Found by adversarial review (2026-08-27, PR #154): when a routine
+  // refresh (Blocker 1) and a genuinely-new/reconnected account both occur
+  // in the same sync batch, the routine refresh applies silently while the
+  // Choose-accounts screen is shown for the other accounts -- `message`
+  // only renders on the overview screen (see below), so the user had no
+  // feedback that anything was already refreshed until they returned to
+  // it, if ever. Rendered directly on SyncSelectionScreen instead.
+  const [routineRefreshSummary, setRoutineRefreshSummary] = useState<{ accounts: number; transactions: number } | null>(null)
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(new Set())
   const [statementPreview, setStatementPreview] = useState<StatementPreview | null>(null)
   const [statementFileName, setStatementFileName] = useState('')
@@ -457,6 +465,14 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   // just one Finance Planner already knows under a different provider
   // session id, not a brand-new one.
   const discoveredAccounts = useMemo(() => previews.flatMap((preview) => [...preview.accountsToCreate, ...preview.accountsToUpdate]), [previews])
+  // Found live 2026-08-27 (PR #154, third independent review, Blocker 2):
+  // this must be visible on the Choose-accounts screen itself, not only via
+  // the overview screen's `message` banner -- the whole point of surfacing
+  // an unreconciled legacy account is to warn the user BEFORE they import a
+  // possibly-duplicate new account, and `message` only ever renders while
+  // `screen === 'overview'` (see below), which the user has already left by
+  // the time this screen is showing.
+  const unreconciledLegacyAccounts = useMemo(() => previews.flatMap((preview) => preview.unreconciledLegacyAccounts), [previews])
   // Surfaced in SyncSelectionScreen so a reconnect's silent-but-safe account
   // reconciliation is never invisible to the user -- an ambiguous merge
   // must be understandable, not a surprise (found during design review,
@@ -481,6 +497,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setError('')
     setPreviews([])
     setSelectedAccountIds(new Set())
+    setRoutineRefreshSummary(null)
     if (isProviderReturn) setScreen('checking')
     try {
       const payloads = await synchronizeConnections()
@@ -488,20 +505,83 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
       const successful = payloads.filter((payload) => payload.connection.status !== 'error')
       const next = successful.map((payload) => buildSyncPreview(state, payload))
       const failed = payloads.filter((payload) => payload.connection.status === 'error')
+
+      // Found live 2026-08-27 (PR #154, third independent review, Blocker
+      // 1): routineAccountUpdates (an ordinary "Refresh" on an
+      // already-connected account -- no reauthorization, no new account)
+      // must apply immediately and unconditionally, never gated behind the
+      // "choose accounts" selection screen the way a brand-new or
+      // reconnected account correctly still is. Applied here, directly to
+      // the CURRENT app state, before the selection screen (if any) is even
+      // computed -- see routinePortionOf()/withoutRoutine() below, which
+      // split each preview so the routine bucket is consumed exactly once
+      // here and never re-applied when the user later confirms a selection.
+      const routineIds = next.map((preview) => new Set(preview.routineAccountUpdates.map((account) => account.id)))
+      const routinePortionOf = (preview: SyncPreview, ids: Set<string>): SyncPreview => ({
+        ...preview,
+        accountsToCreate: [],
+        accountsToUpdate: [],
+        transactionsToImport: preview.transactionsToImport.filter((transaction) => ids.has(transaction.accountId)),
+        unreconciledLegacyAccounts: [],
+      })
+      const withoutRoutine = (preview: SyncPreview, ids: Set<string>): SyncPreview => ({
+        ...preview,
+        routineAccountUpdates: [],
+        transactionsToImport: preview.transactionsToImport.filter((transaction) => !ids.has(transaction.accountId)),
+        // Backfills are pure identity metadata on transactions that already
+        // exist locally (see SyncPreview.transactionsToUpdate) -- applied
+        // once, immediately, alongside the routine bucket; never reapplied
+        // by a later selection-screen confirmation.
+        transactionsToUpdate: [],
+      })
+      const hasRoutineChanges = next.some((preview) => preview.routineAccountUpdates.length > 0 || preview.transactionsToUpdate.length > 0)
+      let routineTransactionCount = 0
+      const routineAccountCount = next.reduce((sum, preview) => sum + preview.routineAccountUpdates.length, 0)
+      if (hasRoutineChanges) {
+        const routinelyUpdatedState = next.reduce((current, preview, index) => {
+          const portion = routinePortionOf(preview, routineIds[index])
+          routineTransactionCount += portion.transactionsToImport.length
+          return applySyncPreview(current, portion)
+        }, state)
+        onApply(routinelyUpdatedState)
+        setRoutineRefreshSummary({ accounts: routineAccountCount, transactions: routineTransactionCount })
+      }
+      const strippedNext = next.map((preview, index) => withoutRoutine(preview, routineIds[index]))
+
       // Includes accountsToUpdate: a pure reconnect (the sync only found
       // accounts Finance Planner already has under a different provider
       // session id, no genuinely new accounts) must still route through the
       // selection/import step rather than being reported as "No new
       // accounts were found" -- the refreshed balance/metadata needs the
       // user's explicit Import, exactly like a brand-new account does.
-      const discovered = next.flatMap((preview) => [...preview.accountsToCreate, ...preview.accountsToUpdate])
-      setPreviews(next)
+      const discovered = strippedNext.flatMap((preview) => [...preview.accountsToCreate, ...preview.accountsToUpdate])
+      const unreconciledCount = next.reduce((sum, preview) => sum + preview.unreconciledLegacyAccounts.length, 0)
+      // Found live 2026-08-27 (PR #154, third independent review, Blocker
+      // 2): an existing provider account that couldn't be matched by id or
+      // stableId this sync is never silently merged into a new account --
+      // surfaced here as an explicit warning so the user can check for a
+      // duplicate manually (e.g. via Remove account) rather than the code
+      // guessing at a fuzzy match.
+      const unreconciledWarning = unreconciledCount
+        ? ` ${unreconciledCount} existing account(s) from this connection could not be automatically matched this time -- please check for duplicates before importing new accounts.`
+        : ''
+      setPreviews(strippedNext)
       setSelectedAccountIds(new Set(discovered.map((account) => account.id)))
       if (discovered.length) {
+        // The unreconciled-legacy-account warning (if any) is rendered
+        // directly inside SyncSelectionScreen via the unreconciledLegacyAccounts
+        // memo above, not via `message` -- `message` only renders on the
+        // overview screen, which the user has already left here.
         setScreen('sync-selection')
       } else {
         setScreen('overview')
-        setMessage(failed.length ? `No connection could be updated successfully. ${failed.length} connection(s) need attention.` : 'No new accounts were found.')
+        if (failed.length) {
+          setMessage(`No connection could be updated successfully. ${failed.length} connection(s) need attention.${unreconciledWarning}`)
+        } else if (hasRoutineChanges) {
+          setMessage(`${routineTransactionCount ? `Refreshed. ${routineTransactionCount} new transaction(s) imported.` : 'Your accounts are already up to date.'}${unreconciledWarning}`)
+        } else {
+          setMessage(`No new accounts were found.${unreconciledWarning}`)
+        }
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Synchronization failed.')
@@ -509,7 +589,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     } finally {
       setBusy(false)
     }
-  }, [state])
+  }, [state, onApply])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -941,6 +1021,8 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
       pending={summary.pending}
       quality={averageQuality}
       warnings={qualityWarnings}
+      unreconciledLegacyAccountNames={unreconciledLegacyAccounts.map((account) => account.name)}
+      routineRefreshSummary={routineRefreshSummary}
       onCancel={cancelSync}
       onImport={importPreview}
     />}
@@ -1579,14 +1661,32 @@ interface SyncSelectionScreenProps {
   pending: number
   quality: number
   warnings: string[]
+  // Found live 2026-08-27 (PR #154, third independent review, Blocker 2):
+  // existing provider accounts this sync could not reconcile by exact id or
+  // stableId -- rendered here, not merely computed, so a user about to
+  // import a new account gets an explicit chance to check for a duplicate
+  // first. See SyncPreview.unreconciledLegacyAccounts's doc comment.
+  unreconciledLegacyAccountNames: string[]
+  // Found by adversarial review (2026-08-27, PR #154): a routine refresh
+  // (Blocker 1) applies silently to accounts NOT shown on this screen while
+  // this screen is showing for OTHER (new/reconnected) accounts in the same
+  // sync batch -- without this, the user gets no feedback at all that
+  // anything else was already updated.
+  routineRefreshSummary: { accounts: number; transactions: number } | null
   onCancel: () => void
   onImport: () => void
 }
 
-function SyncSelectionScreen({ accounts, reconnectedAccountIds, selectedAccountIds, onToggle, selection, transactionsAvailable, duplicates, pending, quality, warnings, onCancel, onImport }: SyncSelectionScreenProps) {
+function SyncSelectionScreen({ accounts, reconnectedAccountIds, selectedAccountIds, onToggle, selection, transactionsAvailable, duplicates, pending, quality, warnings, unreconciledLegacyAccountNames, routineRefreshSummary, onCancel, onImport }: SyncSelectionScreenProps) {
   return <div className="connections-sync-screen">
     <header className="connections-subpage-header"><button type="button" className="connections-back" onClick={onCancel}><ArrowLeft size={18}/> Back</button><h2>Choose accounts</h2></header>
     <p className="connections-setup-subtitle">We discovered the following accounts. Select the ones you want to import.</p>
+    {routineRefreshSummary && <p className="status-message success-message" role="status">
+      {routineRefreshSummary.accounts} other account{routineRefreshSummary.accounts === 1 ? '' : 's'} already in Finance Planner {routineRefreshSummary.accounts === 1 ? 'was' : 'were'} refreshed automatically{routineRefreshSummary.transactions ? ` (${routineRefreshSummary.transactions} new transaction${routineRefreshSummary.transactions === 1 ? '' : 's'} imported)` : ''}.
+    </p>}
+    {unreconciledLegacyAccountNames.length > 0 && <p className="status-message error-message" role="alert">
+      Could not automatically match {unreconciledLegacyAccountNames.length} existing account{unreconciledLegacyAccountNames.length === 1 ? '' : 's'} from this connection ({unreconciledLegacyAccountNames.join(', ')}) during this reconnect. Check below for a possible duplicate before importing.
+    </p>}
     <div className="connections-account-select-list">
       {accounts.map((account) => <label className="connections-account-select-row" key={account.id}>
         <input type="checkbox" checked={selectedAccountIds.has(account.id)} onChange={() => onToggle(account.id)}/>

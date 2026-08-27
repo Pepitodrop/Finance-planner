@@ -528,7 +528,15 @@ test('3. entry_reference is used as the stable transaction identity, namespaced 
   assert.equal(result.transactions[0].externalId, 'acct-1:ref-123')
 }))
 
-test('4. no entry_reference falls back to the deterministic account/date/amount/description key', () => withRestoredFetch(async () => {
+// Corrected 2026-08-27 (PR #154, third independent review, Blocker 3): the
+// synthetic key now carries a per-call occurrence ordinal suffix -- see the
+// doc comment on occurrenceCounts in EnableBankingProvider.sync(). Before
+// this fix, this same synthetic key was ALSO used as a `seen`-Set dedup
+// key, which meant a second real transaction sharing the same
+// date/amount/remittance was silently dropped server-side before
+// buildSyncPreview() ever saw it -- see test 4b below for the regression
+// this specifically closes.
+test('4. no entry_reference falls back to the deterministic account/date/amount/description key, suffixed with an occurrence ordinal', () => withRestoredFetch(async () => {
   globalThis.fetch = async (input) => {
     const url = String(input)
     if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({ status: 'AUTHORIZED' }), { status: 200 })
@@ -541,8 +549,33 @@ test('4. no entry_reference falls back to the deterministic account/date/amount/
   const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
 
   const result = await adapter.sync(CREDENTIAL)
-  assert.equal(result.transactions[0].externalId, 'acct-1:2026-08-03:49.99:Internet')
+  assert.equal(result.transactions[0].externalId, 'acct-1:2026-08-03:49.99:Internet:1')
   assert.equal(result.transactions[0].amountCents, -4999)
+}))
+
+// Blocker 3, numbered scenario 2 (verbatim): an Enable Banking response with
+// two rows, no entry_reference, identical date/amount/remittance -- both
+// must survive the provider adapter's own output. Before this fix, the
+// second row was silently collapsed by the `seen` Set using the bare
+// (unsuffixed) synthetic key as if it were authoritative dedup evidence.
+test('4b. two rows with no entry_reference, identical date/amount/remittance: both survive with distinct occurrence-ordinal-suffixed externalIds', () => withRestoredFetch(async () => {
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.endsWith('/sessions/session-1')) return new Response(JSON.stringify({ status: 'AUTHORIZED' }), { status: 200 })
+    if (url.includes('/balances')) return new Response(JSON.stringify(balancesResponse('0.00')), { status: 200 })
+    if (url.includes('/transactions')) return new Response(JSON.stringify({ transactions: [
+      { status: 'BOOK', credit_debit_indicator: 'DBIT', transaction_amount: { currency: 'EUR', amount: '20.00' }, booking_date: '2026-08-03', remittance_information: ['REWE'] },
+      { status: 'BOOK', credit_debit_indicator: 'DBIT', transaction_amount: { currency: 'EUR', amount: '20.00' }, booking_date: '2026-08-03', remittance_information: ['REWE'] },
+    ] }), { status: 200 })
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  const result = await adapter.sync(CREDENTIAL)
+  assert.equal(result.transactions.length, 2)
+  const externalIds = result.transactions.map((transaction) => transaction.externalId)
+  assert.equal(new Set(externalIds).size, 2, 'both rows must survive with distinct externalIds, never silently collapsed into one')
+  assert.deepEqual(externalIds.sort(), ['acct-1:2026-08-03:20.00:REWE:1', 'acct-1:2026-08-03:20.00:REWE:2'])
 }))
 
 test('5. the same entry_reference on two different accounts produces two distinct, non-colliding transactions', () => withRestoredFetch(async () => {

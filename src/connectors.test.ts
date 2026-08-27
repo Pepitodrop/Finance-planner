@@ -271,10 +271,22 @@ describe('stable transaction identity (reconnect dedup correctness)', () => {
   const baseAccount = { id: ACCOUNT_ID, externalId: 'acct-1', stableId: STABLE_ID, name: 'Girokonto', type: 'checking' as const, balanceCents: 100_000, currency: 'EUR' as const }
   const basePayloadAccount = { externalId: 'acct-1', stableId: STABLE_ID, name: 'Girokonto', type: 'checking' as const, balanceCents: 100_000, currency: 'EUR' as const }
 
-  it('A. exact same provider transaction id (same session, no reconnect) -> duplicate', () => {
+  // Corrected 2026-08-27 (PR #154, third independent review): this test
+  // previously used a historical transaction id
+  // ('connector:enablebanking:acct-1:tx-1') that does NOT actually match
+  // what buildSyncPreview() computes for externalId 'tx-1'
+  // ('connector:enablebanking:tx-1') -- so it was silently passing via the
+  // now-removed fuzzy date/amount/description fallback, not via genuine
+  // exact-id matching as its own name claimed. Fixed to use a
+  // realistic/consistent id so it actually exercises the exact-id dedup
+  // path (Blocker 3, numbered scenario 3: "exact same entry_reference
+  // /stableTransactionId -> true duplicate correctly skipped" -- the
+  // same-session/no-reconnect variant of that guarantee, keyed by the
+  // ordinary transaction id rather than stableTransactionId).
+  it('A. exact same provider transaction id (same session, no reconnect) -> duplicate, correctly skipped', () => {
     const before: AppState = {
       accounts: [baseAccount],
-      transactions: [{ id: 'connector:enablebanking:acct-1:tx-1', accountId: ACCOUNT_ID, description: 'REWE', category: 'Groceries', type: 'expense', amountCents: 2000, date: '2026-08-27' }],
+      transactions: [{ id: 'connector:enablebanking:tx-1', accountId: ACCOUNT_ID, description: 'REWE', category: 'Groceries', type: 'expense', amountCents: 2000, date: '2026-08-27' }],
       goals: [],
     }
     const payload: SyncPayload = {
@@ -285,6 +297,25 @@ describe('stable transaction identity (reconnect dedup correctness)', () => {
     const preview = buildSyncPreview(before, payload)
     expect(preview.transactionsToImport).toHaveLength(0)
     expect(preview.duplicateCount).toBe(1)
+  })
+
+  // Blocker 3, numbered scenario 1 (verbatim): two same-session
+  // transactions, same date/amount/description, DIFFERENT exact provider
+  // ids, no stableTransactionId -> both preserved. This is exactly the case
+  // the removed fuzzy fingerprint fallback used to silently collapse.
+  it('1. two same-session transactions, same date/amount/description, DIFFERENT exact provider ids, no stableTransactionId -> both preserved', () => {
+    const before: AppState = { accounts: [baseAccount], transactions: [], goals: [] }
+    const payload: SyncPayload = {
+      connection: { id: 'c', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [basePayloadAccount],
+      transactions: [
+        { externalId: 'tx-morning', externalAccountId: 'acct-1', description: 'REWE', amountCents: -2000, currency: 'EUR', bookingDate: '2026-08-27' },
+        { externalId: 'tx-evening', externalAccountId: 'acct-1', description: 'REWE', amountCents: -2000, currency: 'EUR', bookingDate: '2026-08-27' },
+      ],
+    }
+    const preview = buildSyncPreview(before, payload)
+    expect(preview.transactionsToImport).toHaveLength(2)
+    expect(preview.duplicateCount).toBe(0)
   })
 
   it('B. reconnect: same stableTransactionId, different session/external account id -> duplicate', () => {
@@ -338,13 +369,19 @@ describe('stable transaction identity (reconnect dedup correctness)', () => {
     expect(preview.duplicateCount).toBe(0)
   })
 
-  it('F. previously imported history after reconnect remains exactly one copy (no stable id on either side, but same-session/pre-reconnect fingerprint dedup is unaffected)', () => {
-    // Routine, non-reconnect re-sync: the account id is unchanged (no
-    // reconnect occurred), so the exact-id check alone already prevents
-    // duplication -- confirms this path is untouched by the Blocker 3 fix.
+  // Corrected 2026-08-27 (PR #154, third independent review): renamed from
+  // its previous claim ("remains exactly one copy ... fingerprint dedup is
+  // unaffected") -- that framing described the exact bug Blocker 3 requires
+  // fixing (relying on date/amount/description as authoritative dedup
+  // evidence). With a genuinely different provider transaction id and no
+  // stableTransactionId, this transaction must now be preserved, not
+  // dropped -- see the routine-refresh describe block below for the
+  // realistic version of this scenario where the id DOES match (an
+  // ordinary same-session refresh), which is correctly deduped via exact id.
+  it('F. routine re-sync, no stable id on either side, DIFFERENT exact provider id from history -> preserved, never dropped based on date/amount/description alone', () => {
     const before: AppState = {
       accounts: [baseAccount],
-      transactions: [{ id: 'connector:enablebanking:acct-1:tx-1', accountId: ACCOUNT_ID, description: 'REWE', category: 'Groceries', type: 'expense', amountCents: 2000, date: '2026-08-27' }],
+      transactions: [{ id: 'connector:enablebanking:tx-0', accountId: ACCOUNT_ID, description: 'REWE', category: 'Groceries', type: 'expense', amountCents: 2000, date: '2026-08-27' }],
       goals: [],
     }
     const payload: SyncPayload = {
@@ -353,8 +390,8 @@ describe('stable transaction identity (reconnect dedup correctness)', () => {
       transactions: [{ externalId: 'tx-1', externalAccountId: 'acct-1', description: 'REWE', amountCents: -2000, currency: 'EUR', bookingDate: '2026-08-27' }],
     }
     const preview = buildSyncPreview(before, payload)
-    expect(preview.transactionsToImport).toHaveLength(0)
-    expect(preview.duplicateCount).toBe(1)
+    expect(preview.transactionsToImport).toHaveLength(1)
+    expect(preview.duplicateCount).toBe(0)
   })
 
   it('G. pending -> booked lifecycle: a pending transaction is excluded from import, and its later booked counterpart is not treated as a false duplicate', () => {
@@ -379,5 +416,220 @@ describe('stable transaction identity (reconnect dedup correctness)', () => {
     const bookedPreview = buildSyncPreview(before, bookedSync)
     expect(bookedPreview.transactionsToImport).toHaveLength(1)
     expect(bookedPreview.duplicateCount).toBe(0)
+  })
+})
+
+// Blocker 1 (found by independent review, 2026-08-27): a routine "click
+// Refresh" on an already-connected account (same provider session, same
+// externalId -- no reauthorization) previously produced no update at all --
+// buildSyncPreview()'s existingById match just continued without refreshing
+// balance/lastSyncedAt, and ConnectionsPage.tsx's synchronize() only ever
+// applied anything when accountsToCreate/accountsToUpdate were non-empty,
+// so a genuinely new transaction on an existing account could be silently
+// dropped from the UI entirely (never imported, never shown). See
+// SyncPreview.routineAccountUpdates's doc comment in src/connectors.ts.
+describe('routine refresh (Blocker 1: same connection, no reauthorization)', () => {
+  it('refreshes balance in place, re-affirms an existing transaction without duplicating it, and imports a genuinely new one -- all without touching accountsToCreate/accountsToUpdate', () => {
+    const accountId = 'connector:enablebanking:acct-1'
+    const before: AppState = {
+      accounts: [{ id: accountId, externalId: 'acct-1', name: 'Girokonto', type: 'checking', balanceCents: 10_000, currency: 'EUR' }],
+      transactions: [{ id: 'connector:enablebanking:tx-a', accountId, description: 'Transaction A', category: 'Sonstiges', type: 'expense', amountCents: 1_000, date: '2026-08-20' }],
+      goals: [],
+    }
+    const payload: SyncPayload = {
+      connection: { id: 'c', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [{ externalId: 'acct-1', name: 'Girokonto', type: 'checking', balanceCents: 12_000, currency: 'EUR' }],
+      transactions: [
+        { externalId: 'tx-a', externalAccountId: 'acct-1', description: 'Transaction A', amountCents: -1_000, currency: 'EUR', bookingDate: '2026-08-20' },
+        { externalId: 'tx-b', externalAccountId: 'acct-1', description: 'Transaction B', amountCents: -500, currency: 'EUR', bookingDate: '2026-08-21' },
+      ],
+    }
+
+    const preview = buildSyncPreview(before, payload)
+    expect(preview.accountsToCreate).toHaveLength(0)
+    expect(preview.accountsToUpdate).toHaveLength(0)
+    expect(preview.routineAccountUpdates).toHaveLength(1)
+    expect(preview.routineAccountUpdates[0].id).toBe(accountId)
+    expect(preview.routineAccountUpdates[0].balanceCents).toBe(12_000)
+    expect(preview.transactionsToImport).toHaveLength(1)
+    expect(preview.transactionsToImport[0].description).toBe('Transaction B')
+    expect(preview.duplicateCount).toBe(1)
+
+    const applied = applySyncPreview(before, preview)
+    expect(applied.accounts).toHaveLength(1)
+    expect(applied.accounts[0].id).toBe(accountId)
+    expect(applied.accounts[0].balanceCents).toBe(12_000)
+    expect(applied.transactions.filter((t) => t.description === 'Transaction A')).toHaveLength(1)
+    expect(applied.transactions.filter((t) => t.description === 'Transaction B')).toHaveLength(1)
+
+    // A repeated, identical refresh imports zero more rows.
+    const secondPreview = buildSyncPreview(applied, payload)
+    expect(secondPreview.transactionsToImport).toHaveLength(0)
+    expect(secondPreview.duplicateCount).toBe(2)
+    const secondApplied = applySyncPreview(applied, secondPreview)
+    expect(secondApplied.accounts).toHaveLength(1)
+    expect(secondApplied.transactions).toHaveLength(2)
+  })
+})
+
+// Blocker 2 (found by independent review, 2026-08-27): "TEST LEGACY
+// UPGRADE" -- an account/transaction imported before stableId/
+// stableTransactionId existed must be safely upgraded, in place, on its
+// next ordinary sync, so that a LATER genuine reconnect (new provider
+// session) can recognize it via stableId rather than minting a duplicate.
+describe('legacy identity backfill and later reconnect (Blocker 2: TEST LEGACY UPGRADE)', () => {
+  it('backfills stableId/stableTransactionId on a same-session sync, then correctly reconnects via the newly-backfilled stableId on a later reauthorization', () => {
+    const STABLE_ID = '7'.repeat(64)
+    const STABLE_TX_ID = '8'.repeat(64)
+    const legacyAccountId = 'connector:enablebanking:old-session-uid'
+    const legacyTransactionId = 'connector:enablebanking:hist-tx-1'
+    const legacy: AppState = {
+      accounts: [{ id: legacyAccountId, externalId: 'old-session-uid', name: 'Girokonto', type: 'checking', balanceCents: 50_000, currency: 'EUR' }],
+      transactions: [{ id: legacyTransactionId, accountId: legacyAccountId, description: 'Miete', category: 'Wohnen', type: 'expense', amountCents: 80_000, date: '2026-07-01' }],
+      goals: [],
+    }
+
+    // Phase 1: SAME session, same externalId -- an ordinary routine sync
+    // under the new code, now carrying a stableId/stableTransactionId the
+    // legacy rows never had.
+    const sameSessionPayload: SyncPayload = {
+      connection: { id: 'c', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [{ externalId: 'old-session-uid', stableId: STABLE_ID, name: 'Girokonto', type: 'checking', balanceCents: 55_000, currency: 'EUR' }],
+      transactions: [{ externalId: 'hist-tx-1', externalAccountId: 'old-session-uid', stableTransactionId: STABLE_TX_ID, description: 'Miete', amountCents: -80_000, currency: 'EUR', bookingDate: '2026-07-01' }],
+    }
+    const phase1Preview = buildSyncPreview(legacy, sameSessionPayload)
+    expect(phase1Preview.accountsToCreate).toHaveLength(0)
+    expect(phase1Preview.accountsToUpdate).toHaveLength(0)
+    expect(phase1Preview.routineAccountUpdates).toHaveLength(1)
+    expect(phase1Preview.routineAccountUpdates[0].id).toBe(legacyAccountId)
+    expect(phase1Preview.routineAccountUpdates[0].stableId).toBe(STABLE_ID)
+    expect(phase1Preview.routineAccountUpdates[0].balanceCents).toBe(55_000)
+    expect(phase1Preview.transactionsToImport).toHaveLength(0)
+    expect(phase1Preview.transactionsToUpdate).toHaveLength(1)
+    expect(phase1Preview.transactionsToUpdate[0].id).toBe(legacyTransactionId)
+    expect(phase1Preview.transactionsToUpdate[0].stableTransactionId).toBe(STABLE_TX_ID)
+
+    const afterPhase1 = applySyncPreview(legacy, phase1Preview)
+    expect(afterPhase1.accounts).toHaveLength(1)
+    expect(afterPhase1.accounts[0].id).toBe(legacyAccountId)
+    expect(afterPhase1.accounts[0].stableId).toBe(STABLE_ID)
+    const upgradedHistoricalTransaction = afterPhase1.transactions.find((t) => t.id === legacyTransactionId)
+    expect(upgradedHistoricalTransaction?.stableTransactionId).toBe(STABLE_TX_ID)
+    // The backfill never touches economic fields.
+    expect(upgradedHistoricalTransaction?.amountCents).toBe(80_000)
+    expect(upgradedHistoricalTransaction?.description).toBe('Miete')
+
+    // Phase 2: simulate a brand-new Enable Banking authorization -- a NEW
+    // session account uid, but the SAME identification_hash-derived
+    // stableId and the SAME historical entry_reference-derived stable
+    // transaction id.
+    const reauthPayload: SyncPayload = {
+      connection: { id: 'c', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [{ externalId: 'brand-new-session-uid', stableId: STABLE_ID, name: 'Girokonto', type: 'checking', balanceCents: 60_000, currency: 'EUR' }],
+      transactions: [
+        { externalId: 'hist-tx-1-new-ref', externalAccountId: 'brand-new-session-uid', stableTransactionId: STABLE_TX_ID, description: 'Miete', amountCents: -80_000, currency: 'EUR', bookingDate: '2026-07-01' },
+        { externalId: 'new-tx-1', externalAccountId: 'brand-new-session-uid', stableTransactionId: '9'.repeat(64), description: 'Gehalt', amountCents: 300_000, currency: 'EUR', bookingDate: '2026-08-01' },
+      ],
+    }
+    const phase2Preview = buildSyncPreview(afterPhase1, reauthPayload)
+    expect(phase2Preview.accountsToCreate).toHaveLength(0)
+    expect(phase2Preview.accountsToUpdate).toHaveLength(1)
+    expect(phase2Preview.accountsToUpdate[0].id).toBe(legacyAccountId)
+    expect(phase2Preview.accountsToUpdate[0].externalId).toBe('brand-new-session-uid')
+    expect(phase2Preview.transactionsToImport).toHaveLength(1)
+    expect(phase2Preview.transactionsToImport[0].description).toBe('Gehalt')
+    expect(phase2Preview.duplicateCount).toBe(1)
+
+    const afterPhase2 = applySyncPreview(afterPhase1, phase2Preview)
+    expect(afterPhase2.accounts).toHaveLength(1)
+    expect(afterPhase2.accounts[0].id).toBe(legacyAccountId)
+    expect(afterPhase2.transactions).toHaveLength(2)
+  })
+})
+
+// Blocker 2 (found by independent review, 2026-08-27): when safe backfill
+// genuinely is impossible -- an existing provider account this sync could
+// neither exact-id-match nor stableId-match -- the account must never be
+// silently fuzzy-merged into (or silently superseded by) a newly-created
+// account. It is surfaced via unreconciledLegacyAccounts so the UI can warn
+// the user to check for a duplicate manually.
+describe('unreconciled legacy accounts (Blocker 2: ambiguous legacy reconnect)', () => {
+  it('surfaces an existing provider account that could not be matched by id or stableId this sync, rather than silently ignoring it', () => {
+    const orphanedAccountId = 'connector:enablebanking:orphaned-old-session'
+    const before: AppState = {
+      accounts: [{ id: orphanedAccountId, externalId: 'orphaned-old-session', institutionId: 'SPARKASSE_AACHEN_AACSDE33', name: 'Altes Konto', type: 'checking', balanceCents: 1_000, currency: 'EUR' }],
+      transactions: [],
+      goals: [],
+    }
+    const payload: SyncPayload = {
+      connection: { id: 'c', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected', institutionId: 'SPARKASSE_AACHEN_AACSDE33' },
+      accounts: [{ externalId: 'genuinely-new-session', stableId: 'b'.repeat(64), institutionId: 'SPARKASSE_AACHEN_AACSDE33', name: 'Girokonto', type: 'checking', balanceCents: 5_000, currency: 'EUR' }],
+      transactions: [],
+    }
+    const preview = buildSyncPreview(before, payload)
+    expect(preview.accountsToCreate).toHaveLength(1)
+    expect(preview.unreconciledLegacyAccounts).toHaveLength(1)
+    expect(preview.unreconciledLegacyAccounts[0].id).toBe(orphanedAccountId)
+  })
+
+  it('does not surface an account that this sync itself successfully claimed by exact id or stableId', () => {
+    const accountId = 'connector:enablebanking:acct-1'
+    const before: AppState = {
+      accounts: [{ id: accountId, externalId: 'acct-1', institutionId: 'SPARKASSE_AACHEN_AACSDE33', name: 'Girokonto', type: 'checking', balanceCents: 1_000, currency: 'EUR' }],
+      transactions: [],
+      goals: [],
+    }
+    const payload: SyncPayload = {
+      connection: { id: 'c', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected', institutionId: 'SPARKASSE_AACHEN_AACSDE33' },
+      accounts: [{ externalId: 'acct-1', institutionId: 'SPARKASSE_AACHEN_AACSDE33', name: 'Girokonto', type: 'checking', balanceCents: 1_500, currency: 'EUR' }],
+      transactions: [],
+    }
+    const preview = buildSyncPreview(before, payload)
+    expect(preview.unreconciledLegacyAccounts).toHaveLength(0)
+  })
+
+  // Found by adversarial review (2026-08-27): the id prefix
+  // `connector:${provider}:` only encodes which PROVIDER an account came
+  // from, never which CONNECTION -- a user with two SEPARATE GoCardless
+  // bank connections previously had syncing connection A flag every
+  // untouched account belonging to connection B (a different, still-live
+  // bank) as "unreconciled," purely because they share one provider.
+  it('does not flag an account belonging to a DIFFERENT live connection of the same provider (institutionId differs)', () => {
+    const otherConnectionAccountId = 'connector:gocardless:other-bank-acct'
+    const before: AppState = {
+      accounts: [{ id: otherConnectionAccountId, externalId: 'other-bank-acct', institutionId: 'DEUTSCHE_BANK_DEUTDEFF', name: 'Deutsche Bank Girokonto', type: 'checking', balanceCents: 1_000, currency: 'EUR' }],
+      transactions: [],
+      goals: [],
+    }
+    const payload: SyncPayload = {
+      connection: { id: 'c', provider: 'gocardless', displayName: 'Sparkasse', status: 'connected', institutionId: 'SPARKASSE_AACHEN_AACSDE33' },
+      accounts: [{ externalId: 'sparkasse-acct', stableId: 'b'.repeat(64), institutionId: 'SPARKASSE_AACHEN_AACSDE33', name: 'Sparkasse Girokonto', type: 'checking', balanceCents: 5_000, currency: 'EUR' }],
+      transactions: [],
+    }
+    const preview = buildSyncPreview(before, payload)
+    expect(preview.unreconciledLegacyAccounts).toHaveLength(0)
+  })
+
+  // Found by adversarial review (2026-08-27): a legacy account (or one
+  // whose owning connection the user genuinely disconnected) that lacks
+  // institutionId can never be reliably tied to a specific connection, so
+  // it must never be flagged -- otherwise it would nag on every future
+  // sync of any same-provider connection, forever, with no way to silence
+  // it (Remove account itself requires a stableId this class of account
+  // never has).
+  it('does not flag an account with no institutionId to compare, even if its provider matches', () => {
+    const noInstitutionAccountId = 'connector:enablebanking:no-institution-old-session'
+    const before: AppState = {
+      accounts: [{ id: noInstitutionAccountId, externalId: 'no-institution-old-session', name: 'Altes Konto', type: 'checking', balanceCents: 1_000, currency: 'EUR' }],
+      transactions: [],
+      goals: [],
+    }
+    const payload: SyncPayload = {
+      connection: { id: 'c', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected', institutionId: 'SPARKASSE_AACHEN_AACSDE33' },
+      accounts: [{ externalId: 'genuinely-new-session', stableId: 'b'.repeat(64), institutionId: 'SPARKASSE_AACHEN_AACSDE33', name: 'Girokonto', type: 'checking', balanceCents: 5_000, currency: 'EUR' }],
+      transactions: [],
+    }
+    const preview = buildSyncPreview(before, payload)
+    expect(preview.unreconciledLegacyAccounts).toHaveLength(0)
   })
 })

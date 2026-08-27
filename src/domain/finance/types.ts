@@ -51,13 +51,19 @@ export interface Transaction {
   /**
    * Server-derived identity for the same real economic transaction, keyed
    * under the account's own stableId (never a session/requisition-scoped
-   * account id) plus a provider's bank-assigned transaction reference
-   * (Enable Banking's entry_reference, GoCardless's transactionId).
-   * Undefined when no such reference was available -- id (this record's
-   * own local identity, provider-session-scoped like Account.externalId)
-   * remains the field for ordinary same-session identity/display; this
-   * field exists specifically for reconnect/history reconciliation. See
-   * buildSyncPreview() in src/connectors.ts.
+   * account id) plus a provider's bank-assigned transaction reference.
+   * Currently only populated for Enable Banking, whose entry_reference is
+   * documented as immutable for accounts sharing the same identification
+   * hash (see stableTransactionId()'s doc comment in
+   * server/src/providers.js). GoCardless's equivalent (transactionId /
+   * internalTransactionId) carries no such documented guarantee -- and has
+   * a documented real-world case of changing for an existing account -- so
+   * it is deliberately never populated here for GoCardless transactions.
+   * Undefined when no trustworthy provider reference was available -- id
+   * (this record's own local identity, provider-session-scoped like
+   * Account.externalId) remains the field for ordinary same-session
+   * identity/display; this field exists specifically for reconnect/history
+   * reconciliation. See buildSyncPreview() in src/connectors.ts.
    */
   stableTransactionId?: string
 }
