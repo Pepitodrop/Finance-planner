@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto'
 import { assessBankConnectionHealth, chooseBankSyncBackoff } from './bank-sync-health.js'
 import { CobolBankingCore } from './cobol-banking-core.js'
 import { normalizeSignedAmount } from './cobol-engine.js'
@@ -320,6 +321,85 @@ function tokenIsUsable(token, now = Date.now()) {
   if (!token?.access) return false
   if (!token.accessExpiresAt) return true
   return Date.parse(token.accessExpiresAt) - now >= 120_000
+}
+
+// Found live 2026-08-26/27 (PR #154, seventh Mock ASPSP pass): account
+// identity was keyed only to a provider-session-scoped externalId (Enable
+// Banking's `uid`, valid only while that session is AUTHORIZED), so a
+// reconnect of the same real bank account minted a brand-new Finance
+// Planner account id, and every historical transaction re-imported under
+// it -- doubling balances/totals instead of deduplicating.
+//
+// This derives a deterministic, provider-agnostic stable identity for the
+// same real-world account across separate sessions/consents, from a raw
+// provider-supplied identifier documented as stable across reauthorization
+// (Enable Banking's `identification_hash`, itself already a hash of the
+// account number, never the account number itself; GoCardless's IBAN).
+// Keyed with CONNECTOR_MASTER_KEY -- the same secret this codebase already
+// trusts to encrypt every provider credential -- so the value that ever
+// reaches ExternalAccount.stableId (and, from there, the browser and
+// Finance Planner's own encrypted cloud state) is a fresh HMAC digest, not
+// the provider's own hash and never a raw account number. Returns undefined
+// (never throws) when the raw identifier or the master key is unavailable,
+// so a sync with no trustworthy stable identity for an account degrades to
+// the pre-existing externalId-only identity path rather than fabricating
+// one -- see buildSyncPreview() in src/connectors.ts for the "no unsafe
+// automatic merge without a match" contract this feeds.
+export const STABLE_ACCOUNT_RAW_IDENTIFIER_PATTERN = /^[A-Za-z0-9+/=_-]{1,256}$/
+const STABLE_ACCOUNT_ID_SHAPE = /^[a-f0-9]{64}$/
+
+function hmacDigest(env, message) {
+  const secret = env.CONNECTOR_MASTER_KEY
+  if (typeof secret !== 'string' || secret.length < 32) return undefined
+  return createHmac('sha256', secret).update(message, 'utf8').digest('hex')
+}
+
+export function stableAccountId(env, provider, rawIdentifier) {
+  if (typeof rawIdentifier !== 'string' || !STABLE_ACCOUNT_RAW_IDENTIFIER_PATTERN.test(rawIdentifier)) return undefined
+  return hmacDigest(env, `${provider}:${rawIdentifier}`)
+}
+
+// Found live 2026-08-27 (PR #154, reconnect-dedup follow-up, independent
+// review): the reconnect fix reused transactionFingerprint() (accountId +
+// date + amountCents + description) as its de facto reconnect-dedup key,
+// which can collapse two GENUINELY DIFFERENT same-day/same-amount/same-
+// description transactions (e.g. two identical REWE purchases).
+//
+// Enable Banking's `entry_reference` IS confirmed by Enable Banking's own
+// current FAQ to be exactly this kind of stable identity -- verbatim:
+// "for accounts with the same identification hashes, the value is
+// immutable. Therefore, it can reliably be used to match transactions
+// across different sessions when they refer to the same account at the
+// ASPSP side." (The same FAQ also documents the real caveat that some
+// ASPSPs omit entry_reference entirely, or -- rarely -- return duplicate
+// values incorrectly; the absent case is handled by falling back to
+// conservative multiplicity-preserving import rather than a fuzzy
+// heuristic, see buildSyncPreview() in src/connectors.ts. The rare-
+// incorrect-duplicate case is a data-quality issue in the ASPSP's own
+// system, outside what this codebase can detect or correct.)
+//
+// GoCardless's `transactionId`/`internalTransactionId` carries NO
+// equivalent documented guarantee -- GoCardless's own status-incident
+// history includes at least one case of an `internalTransactionId`
+// changing for an existing bank integration, and their docs only describe
+// the field as "provided by the financial institution," not as immutable
+// or cross-requisition-stable. Per explicit review guidance: do not claim
+// GoCardless reconnect transaction identity is equivalent to Enable
+// Banking's without stronger evidence -- GoCardless transactions are
+// therefore NEVER given a stableTransactionId (see GoCardlessProvider.sync()
+// below, which never calls this function), falling back to the same
+// conservative multiplicity-preserving import as the "no trustworthy
+// identity" case generally.
+//
+// Deliberately a SEPARATE function from stableAccountId() (not reused with
+// a colon-joined composite string) because the composite
+// `${accountStableId}:${reference}` would itself fail
+// STABLE_ACCOUNT_RAW_IDENTIFIER_PATTERN (no ':' in that charset) --
+// accountStableId's shape is validated directly here instead.
+export function stableTransactionId(env, provider, accountStableId, transactionReference) {
+  if (typeof accountStableId !== 'string' || !STABLE_ACCOUNT_ID_SHAPE.test(accountStableId)) return undefined
+  if (typeof transactionReference !== 'string' || !STABLE_ACCOUNT_RAW_IDENTIFIER_PATTERN.test(transactionReference)) return undefined
+  return hmacDigest(env, `${provider}:${accountStableId}:${transactionReference}`)
 }
 
 function completedHealth({ completedAt, consentExpiresAt = null, accounts, transactions }) {
@@ -669,6 +749,19 @@ class GoCardlessProvider extends OpenBankingProvider {
     const accounts = []
     const transactions = []
     const seen = new Set()
+    // Corrected 2026-08-27 (PR #154, adversarial review follow-up to the
+    // third independent review's Blocker 3): identical fix to
+    // EnableBankingProvider.sync()'s occurrenceCounts below -- when
+    // transactionId is absent, a per-call occurrence ordinal is appended to
+    // the synthetic date/amount/description key instead of using that key
+    // directly as a `seen`-Set dedup key. The first pass at this fix only
+    // touched EnableBankingProvider.sync(), leaving GoCardless with the
+    // exact same silent-collapse bug for two real, distinct transactions
+    // sharing a day/amount/description -- and now MORE likely to matter,
+    // since stableTransactionId is never computed for GoCardless at all
+    // (see the doc comment on stableTransactionId's derivation below),
+    // removing the other safety net.
+    const occurrenceCounts = new Map()
     for (const accountId of requisition.accounts ?? []) {
       const txUrl = new URL(`${GC_BASE}/accounts/${accountId}/transactions/`)
       txUrl.searchParams.set('date_from', window.dateFrom)
@@ -682,17 +775,49 @@ class GoCardlessProvider extends OpenBankingProvider {
       const balance = balances.balances?.find((item) => item.balanceAmount?.currency === 'EUR')?.balanceAmount?.amount ?? '0'
       const type = await normalizeProviderAccountType(account, this.env, this.core)
       const balanceCents = await this.core.normalizeProviderAmount(balance)
-      accounts.push({ externalId: accountId, name: account.name || account.product || account.iban || 'Bankkonto', type, balanceCents, currency: 'EUR' })
+      // GoCardless has no separate cross-session matching hash like Enable
+      // Banking's identification_hash, but its account details response
+      // already documents an `iban` field (the same field this line already
+      // used as a display-name fallback) -- stable for the same real
+      // account across a new requisition/agreement. Absent for an account
+      // with no IBAN (e.g. some card products): stableAccountId() returns
+      // undefined in that case, which is the correct fail-conservative
+      // outcome, not an error.
+      const accountStableId = stableAccountId(this.env, 'gocardless', account.iban)
+      accounts.push({ externalId: accountId, name: account.name || account.product || account.iban || 'Bankkonto', type, balanceCents, currency: 'EUR', stableId: accountStableId })
       for (const [pending, rows] of [[false, tx.transactions?.booked ?? []], [true, tx.transactions?.pending ?? []]]) {
         if (!Array.isArray(rows)) throw new Error('GoCardless transaction response is invalid.')
         for (const item of rows) {
           if (item.transactionAmount?.currency !== 'EUR') continue
           const signedCents = await this.core.normalizeProviderAmount(item.transactionAmount.amount)
           await normalizeSignedAmount(signedCents, this.env)
-          const externalId = item.transactionId || `${accountId}:${item.bookingDate || item.valueDate}:${item.transactionAmount.amount}:${item.remittanceInformationUnstructured || ''}`
-          if (seen.has(externalId)) continue
-          seen.add(externalId)
-          transactions.push({ externalId, externalAccountId: accountId, description: item.creditorName || item.debtorName || item.remittanceInformationUnstructured || item.additionalInformation || 'Banktransaktion', amountCents: signedCents, currency: 'EUR', bookingDate: item.bookingDate || item.valueDate || window.dateTo, pending })
+          const baseSyntheticKey = `${accountId}:${item.bookingDate || item.valueDate}:${item.transactionAmount.amount}:${item.remittanceInformationUnstructured || ''}`
+          let externalId
+          if (item.transactionId) {
+            externalId = item.transactionId
+            if (seen.has(externalId)) continue
+            seen.add(externalId)
+          } else {
+            const ordinal = (occurrenceCounts.get(baseSyntheticKey) ?? 0) + 1
+            occurrenceCounts.set(baseSyntheticKey, ordinal)
+            externalId = `${baseSyntheticKey}:${ordinal}`
+          }
+          // stableTransactionId (corrected 2026-08-27, PR #154, independent
+          // review + provider-evidence follow-up): earlier reasoning treated
+          // GoCardless's transactionId as bank-assigned and therefore as
+          // trustworthy as Enable Banking's entry_reference. Verified
+          // evidence contradicts that: GoCardless's own incident history
+          // documents a real case of an account's internalTransactionId
+          // changing ("UNICREDIT_BACXROBU internalTransactionId will
+          // change"), and GoCardless's docs describe the field only as
+          // "provided by the financial institution" with no immutability or
+          // cross-requisition-stability guarantee -- unlike Enable Banking's
+          // FAQ, which explicitly documents entry_reference as immutable for
+          // same-identification_hash accounts. GoCardless transactions
+          // therefore never get a stableTransactionId; reconnect dedup for
+          // GoCardless falls back to the conservative "no trustworthy
+          // identity" path (preserve multiplicity) in buildSyncPreview().
+          transactions.push({ externalId, externalAccountId: accountId, stableTransactionId: undefined, description: item.creditorName || item.debtorName || item.remittanceInformationUnstructured || item.additionalInformation || 'Banktransaktion', amountCents: signedCents, currency: 'EUR', bookingDate: item.bookingDate || item.valueDate || window.dateTo, pending })
         }
       }
     }
@@ -809,6 +934,32 @@ function selectEnableBankingBalance(balances) {
   const preferred = eur.find((item) => item.balance_type === 'CLBD') || eur.find((item) => item.balance_type === 'CLAV') || eur[0]
   return preferred?.balance_amount?.amount ?? '0'
 }
+
+// GET /sessions/{id}'s documented shape (confirmed 2026-08-25 against the
+// current official Enable Banking account-information API reference)
+// carries `accounts` as an array of bare account-id STRINGS -- unlike
+// POST /sessions, whose `accounts` array holds full AccountResource
+// objects. A real Enable Banking Mock ASPSP run found sync() treating the
+// GET /sessions response the same way as the POST one, so `account.uid` on
+// a bare string was always undefined -- producing requests like
+// /accounts/undefined/balances, which the provider correctly rejected with
+// HTTP 422. Enable Banking's real account ids are UUIDs; this allowlist is
+// intentionally narrower than "any non-empty string" so a malformed or
+// provider-corrupted value fails closed here rather than reaching a URL
+// path segment at all.
+const ENABLE_BANKING_ACCOUNT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
+function isValidEnableBankingAccountId(value) {
+  return typeof value === 'string' && ENABLE_BANKING_ACCOUNT_ID_PATTERN.test(value)
+}
+
+// Enable Banking's documented transaction-status enum (current official
+// account-information API reference), used to fail closed on anything
+// outside it rather than guessing -- see the status handling in sync()
+// below. Only BOOK/PDNG map to an ExternalTransaction; the rest
+// (cancelled/held/other/rejected/scheduled) have no correct booked-or-
+// pending mapping in Finance Planner's model and are skipped, never
+// imported as booked.
+const ENABLE_BANKING_KNOWN_TRANSACTION_STATUSES = new Set(['BOOK', 'PDNG', 'CNCL', 'HOLD', 'OTHR', 'RJCT', 'SCHD'])
 
 class EnableBankingProvider extends OpenBankingProvider {
   constructor(env, core) {
@@ -1033,14 +1184,33 @@ class EnableBankingProvider extends OpenBankingProvider {
       body: JSON.stringify({ code }),
     }, policy)
     if (!response?.session_id || !Array.isArray(response.accounts)) throw new Error('Enable Banking did not return a valid session.')
+    // Same bounded safe-charset validation sync() applies to every live
+    // account id it reads from GET /sessions/{id} -- applied here too so
+    // the guarantee is genuinely end-to-end: nothing this codebase ever
+    // persists as an account uid can be malformed, regardless of which
+    // Enable Banking response it originally came from (found by review,
+    // 2026-08-25, while confirming sync()'s own fix closes this fully).
+    for (const account of response.accounts) {
+      if (!isValidEnableBankingAccountId(account?.uid)) throw new Error(`Enable Banking session returned a malformed account id: ${JSON.stringify(account?.uid ?? null)}`)
+    }
     return {
       ...pending,
       sessionId: response.session_id,
+      // identificationHash: Enable Banking's documented identification_hash
+      // (POST /sessions already returns full AccountResource objects,
+      // confirmed against the current official API reference) -- "based on
+      // the account number... can be used for matching accounts between
+      // multiple sessions." Captured raw here (validated/HMAC'd later, only
+      // at the point stableAccountId() actually derives ExternalAccount.
+      // stableId in sync()) so a stored credential always has it available
+      // for a future sync, exactly like uid/name/currency/cashAccountType
+      // already are.
       accounts: response.accounts.map((account) => ({
         uid: account.uid,
         name: account.name,
         currency: account.currency,
         cashAccountType: account.cash_account_type,
+        identificationHash: typeof account.identification_hash === 'string' ? account.identification_hash : undefined,
       })),
       accessValidUntil: response.access?.valid_until || pending.accessValidUntil,
       authorizedAt: new Date().toISOString(),
@@ -1065,43 +1235,147 @@ class EnableBankingProvider extends OpenBankingProvider {
     // this, an account added or removed at the bank after initial connection
     // would never be reflected, and a consent window the provider
     // extended/shortened would silently drift from the locally cached value.
-    // Falls back to the originally-stored values whenever this response
-    // omits either field, so behavior is unchanged if a given Enable Banking
-    // deployment's GET /sessions/{id} doesn't echo them.
-    const liveAccounts = Array.isArray(session?.accounts) && session.accounts.length > 0
-      ? session.accounts.map((account) => ({ uid: account.uid, name: account.name, currency: account.currency, cashAccountType: account.cash_account_type }))
-      : credential.accounts
+    //
+    // Fixed 2026-08-25 (live Mock ASPSP run, provider 422 on the first
+    // sync): GET /sessions/{id}.accounts is documented as an array of bare
+    // account-id STRINGS, not AccountResource objects (POST /sessions
+    // returns those) -- treating a string as {uid,...} always produced
+    // uid: undefined here, which then built /accounts/undefined/... URLs.
+    //
+    // `Array.isArray` alone (not `.length > 0`) gates the fallback to
+    // stored credential.accounts: a deployment that omits `accounts`
+    // entirely from GET /sessions/{id} still falls back to what
+    // completeCallback() originally stored (unchanged prior behavior), but
+    // an explicit empty array is real information -- every account was
+    // removed/revoked at the bank -- and must not resurrect stale stored
+    // accounts as if they were still active.
+    //
+    // For each live account id: reuse the originally-stored AccountResource
+    // metadata (name/currency/cashAccountType) when that id is still
+    // present, since GET /sessions/{id} itself carries no such metadata
+    // fields. An id the live session now exposes that ISN'T in stored
+    // metadata (a genuinely new account) gets its real metadata via the
+    // official GET /accounts/{id}/details endpoint instead of ever being
+    // invented. Any account-id string that doesn't look like a real Enable
+    // Banking account id fails the whole sync closed rather than being
+    // silently skipped or guessed into shape.
+    let liveAccounts
+    if (!Array.isArray(session?.accounts)) {
+      // Re-validated even on this fallback path -- credential.accounts was
+      // already validated once, at completeCallback() time, but re-checking
+      // here means the "no malformed id ever reaches a balances/transactions
+      // URL" guarantee holds regardless of how this credential got onto
+      // disk (e.g. a hand-edited fixture in a dev environment, or a future
+      // storage-layer bug), not only for data that arrived through this
+      // exact code path.
+      for (const account of credential.accounts || []) {
+        if (!isValidEnableBankingAccountId(account?.uid)) throw new Error(`Stored Enable Banking credential has a malformed account id: ${JSON.stringify(account?.uid ?? null)}`)
+      }
+      liveAccounts = credential.accounts
+    } else {
+      const storedByUid = new Map((credential.accounts || []).map((account) => [account.uid, account]))
+      liveAccounts = []
+      for (const accountId of session.accounts) {
+        if (!isValidEnableBankingAccountId(accountId)) {
+          throw new Error(`Enable Banking session returned a malformed account id: ${JSON.stringify(accountId)}`)
+        }
+        const stored = storedByUid.get(accountId)
+        if (stored) { liveAccounts.push(stored); continue }
+        const details = await jsonFetch(`${EB_BASE}/accounts/${encodeURIComponent(accountId)}/details`, { headers: enableBankingHeaders(this.env) }, policy)
+        if (!details?.uid || details.uid !== accountId) {
+          throw new Error(`Enable Banking account details response is invalid for account ${accountId}.`)
+        }
+        liveAccounts.push({ uid: details.uid, name: details.name, currency: details.currency, cashAccountType: details.cash_account_type, identificationHash: typeof details.identification_hash === 'string' ? details.identification_hash : undefined })
+      }
+    }
     const liveConsentExpiresAt = session?.access?.valid_until || consentExpiresAt
+    // The FIRST sync for this connection (no prior successful lastSyncedAt)
+    // uses Enable Banking's documented `strategy=longest` for its initial
+    // transaction fetch -- their own docs recommend it specifically to
+    // avoid a WRONG_TRANSACTIONS_PERIOD rejection and to retrieve the
+    // longest history the ASPSP will return, rather than the short
+    // incremental window meant for routine re-syncs.
+    const isFirstSync = !credential.lastSyncedAt
 
     const window = syncWindow(credential.lastSyncedAt, completedAt, 90)
     const accounts = []
     const transactions = []
     const seen = new Set()
+    // Corrected 2026-08-27 (PR #154, independent review): when
+    // entry_reference is absent, a per-call occurrence ordinal is appended
+    // to the synthetic date/amount/remittance key below instead of using
+    // that key directly as a `seen`-Set dedup key. The prior code silently
+    // dropped every transaction after the first whenever two real,
+    // distinct transactions shared the same account/date/amount/remittance
+    // (e.g. two identical REWE purchases same day) -- collapsing them
+    // server-side before buildSyncPreview() ever saw more than one. The
+    // ordinal is scoped to this single sync() call only and is never
+    // presented as a stable cross-call identity.
+    const occurrenceCounts = new Map()
     for (const account of liveAccounts ?? []) {
       const balances = await jsonFetch(`${EB_BASE}/accounts/${account.uid}/balances`, { headers: enableBankingHeaders(this.env) }, policy)
       if (!Array.isArray(balances?.balances)) throw new Error('Enable Banking balance response is invalid.')
       const balance = selectEnableBankingBalance(balances.balances)
       const type = await normalizeProviderAccountType({ cashAccountType: account.cashAccountType }, this.env, this.core)
       const balanceCents = await this.core.normalizeProviderAmount(balance)
-      accounts.push({ externalId: account.uid, name: account.name || 'Bankkonto', type, balanceCents, currency: 'EUR' })
+      // Computed once per account, reused below for both the account's own
+      // stableId and every one of its transactions' stableTransactionId --
+      // see the doc comment on stableTransactionId's derivation further
+      // down for why this must be the account-level stable identity, never
+      // the session-scoped account.uid.
+      const accountStableId = stableAccountId(this.env, 'enablebanking', account.identificationHash)
+      accounts.push({ externalId: account.uid, name: account.name || 'Bankkonto', type, balanceCents, currency: 'EUR', stableId: accountStableId })
 
-      // continuation_key pagination: date_from/date_to stay identical across
-      // every page (Enable Banking's documented requirement); bounded to
-      // MAX_ENABLEBANKING_PAGES so a provider-controlled continuation_key
-      // can never drive an unbounded loop. An empty page with a
-      // continuation_key still present must still continue -- only the
-      // key's absence ends the loop.
+      // continuation_key pagination: strategy/date parameters stay
+      // identical across every page (Enable Banking's documented
+      // requirement); bounded to MAX_ENABLEBANKING_PAGES so a
+      // provider-controlled continuation_key can never drive an unbounded
+      // loop. An empty page with a continuation_key still present must
+      // still continue -- only the key's absence ends the loop.
       let continuationKey
       let pageCount = 0
       do {
         const txUrl = new URL(`${EB_BASE}/accounts/${account.uid}/transactions`)
-        txUrl.searchParams.set('date_from', window.dateFrom)
-        txUrl.searchParams.set('date_to', window.dateTo)
+        if (isFirstSync) {
+          // strategy=longest: Enable Banking's documented recommendation
+          // for the very first transaction fetch after authorization --
+          // avoids a WRONG_TRANSACTIONS_PERIOD rejection and asks for the
+          // longest history the ASPSP will return. date_from is sent only
+          // as a lower-bound suggestion; longest mode is documented as not
+          // depending on date_to, so it is deliberately omitted here.
+          txUrl.searchParams.set('strategy', 'longest')
+          txUrl.searchParams.set('date_from', window.dateFrom)
+        } else {
+          // Subsequent syncs: normal/default strategy over the existing
+          // incremental date_from/date_to window.
+          txUrl.searchParams.set('date_from', window.dateFrom)
+          txUrl.searchParams.set('date_to', window.dateTo)
+        }
         if (continuationKey) txUrl.searchParams.set('continuation_key', continuationKey)
         const page = await jsonFetch(txUrl, { headers: enableBankingHeaders(this.env) }, policy)
         if (!Array.isArray(page?.transactions)) throw new Error('Enable Banking transaction response is invalid.')
         for (const item of page.transactions) {
           if (item.transaction_amount?.currency !== 'EUR') continue
+          // Found by PR #154 review (2026-08-25): the current official
+          // Enable Banking transaction-status enum has seven values --
+          // BOOK, PDNG, CNCL, HOLD, OTHR, RJCT, SCHD -- but this loop only
+          // ever checked for PDNG, so CNCL/HOLD/OTHR/RJCT/SCHD all silently
+          // became pending: false and were imported as ordinary booked
+          // transactions. Finance Planner's transaction model has no
+          // cancelled/held/scheduled/other category (`ExternalTransaction`
+          // only has a boolean `pending`), so there is no correct mapping
+          // for those five statuses other than not importing them as either
+          // booked or pending -- skipped here, the same way a non-EUR
+          // transaction is skipped above, rather than guessing. Only BOOK
+          // and PDNG ever reach the push below. Fails closed (throws) for
+          // any status outside this documented set, exactly like the
+          // credit_debit_indicator check below -- never silently defaults
+          // an unrecognized value to booked.
+          const status = item.status
+          if (!ENABLE_BANKING_KNOWN_TRANSACTION_STATUSES.has(status)) {
+            throw new Error(`Enable Banking transaction has an unrecognized status: ${JSON.stringify(status ?? null)}`)
+          }
+          if (status !== 'BOOK' && status !== 'PDNG') continue
           // Found during Mock ASPSP sandbox prep (2026-08-22), confirmed
           // against the current official Enable Banking account-information
           // API reference: transaction_amount.amount is an ABSOLUTE value --
@@ -1130,30 +1404,61 @@ class EnableBankingProvider extends OpenBankingProvider {
           // entry_reference is the ASPSP transaction identifier in the
           // current official API -- transaction_id is not part of the
           // documented transaction schema (also found during Mock ASPSP
-          // prep). Namespaced with account.uid: Enable Banking documents
+          // prep) and Enable Banking's own FAQ separately warns
+          // transaction_id specifically should NOT be used as a stable
+          // reference since its value may change on re-retrieval.
+          // Namespaced with account.uid: Enable Banking documents
           // entry_reference as scoped to the account it was issued against,
           // never guaranteed unique across accounts, so two different
           // accounts sharing a value could otherwise silently dedupe each
-          // other's transactions away via the shared `seen` set below. Falls
-          // back to the existing deterministic account/date/amount/
-          // description key (already account-namespaced) when absent.
-          const externalId = item.entry_reference
-            ? `${account.uid}:${item.entry_reference}`
-            : `${account.uid}:${item.booking_date || item.value_date}:${item.transaction_amount.amount}:${(item.remittance_information || []).join(' ')}`
-          if (seen.has(externalId)) continue
-          seen.add(externalId)
+          // other's transactions away via the shared `seen` set below.
+          //
+          // Corrected 2026-08-27 (PR #154, independent review): when
+          // entry_reference is absent, this key is no longer used as a
+          // `seen`-Set dedup key at all -- see occurrenceCounts above the
+          // account loop. entry_reference IS present for most ASPSPs per
+          // Enable Banking's FAQ, so this fallback path is the exception,
+          // not the common case.
+          const baseSyntheticKey = `${account.uid}:${item.booking_date || item.value_date}:${item.transaction_amount.amount}:${(item.remittance_information || []).join(' ')}`
+          let externalId
+          if (item.entry_reference) {
+            externalId = `${account.uid}:${item.entry_reference}`
+            if (seen.has(externalId)) continue
+            seen.add(externalId)
+          } else {
+            const ordinal = (occurrenceCounts.get(baseSyntheticKey) ?? 0) + 1
+            occurrenceCounts.set(baseSyntheticKey, ordinal)
+            externalId = `${baseSyntheticKey}:${ordinal}`
+          }
+          // stableTransactionId (corrected 2026-08-27, PR #154, independent
+          // review): Enable Banking's own FAQ explicitly documents
+          // entry_reference as immutable "for accounts with the same
+          // identification hashes," stating it "can reliably be used to
+          // match transactions across different sessions when they refer to
+          // the same account at the ASPSP side" -- so unlike the
+          // session-scoped externalId above (namespaced with account.uid,
+          // which changes on every reauthorization), a value derived from
+          // entry_reference NAMESPACED BY THE ACCOUNT'S OWN STABLE IDENTITY
+          // is a genuinely documented cross-reconnect identity, not merely
+          // an inferred one. The same FAQ also documents the real caveat
+          // that some ASPSPs omit entry_reference entirely (handled above
+          // by never treating the synthetic fallback key as authoritative)
+          // or, rarely, return duplicate values incorrectly -- a data-
+          // quality issue in the ASPSP's own system this codebase cannot
+          // detect. Only computed when a real entry_reference is present,
+          // never for the synthetic fallback key.
+          const txStableId = stableTransactionId(this.env, 'enablebanking', accountStableId, item.entry_reference)
           transactions.push({
             externalId,
             externalAccountId: account.uid,
+            stableTransactionId: txStableId,
             description: (item.remittance_information || []).join(' ') || 'Banktransaktion',
             amountCents: signedCents,
             currency: 'EUR',
             bookingDate: item.booking_date || item.value_date || item.transaction_date || window.dateTo,
-            // PDNG = pending, BOOK = booked in the current official status
-            // enum -- previously compared against 'PEND', a value this API
-            // does not use, so every transaction was silently treated as
-            // booked (pending: false) regardless of its real status.
-            pending: item.status === 'PDNG',
+            // Only BOOK/PDNG ever reach this push (see the status check
+            // above), so this is now an exhaustive, not a best-effort, check.
+            pending: status === 'PDNG',
           })
         }
         continuationKey = page.continuation_key

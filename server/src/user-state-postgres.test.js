@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 import { createDatabase, migrateDatabase } from './database.js'
-import { PostgresUserStateStore, StateVersionConflictError } from './user-state-store.js'
+import { PostgresUserStateStore, StateVersionConflictError, validateCloudPayload } from './user-state-store.js'
 
 const databaseUrl = process.env.TEST_DATABASE_URL
 const secret = 'postgres-state-test-master-key-with-enough-length-123'
@@ -25,7 +25,11 @@ test('PostgreSQL stores and versions an encrypted per-user finance vault', { ski
 
     const created = await store.save(userId, payload, 0)
     assert.equal(created.version, 1)
-    assert.deepEqual((await store.get(userId)).payload, payload)
+    // save() round-trips through validateCloudPayload(), which normalizes
+    // the stored shape (e.g. defaulting an absent `subscriptions` to `[]`
+    // as of 2026-08-26) -- compare against that same normalization rather
+    // than the raw input literal.
+    assert.deepEqual((await store.get(userId)).payload, validateCloudPayload(payload))
 
     await assert.rejects(() => store.save(userId, payload, 0), StateVersionConflictError)
     const updated = await store.save(userId, { ...payload, state: { ...payload.state, goals: [] } }, 1)

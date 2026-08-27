@@ -122,6 +122,48 @@ test('truncates an oversized provider error message before attaching it, and nev
   }
 })
 
+// Found by adversarial review (2026-08-27, PR #154): the third independent
+// review's Blocker 3 occurrence-ordinal fix (see the doc comment on
+// occurrenceCounts in EnableBankingProvider.sync()) was applied to Enable
+// Banking but NOT to GoCardlessProvider.sync(), which had the identical
+// bug -- its `seen`-Set dedup used the same synthetic
+// account/date/amount/description key when transactionId was absent,
+// silently collapsing two genuinely distinct transactions server-side. Now
+// more likely to matter than before this diff, since stableTransactionId is
+// never computed for GoCardless transactions at all (no safety net left).
+test('GoCardless: two transactions with no transactionId, identical date/amount/description -- both survive, never silently collapsed', async () => {
+  const originalFetch = globalThis.fetch
+  const core = {
+    ...fakeBankingCore(),
+    async normalizeProviderAmount(value) {
+      const values = { '0.00': 0, '20.00': 2_000 }
+      if (!(String(value) in values)) throw new Error(`Unexpected test amount: ${value}`)
+      return values[String(value)]
+    },
+  }
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.includes('/requisitions/')) return new Response(JSON.stringify({ status: 'LN', accounts: ['account-1'] }), { status: 200 })
+    if (url.includes('/details/')) return new Response(JSON.stringify({ account: { iban: 'DE00000000000000000000', name: 'Girokonto' } }), { status: 200 })
+    if (url.includes('/balances/')) return new Response(JSON.stringify({ balances: [{ balanceAmount: { currency: 'EUR', amount: '0.00' } }] }), { status: 200 })
+    if (url.includes('/transactions/')) return new Response(JSON.stringify({ transactions: { booked: [
+      { transactionAmount: { currency: 'EUR', amount: '20.00' }, bookingDate: '2026-08-03', remittanceInformationUnstructured: 'REWE' },
+      { transactionAmount: { currency: 'EUR', amount: '20.00' }, bookingDate: '2026-08-03', remittanceInformationUnstructured: 'REWE' },
+    ], pending: [] } }), { status: 200 })
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+
+  try {
+    const result = await syncGoCardless({ requisitionId: 'req-1', token: { access: 'token' } }, { PROVIDER_RETRIES: '0', ALLOW_JS_FINANCE_FALLBACK: 'true', NODE_ENV: 'test' }, core)
+    assert.equal(result.transactions.length, 2)
+    const externalIds = result.transactions.map((transaction) => transaction.externalId)
+    assert.equal(new Set(externalIds).size, 2, 'both rows must survive with distinct externalIds, never silently collapsed into one')
+    assert.ok(result.transactions.every((transaction) => transaction.stableTransactionId === undefined), 'GoCardless transactions never carry a stableTransactionId -- see the doc comment in providers.js')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('rejects expired or revoked GoCardless consent through COBOL policy before account synchronization', async () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = async () => new Response(JSON.stringify({ status: 'EX', accounts: ['account-1'] }), { status: 200 })

@@ -92,30 +92,19 @@ test('the provider callback route redirects every failure back into the app inst
   assert.ok(missingClaims > catchBlock)
   assert.match(callbackRoute.slice(missingClaims, missingClaims + 200), /redirectWithError\(origin\)/)
 
-  const consumeCall = callbackRoute.indexOf('await store.consumePendingConnectionSetup(')
-  const pendingFailure = callbackRoute.indexOf('if (!pending)')
-  assert.ok(consumeCall > missingClaims && pendingFailure > consumeCall)
+  const completeCall = callbackRoute.indexOf('await completeConnectorCallback(')
+  const completeCatch = callbackRoute.indexOf('} catch {', completeCall)
+  assert.ok(completeCall > missingClaims && completeCatch > completeCall)
   // Once state HAS been cryptographically verified, its redirectUri is
-  // trusted -- this and every failure branch after this point uses it.
-  assert.match(callbackRoute.slice(pendingFailure, pendingFailure + 200), /redirectWithError\(state\.redirectUri\)/)
-})
-
-test('the provider callback route redirects instead of throwing raw JSON when consumePendingConnectionSetup itself fails (not just returns null)', () => {
-  const callbackStart = serverSource.indexOf("if (request.method === 'GET' && url.pathname === '/api/connectors/callback')")
-  const callbackRoute = serverSource.slice(
-    callbackStart,
-    serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
-  )
-  // A DB error or a corrupted pending_payload throws out of
-  // store.consumePendingConnectionSetup() itself, distinct from it resolving
-  // null. That throw must still be caught and redirected -- state.redirectUri
-  // is already verified by this point -- not left to propagate to the
-  // top-level handler's raw-JSON error response.
-  const consumeTry = callbackRoute.indexOf('try {\n        pending = await store.consumePendingConnectionSetup(')
-  assert.ok(consumeTry >= 0, 'the consumePendingConnectionSetup call must be inside its own try block')
-  const consumeCatch = callbackRoute.indexOf('} catch {', consumeTry)
-  assert.ok(consumeCatch > consumeTry)
-  assert.match(callbackRoute.slice(consumeCatch, consumeCatch + 200), /redirectWithError\(state\.redirectUri\)/)
+  // trusted -- a thrown completion (a DB error, a corrupted pending_payload,
+  // anything completeConnectorCallback() itself doesn't catch) redirects
+  // with it rather than propagating to the raw-JSON error handler. The
+  // exactly-once-claim / concurrent-duplicate-safe logic that used to be
+  // inline here (nonce consumption, replay detection) now lives entirely
+  // inside completeConnectorCallback() -- see provider-callback.test.js for
+  // its own direct behavioral coverage of that algorithm, including the
+  // concurrent-duplicate race this whole extraction exists to fix.
+  assert.match(callbackRoute.slice(completeCatch, completeCatch + 200), /redirectWithError\(state\.redirectUri\)/)
 })
 
 test('the provider callback route never reads a client-supplied ?provider= query parameter -- the source no longer contains that pattern at all', () => {
@@ -127,42 +116,33 @@ test('the provider callback route never reads a client-supplied ?provider= query
   assert.doesNotMatch(callbackRoute, /searchParams\.get\('provider'\)/, 'provider must be derived from the verified state, never trusted from an unauthenticated query parameter (fixed 2026-08-21 after a live REDIRECT_URI_NOT_ALLOWED rejection)')
 })
 
-test('the provider callback route runs completeCallback() only after the nonce has been consumed, and redirects on failure without exposing raw JSON', () => {
+// Fixed 2026-08-25 (live concurrent-duplicate-callback race, Mock ASPSP run
+// against PR #154): the nonce-claim / completeCallback() / finalizeConnection
+// sequencing this pair of tests used to check via source-text position now
+// lives entirely inside provider-callback.js's completeConnectorCallback(),
+// extracted specifically so it could be exercised with real execution
+// (mocked store/providerAdapter, real call-order assertions, a real
+// concurrent-duplicate race) instead of only source-text offsets -- see
+// server/test/provider-callback.test.js for that direct coverage, including
+// the exact race this fixes: two concurrent deliveries of the same signed
+// attempt, one paused mid-completeCallback(), must still result in exactly
+// one provider code exchange, exactly one finalizeConnection() call, and
+// both callbacks resolving to the same success outcome. What remains
+// checkable at the server.js boundary is only that server.js itself no
+// longer inlines any of that logic (a regression guard against someone
+// re-inlining it insecurely later) and that its result is always turned into
+// a redirect -- covered by the test above and by
+// provider-callback-boundary.test.js.
+test('the provider callback route no longer inlines nonce-claim/completeCallback/finalizeConnection sequencing directly -- that now lives in completeConnectorCallback()', () => {
   const callbackStart = serverSource.indexOf("if (request.method === 'GET' && url.pathname === '/api/connectors/callback')")
   const callbackRoute = serverSource.slice(
     callbackStart,
     serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
   )
-  const pendingFailure = callbackRoute.indexOf('if (!pending)')
-  const completeCallbackCall = callbackRoute.indexOf('providerAdapter(provider).completeCallback(')
-  assert.ok(completeCallbackCall > pendingFailure, 'completeCallback() must only run after the pending setup has been consumed')
-  assert.match(callbackRoute.slice(completeCallbackCall, completeCallbackCall + 200), /code: url\.searchParams\.get\('code'\), pending/)
-
-  const completeCatch = callbackRoute.indexOf('} catch (error) {', completeCallbackCall)
-  assert.ok(completeCatch > completeCallbackCall)
-  const completeCatchBody = callbackRoute.slice(completeCatch, completeCatch + 800)
-  // Distinguishes the provider denying authorization (an honest, distinct
-  // error code) from every other completeCallback() failure (the generic
-  // copy) -- but never reflects the raw provider/error text itself.
-  assert.match(completeCatchBody, /error\?\.code === 'authorization_denied' \? 'access_denied' : 'invalid_state'/)
-  assert.match(completeCatchBody, /redirectWithError\(state\.redirectUri,/)
-})
-
-test('the provider callback route never activates a connection until finalizeConnection succeeds, and redirects (not raw JSON) if it fails', () => {
-  const callbackStart = serverSource.indexOf("if (request.method === 'GET' && url.pathname === '/api/connectors/callback')")
-  const callbackRoute = serverSource.slice(
-    callbackStart,
-    serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
-  )
-  const completeCallbackCall = callbackRoute.indexOf('providerAdapter(provider).completeCallback(')
-  const finalizeCall = callbackRoute.indexOf('await store.finalizeConnection(')
-  assert.ok(finalizeCall > completeCallbackCall, 'finalizeConnection must only run after completeCallback() has succeeded')
-  const finalizeCatch = callbackRoute.indexOf('} catch {', finalizeCall)
-  assert.ok(finalizeCatch > finalizeCall)
-  assert.match(callbackRoute.slice(finalizeCatch, finalizeCatch + 800), /redirectWithError\(state\.redirectUri\)/)
-  // The success redirect must come strictly after finalizeConnection, never before it.
-  const successRedirect = callbackRoute.indexOf('const success = new URL(state.redirectUri)')
-  assert.ok(successRedirect > finalizeCall)
+  assert.doesNotMatch(callbackRoute, /providerAdapter\(provider\)\.completeCallback\(/, 'completeCallback() must be invoked from inside completeConnectorCallback(), never directly from the route handler')
+  assert.doesNotMatch(callbackRoute, /store\.finalizeConnection\(/, 'finalizeConnection() must be invoked from inside completeConnectorCallback(), never directly from the route handler')
+  assert.doesNotMatch(callbackRoute, /store\.(?:consume|claim)PendingConnectionSetup\(/, 'nonce claiming must happen inside completeConnectorCallback(), never directly from the route handler')
+  assert.match(callbackRoute, /await completeConnectorCallback\(/)
 })
 
 test('the provider callback route never reflects a caller-controlled value into the failure redirect copy, for any error code', () => {
@@ -189,8 +169,9 @@ test('the provider callback route appends ?provider= to the success redirect so 
     callbackStart,
     serverSource.indexOf("send(response, 404, { error: { code: 'not_found'", callbackStart),
   )
-  const finalizeCall = callbackRoute.indexOf('await store.finalizeConnection(')
-  const successBlock = callbackRoute.slice(finalizeCall)
+  const completeCall = callbackRoute.indexOf('await completeConnectorCallback(')
+  const successBlock = callbackRoute.slice(completeCall)
+  assert.match(successBlock, /completed\.outcome === 'error'/, 'the error branch must be checked before ever building the success redirect')
   assert.match(successBlock, /const success = new URL\(state\.redirectUri\)/)
   assert.match(successBlock, /success\.searchParams\.set\('provider', provider\)/)
   assert.match(successBlock, /Location: success\.toString\(\)/)
@@ -309,4 +290,142 @@ test('core readiness is independent from optional bank capability readiness', ()
   assert.doesNotMatch(readinessRoute, /capabilities\.ready/)
   assert.doesNotMatch(readinessRoute, /capabilities\.production/)
   assert.match(serverSource, /capabilities\.ready \? 200 : 503/)
+})
+
+// Regression guard for the "connection disappears on ConnectionsPage
+// remount" defect (2026-08-27, PR #154, seventh Mock ASPSP pass): a fresh
+// mount had no way to list an already-persisted connector connection
+// without triggering a real provider synchronization.
+test('the stored-connections overview endpoint authenticates before reading any stored connection, and never triggers a provider sync', () => {
+  const route = serverSource.slice(
+    serverSource.indexOf("url.pathname === '/api/connectors/connections'"),
+    serverSource.indexOf('const exclusionMatch'),
+  )
+  assert.ok(route.length > 0, 'the /api/connectors/connections route was not found')
+  const authentication = route.indexOf('const user = userId(request)')
+  const listCall = route.indexOf('listStoredConnections(user)')
+  assert.ok(authentication >= 0 && listCall >= 0)
+  assert.ok(authentication < listCall, 'must authenticate before listing stored connections')
+  assert.doesNotMatch(route, /adapter\.sync\(/, 'listing existing connections must never trigger a provider synchronization')
+})
+
+test('listStoredConnections() is built from the same connection() summary buildSyncPayload() uses -- id/provider/displayName/status/lastSyncAt/consentExpiresAt/institutionId/error only, never a raw stored credential', () => {
+  const helper = serverSource.slice(
+    serverSource.indexOf('async function listStoredConnections(user)'),
+    serverSource.indexOf('async function start(provider, request, response)'),
+  )
+  assert.match(helper, /connection\(provider, stored\)/, 'must reuse the vetted connection() summary helper')
+  assert.doesNotMatch(helper, /\.\.\.stored\b/, 'must never spread the raw stored credential into the response')
+})
+
+// Regression guard for Dashboard's "Remove account" -> excludeProviderAccount()
+// (2026-08-27, PR #154): the exclusion endpoint mutates a stored, encrypted
+// connector credential, so it must authenticate/authorize and validate its
+// input the same way every other connector-scoped route does.
+test('the account-exclusion endpoint authenticates, authorizes, requires an existing stored connection, and validates the stable-account-id shape before ever writing to the store', () => {
+  const route = serverSource.slice(
+    serverSource.indexOf('const exclusionMatch = url.pathname.match'),
+    serverSource.indexOf('// Restore ("un-remove")'),
+  )
+  assert.ok(route.length > 0, 'the /api/connectors/:provider/exclusions POST route was not found')
+  const authentication = route.indexOf('const user = userId(request)')
+  const authorization = route.indexOf('authorizeProviderUser(adapter, user, env)')
+  const storedLookup = route.indexOf('const stored = await store.get(user, provider)')
+  const notConnectedGuard = route.indexOf("throw new HttpError(404, 'connector_not_connected'")
+  const shapeValidation = route.indexOf('isValidStableAccountId(stableAccountId)')
+  const write = route.indexOf('await store.addAccountExclusion(user, provider,')
+  assert.ok([authentication, authorization, storedLookup, notConnectedGuard, shapeValidation, write].every((index) => index >= 0))
+  assert.ok(authentication < authorization, 'must authenticate before authorizing')
+  assert.ok(authorization < storedLookup, 'must authorize before reading the stored connection')
+  assert.ok(storedLookup < notConnectedGuard, 'must fail closed when no connection is stored for this provider')
+  assert.ok(notConnectedGuard < shapeValidation, 'must confirm a connection exists before validating the request body')
+  assert.ok(shapeValidation < write, 'must validate the stable-account-id shape before ever writing to the store')
+  // Regression guard for BLOCKER 1 (2026-08-27, independent review): the
+  // write must go through the durable, connection-independent
+  // addAccountExclusion() store method (migration 011's
+  // connector_account_exclusions table / EncryptedStore's own
+  // accountExclusions), never a read-modify-write on this credential row
+  // via store.set() -- that was the exact design that lost every exclusion
+  // on disconnect/reconnect.
+  assert.doesNotMatch(route, /store\.set\(user, provider,\s*\{\s*\.\.\.stored/, 'must never persist exclusions via a read-modify-write on the connector credential')
+})
+
+// Regression guard for the Restore ("un-remove") UX (2026-08-27, PR #154):
+// removing a stable provider account must not be an irreversible hidden
+// tombstone. Restore deliberately does not require re-authorizing a full
+// sync -- it only deletes the durable exclusion record.
+test('the account-restore endpoint authenticates and authorizes before deleting the exclusion, and never requires an active connector connection', () => {
+  const route = serverSource.slice(
+    serverSource.indexOf('const restoreMatch = url.pathname.match'),
+    serverSource.indexOf('const institutionsMatch = url.pathname.match'),
+  )
+  assert.ok(route.length > 0, 'the /api/connectors/:provider/exclusions/:stableAccountId DELETE route was not found')
+  assert.match(route, /request\.method === 'DELETE'/)
+  const authentication = route.indexOf('const user = userId(request)')
+  const authorization = route.indexOf('authorizeProviderUser(adapter, user, env)')
+  const removal = route.indexOf('await store.removeAccountExclusion(user, provider, stableAccountId)')
+  assert.ok([authentication, authorization, removal].every((index) => index >= 0))
+  assert.ok(authentication < authorization && authorization < removal, 'must authenticate, then authorize, then delete the exclusion -- in that order')
+  assert.doesNotMatch(route, /store\.get\(user, provider\)/, 'restore must not require an existing stored connector connection')
+})
+
+// Regression guard for the Restore UX's data source: the Connections page
+// must be able to show excluded accounts without a second round trip or a
+// new secret-exposure surface.
+test('listStoredConnections() attaches excludedAccounts from the same durable store, never from the connector credential', () => {
+  const helper = serverSource.slice(
+    serverSource.indexOf('async function listStoredConnections(user)'),
+    serverSource.indexOf('async function start(provider, request, response)'),
+  )
+  assert.match(helper, /store\.listAccountExclusions\(user, provider\)/)
+  assert.match(helper, /excludedAccounts/)
+})
+
+// Regression guard for the "Restore list disappears after every sync"
+// defect found by a second adversarial-review pass (2026-08-27, same day):
+// ConnectionsPage.tsx's synchronize() unconditionally replaces its whole
+// `connections` array with buildSyncPayload()'s response -- so unless every
+// connection object THAT FUNCTION returns carries excludedAccounts too
+// (not only listStoredConnections()'s mount-only overview), the
+// Connections page's "Removed accounts / Restore" section would silently
+// vanish immediately after any sync, even though the exclusion itself
+// stayed fully enforced server-side. Both the success and the per-provider
+// failure branch must carry it.
+test('buildSyncPayload() attaches excludedAccounts to every connection object it returns, on both the success and failure branch', () => {
+  const helper = serverSource.slice(
+    serverSource.indexOf('async function buildSyncPayload(user)'),
+    serverSource.indexOf('function syncIdempotencyKey'),
+  )
+  const exclusionsFetch = helper.indexOf('const excludedAccounts = await store.listAccountExclusions(user, provider)')
+  const tryBlockStart = helper.indexOf('try {')
+  const successPush = helper.indexOf('results.push({ connection: { ...connection(provider, stored), lastSyncAt, consentExpiresAt: synced.consentExpiresAt, excludedAccounts }')
+  const failurePush = helper.indexOf('results.push({ connection: { ...connection(provider, stored, error instanceof Error ? error.message : \'Synchronization failed.\'), excludedAccounts }')
+  assert.ok(exclusionsFetch >= 0 && successPush >= 0 && failurePush >= 0, 'excludedAccounts must be attached on both the success and failure branch')
+  assert.ok(exclusionsFetch < tryBlockStart, 'excludedAccounts must be fetched outside (before) the try block, so it is available to both branches')
+})
+
+// Found by independent review (2026-08-27, PR #154, fourth review round):
+// neither provider adapter sets institutionId on the accounts it returns,
+// so a real bank import always produced Account.institutionId ===
+// undefined. buildSyncPayload() must enrich the accounts it forwards to
+// the browser with the STORED (server-validated at connection time)
+// institutionId -- never a browser-supplied value read at sync time, which
+// an attacker could otherwise use to suppress a legitimate
+// unreconciledLegacyAccounts ambiguity warning. See withConnectionInstitutionId()
+// in account-exclusions.js for the actual, directly-unit-tested mapping
+// this line calls.
+test('buildSyncPayload() enriches every returned account with the STORED connection institutionId, never a browser-supplied one', () => {
+  const helper = serverSource.slice(
+    serverSource.indexOf('async function buildSyncPayload(user)'),
+    serverSource.indexOf('function syncIdempotencyKey'),
+  )
+  // buildSyncPayload(user) deliberately takes ONLY the authenticated user
+  // id, never the raw HTTP request object -- so there is structurally no
+  // `request` in scope here for institutionId (or anything else) to be
+  // read from. This is what the exact match below actually proves: the
+  // slice this test operates on begins at the literal text
+  // `async function buildSyncPayload(user)`, so a signature accepting a
+  // `request` parameter would already make that anchor -- and therefore
+  // this whole test -- fail to find the right boundary.
+  assert.match(helper, /withConnectionInstitutionId\(filtered\.accounts, stored\.institutionId\)/, 'accounts must be enriched from the already-authorized stored connection, not any per-sync-request input')
 })

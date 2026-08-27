@@ -251,7 +251,12 @@ test('exchanges a valid authorization code for a session exactly once and merges
   assert.equal(completed.sessionId, 'session-1')
   assert.equal(completed.aspspName, 'ING-DiBa', 'pending fields are preserved')
   assert.equal(completed.accessValidUntil, '2027-06-01T00:00:00.000000+00:00')
-  assert.deepEqual(completed.accounts, [{ uid: 'acct-1', name: 'Girokonto', currency: 'EUR', cashAccountType: 'CACC' }])
+  // identificationHash: captured from the response's identification_hash
+  // (2026-08-27, PR #154 reconnect-dedup fix) -- stableAccountId() in
+  // providers.js later HMACs this into ExternalAccount.stableId at sync()
+  // time; completeCallback() itself just needs to preserve it through to
+  // the stored credential.
+  assert.deepEqual(completed.accounts, [{ uid: 'acct-1', name: 'Girokonto', currency: 'EUR', cashAccountType: 'CACC', identificationHash: 'h' }])
   assert.ok(completed.authorizedAt)
   assert.ok(!('code' in completed), 'the authorization code must never be persisted')
 }))
@@ -306,4 +311,15 @@ test('a malformed session response (accounts not an array) throws', () => withRe
   const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
 
   await assert.rejects(adapter.completeCallback({ code: 'x', pending: PENDING }), /valid session/)
+}))
+
+// Same bounded safe-charset validation sync() applies to every account id
+// it later reads back from GET /sessions/{id} -- checked here too so the
+// guarantee holds end-to-end regardless of which Enable Banking response an
+// account id originally arrived through (review finding, 2026-08-25).
+test('a malformed account uid in the POST /sessions response fails closed, never persisted', () => withRestoredFetch(async () => {
+  globalThis.fetch = async () => new Response(JSON.stringify({ session_id: 's', accounts: [{ uid: 'has a space and $ymbol', name: 'Girokonto', currency: 'EUR', cash_account_type: 'CACC' }] }), { status: 200 })
+  const adapter = createOpenBankingProviderRegistry(eligibleEnv(), fakeBankingCore()).get('enablebanking')
+
+  await assert.rejects(adapter.completeCallback({ code: 'x', pending: PENDING }), /malformed account id/)
 }))

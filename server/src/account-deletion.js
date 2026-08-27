@@ -31,6 +31,7 @@ export async function deleteAccountData({ userId, persistence, store, sessionRev
       persistence: 'file',
       deleted: {
         connectorConnections: deleted.connectorConnections || 0,
+        accountExclusions: deleted.accountExclusions || 0,
         oauthNonces: deleted.oauthNonces || 0,
         financeState: 0,
         learningProfiles: 0,
@@ -42,6 +43,7 @@ export async function deleteAccountData({ userId, persistence, store, sessionRev
   try {
     await client.query('BEGIN')
     const connectorConnections = await client.query('DELETE FROM connector_connections WHERE user_id=$1', [normalizedUserId])
+    const accountExclusions = await client.query('DELETE FROM connector_account_exclusions WHERE user_id=$1', [normalizedUserId])
     const oauthNonces = await client.query('DELETE FROM oauth_nonces WHERE user_id=$1', [normalizedUserId])
     const financeState = await client.query('DELETE FROM user_finance_state WHERE user_id=$1', [normalizedUserId])
     const learningProfiles = await client.query('DELETE FROM user_budget_learning_profiles WHERE user_id=$1', [normalizedUserId])
@@ -52,6 +54,7 @@ export async function deleteAccountData({ userId, persistence, store, sessionRev
       persistence: 'postgres',
       deleted: {
         connectorConnections: connectorConnections.rowCount || 0,
+        accountExclusions: accountExclusions.rowCount || 0,
         oauthNonces: oauthNonces.rowCount || 0,
         financeState: financeState.rowCount || 0,
         learningProfiles: learningProfiles.rowCount || 0,

@@ -1,7 +1,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import type { ProviderDescriptor, ProviderInstitution } from '../../connectors'
+import type { ConnectorConnection, ProviderDescriptor, ProviderInstitution } from '../../connectors'
 import type { AppState } from '../../types'
 import { ConnectionsPage } from './ConnectionsPage'
 
@@ -34,6 +35,12 @@ vi.mock('../../connectors', async (importOriginal) => {
     disconnectConnector: vi.fn(async () => ({ disconnected: true, providerRevoked: true, providerRevokeReason: 'confirmed' as const })),
     fetchProviderStatus: vi.fn(async () => DEFAULT_PROVIDER_STATUS),
     fetchProviderInstitutions: vi.fn(async (): Promise<ProviderInstitution[]> => []),
+    // No stored connections by default -- tests covering the persisted-
+    // connection-survives-remount contract (defect: connection disappears
+    // on navigation) override this per-test.
+    fetchStoredConnections: vi.fn(async () => []),
+    excludeProviderAccount: vi.fn(async () => undefined),
+    restoreProviderAccount: vi.fn(async () => undefined),
   }
 })
 
@@ -55,7 +62,7 @@ vi.mock('../../manualCreditCard', async (importOriginal) => {
   }
 })
 
-import { disconnectConnector, fetchProviderInstitutions, fetchProviderStatus, startConnector, synchronizeConnections } from '../../connectors'
+import { disconnectConnector, fetchProviderInstitutions, fetchProviderStatus, fetchStoredConnections, restoreProviderAccount, startConnector, synchronizeConnections } from '../../connectors'
 
 const baseState: AppState = { accounts: [], transactions: [], goals: [] }
 
@@ -658,6 +665,130 @@ describe('redirect confirmation', () => {
   })
 })
 
+describe('provider authorization popup (fixed 2026-08-25: a successful popup launch is not the same as a same-tab redirect)', () => {
+  function fakePopupAttempt(overrides: Partial<{ closed: boolean }> = {}) {
+    const close = vi.fn()
+    const popup = { closed: overrides.closed ?? false, close } as unknown as Window
+    return { attempt: { attemptId: 'popup-attempt-1234567890', provider: 'paypal' as const, createdAt: Date.now(), popup }, close }
+  }
+
+  it('does not leave the modal permanently busy -- clears busy and shows an explicit calm waiting state', async () => {
+    const { attempt } = fakePopupAttempt()
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'popup', attempt })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue with owner connection' }))
+
+    expect(await screen.findByRole('heading', { name: 'Continue in the secure window' })).toBeInTheDocument()
+    expect(screen.getByText(/Bank authorization opened in a secure window/)).toBeInTheDocument()
+    // The Cancel action must be reachable -- it would be disabled/unreachable
+    // if `busy` had incorrectly stayed true, exactly the bug this fixes.
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled()
+  })
+
+  // Regression for the COOP/popup.closed finding (PR #154 review,
+  // 2026-08-25): Finance Planner sends `Cross-Origin-Opener-Policy:
+  // same-origin`, which severs this tab's WindowProxy reference to the
+  // popup once it navigates cross-origin to the real provider -- `.closed`
+  // can then read `true` even though the authorization window is genuinely
+  // still open. There must be no polling left that reacts to this at all:
+  // the waiting UI stays exactly as-is even when the handle already reports
+  // closed:true from the very start (the worst case -- a fully "severed"
+  // handle) and stays that way well past the old 500ms poll interval.
+  it('never shows a false "Secure window closed" state, even when the popup handle already reads closed:true (a COOP-severed handle)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const { attempt } = fakePopupAttempt({ closed: true })
+      vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'popup', attempt })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      renderConnections()
+      await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+      await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
+      await user.click(screen.getByRole('button', { name: 'Continue with owner connection' }))
+      await screen.findByRole('heading', { name: 'Continue in the secure window' })
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+
+      expect(screen.getByRole('heading', { name: 'Continue in the secure window' })).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Secure window closed' })).not.toBeInTheDocument()
+      expect(screen.queryByText(/secure window was closed/)).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('"Try again" is always available as a manual action (never gated on any auto-detected close) and abandons the current popup before starting a fresh one', async () => {
+    const first = fakePopupAttempt()
+    const second = fakePopupAttempt()
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'popup', attempt: first.attempt }).mockResolvedValueOnce({ mode: 'popup', attempt: second.attempt })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue with owner connection' }))
+    await screen.findByRole('heading', { name: 'Continue in the secure window' })
+
+    // Available immediately -- not conditional on any closed-detection.
+    await user.click(screen.getByRole('button', { name: 'Try again' }))
+
+    // The first (possibly still-live) popup must be closed before a second
+    // one opens, so a user who retries can never end up with two concurrent
+    // authorization attempts for the same connection.
+    expect(first.close).toHaveBeenCalled()
+    expect(startConnector).toHaveBeenCalledTimes(2)
+    expect(await screen.findByRole('heading', { name: 'Continue in the secure window' })).toBeInTheDocument()
+  })
+
+  it('Cancel while waiting closes the real popup window, not just the React state', async () => {
+    const { attempt, close } = fakePopupAttempt()
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'popup', attempt })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue with owner connection' }))
+    await screen.findByRole('heading', { name: 'Continue in the secure window' })
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(close).toHaveBeenCalled()
+  })
+
+  it('the Back arrow collapses one level (closing the real popup) rather than leaving Step 3 entirely', async () => {
+    const { attempt, close } = fakePopupAttempt()
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'popup', attempt })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue with owner connection' }))
+    await screen.findByRole('heading', { name: 'Continue in the secure window' })
+
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+
+    expect(close).toHaveBeenCalled()
+    expect(screen.queryByRole('heading', { name: 'Continue in the secure window' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Continue with the owner PayPal connection' })).toBeInTheDocument()
+  })
+
+  it('closing and reopening the setup dialog abandons any still-open popup from a previous attempt', async () => {
+    const { attempt, close } = fakePopupAttempt()
+    vi.mocked(startConnector).mockResolvedValueOnce({ mode: 'popup', attempt })
+    const user = userEvent.setup()
+    renderConnections()
+    await user.click(screen.getByRole('button', { name: 'Connect an account' }))
+    await user.click(screen.getByRole('button', { name: /^PayPal$/ }))
+    await user.click(screen.getByRole('button', { name: 'Continue with owner connection' }))
+    await screen.findByRole('heading', { name: 'Continue in the secure window' })
+
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+
+    expect(close).toHaveBeenCalled()
+  })
+})
+
 describe('Enable Banking Auth Flow widget', () => {
   it('1. stays on the setup modal and shows the secure-authorization loading state instead of navigating away when a valid embedded-auth descriptor is returned', async () => {
     vi.mocked(fetchProviderStatus).mockResolvedValueOnce(DEFAULT_PROVIDER_STATUS.map((provider) => (provider.id === 'enablebanking' ? { ...provider, available: true, configured: true } : provider)))
@@ -1069,6 +1200,153 @@ describe('synchronization preview and account selection', () => {
     expect(onApply).toHaveBeenCalledTimes(2)
     expect(onApply.mock.calls[1][0]).toEqual(baseState)
   })
+
+  // Design review, 2026-08-27: a reconnect's stableId-matched account
+  // reconciliation (see buildSyncPreview() in connectors.ts) is safe but
+  // silent -- without a visible cue, a user reconnecting a bank sees their
+  // own existing account re-listed with no way to tell it isn't a
+  // duplicate. The sync-selection screen now labels a reconnect-matched row
+  // distinctly from a genuinely new account.
+  it('labels a reconnect-matched account distinctly from a genuinely new one, so the reconciliation is never a silent surprise', async () => {
+    window.history.pushState({}, '', '/?provider=enablebanking')
+    const existingAccountId = 'connector:enablebanking:old-session-uid'
+    const stateWithExistingAccount: AppState = {
+      accounts: [{ id: existingAccountId, externalId: 'old-session-uid', stableId: 'a'.repeat(64), name: 'Girokonto', type: 'checking', balanceCents: 100_000, currency: 'EUR' }],
+      transactions: [],
+      goals: [],
+    }
+    ;(synchronizeConnections as Mock).mockResolvedValueOnce([{
+      connection: { id: 'enablebanking', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [{ externalId: 'new-session-uid', stableId: 'a'.repeat(64), name: 'Girokonto', type: 'checking', balanceCents: 150_000, currency: 'EUR' }],
+      transactions: [],
+    }])
+
+    renderConnections({ state: stateWithExistingAccount })
+    await waitFor(() => expect(screen.getByText('Choose accounts')).toBeInTheDocument())
+    expect(screen.getByText('Already in Finance Planner — refreshing balance')).toBeInTheDocument()
+    expect(screen.queryByText('Checking', { selector: 'small' })).not.toBeInTheDocument()
+  })
+
+  // Blocker 2 (found by independent review, 2026-08-27, PR #154): an
+  // existing provider account this sync could not reconcile by exact id or
+  // stableId must be surfaced on the Choose-accounts screen itself, where
+  // the user is about to decide whether to import a possibly-duplicate new
+  // account -- not merely computed and left for a `message` banner that
+  // only ever renders on the overview screen the user has already left.
+  it('warns about an unreconciled legacy account directly on the Choose accounts screen, not only after returning to the overview', async () => {
+    window.history.pushState({}, '', '/?provider=enablebanking')
+    const orphanedAccountId = 'connector:enablebanking:orphaned-old-session'
+    const stateWithOrphan: AppState = {
+      accounts: [{ id: orphanedAccountId, externalId: 'orphaned-old-session', institutionId: 'SPARKASSE_AACHEN_AACSDE33', name: 'Altes Konto', type: 'checking', balanceCents: 1_000, currency: 'EUR' }],
+      transactions: [],
+      goals: [],
+    }
+    ;(synchronizeConnections as Mock).mockResolvedValueOnce([{
+      connection: { id: 'enablebanking', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected', institutionId: 'SPARKASSE_AACHEN_AACSDE33' },
+      accounts: [{ externalId: 'genuinely-new-session', stableId: 'b'.repeat(64), institutionId: 'SPARKASSE_AACHEN_AACSDE33', name: 'Girokonto', type: 'checking', balanceCents: 5_000, currency: 'EUR' }],
+      transactions: [],
+    }])
+
+    renderConnections({ state: stateWithOrphan })
+    await waitFor(() => expect(screen.getByText('Choose accounts')).toBeInTheDocument())
+    expect(screen.getByText(/Could not automatically match 1 existing account/)).toBeInTheDocument()
+    expect(screen.getByText(/Altes Konto/)).toBeInTheDocument()
+  })
+
+  // Blocker 1 (found by independent review, 2026-08-27, PR #154): a routine
+  // "Refresh" -- same connection, same provider session/externalId, no
+  // reauthorization -- must apply a balance/transaction update
+  // automatically, never gated behind the "Choose accounts" screen the way
+  // a genuinely new or reconnected account correctly still is. Before this
+  // fix, buildSyncPreview()'s existingById match produced no update at all,
+  // and ConnectionsPage only ever applied anything when accountsToCreate/
+  // accountsToUpdate were non-empty.
+  it('applies a routine same-connection refresh automatically, without ever showing the Choose accounts screen', async () => {
+    window.history.pushState({}, '', '/?provider=enablebanking')
+    const accountId = 'connector:enablebanking:acct-1'
+    const stateWithExistingAccount: AppState = {
+      accounts: [{ id: accountId, externalId: 'acct-1', name: 'Girokonto', type: 'checking', balanceCents: 10_000, currency: 'EUR' }],
+      transactions: [],
+      goals: [],
+    }
+    ;(synchronizeConnections as Mock).mockResolvedValueOnce([{
+      connection: { id: 'enablebanking', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [{ externalId: 'acct-1', name: 'Girokonto', type: 'checking', balanceCents: 12_000, currency: 'EUR' }],
+      transactions: [{ externalId: 'tx-b', externalAccountId: 'acct-1', description: 'Transaction B', amountCents: -500, currency: 'EUR', bookingDate: '2026-08-21' }],
+    }])
+
+    const { onApply } = renderConnections({ state: stateWithExistingAccount })
+    await waitFor(() => expect(onApply).toHaveBeenCalled())
+    expect(screen.queryByText('Choose accounts')).not.toBeInTheDocument()
+    const [nextState] = onApply.mock.calls[0]
+    expect(nextState.accounts).toHaveLength(1)
+    expect(nextState.accounts[0].id).toBe(accountId)
+    expect(nextState.accounts[0].balanceCents).toBe(12_000)
+    expect(nextState.transactions).toHaveLength(1)
+    expect(nextState.transactions[0].description).toBe('Transaction B')
+  })
+
+  // Found by adversarial review (2026-08-27, PR #154): the routine-refresh
+  // auto-apply and a later Choose-accounts confirmation both derive their
+  // base state from the `state` prop -- this is only safe if React has
+  // already re-rendered ConnectionsPage with the routine-updated state
+  // BEFORE the user can click Import, which requires onApply to actually be
+  // wired to update the state passed back in (as it is via App.tsx's bare
+  // setState in production). Uses a real stateful wrapper, not a bare
+  // vi.fn(), specifically to exercise that feedback loop -- a vi.fn() alone
+  // would let this regress silently, since `state` would never advance.
+  it('does not lose or duplicate a routine refresh when a Choose-accounts confirmation for OTHER accounts happens afterward in the same batch', async () => {
+    window.history.pushState({}, '', '/?provider=enablebanking')
+    const user = userEvent.setup()
+    const routineAccountId = 'connector:enablebanking:acct-1'
+    const initialState: AppState = {
+      accounts: [{ id: routineAccountId, externalId: 'acct-1', name: 'Girokonto', type: 'checking', balanceCents: 10_000, currency: 'EUR' }],
+      transactions: [],
+      goals: [],
+    }
+    ;(synchronizeConnections as Mock).mockResolvedValueOnce([{
+      connection: { id: 'enablebanking', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [
+        { externalId: 'acct-1', name: 'Girokonto', type: 'checking', balanceCents: 12_000, currency: 'EUR' },
+        { externalId: 'acct-2', name: 'Tagesgeld', type: 'savings', balanceCents: 3_000, currency: 'EUR' },
+      ],
+      transactions: [
+        { externalId: 'tx-b', externalAccountId: 'acct-1', description: 'Transaction B', amountCents: -500, currency: 'EUR', bookingDate: '2026-08-21' },
+        { externalId: 'tx-c', externalAccountId: 'acct-2', description: 'Transaction C', amountCents: -700, currency: 'EUR', bookingDate: '2026-08-22' },
+      ],
+    }])
+
+    const onApplySpy = vi.fn()
+    function StatefulHarness() {
+      const [state, setState] = useState(initialState)
+      return <ConnectionsPage state={state} onApply={(next) => { onApplySpy(next); setState(next) }}/>
+    }
+    render(<div>
+      <main id="main-content"><button type="button">Outside the dialog</button></main>
+      <nav className="app-mobile-navigation"><button type="button">Nav item</button></nav>
+      <StatefulHarness/>
+    </div>)
+
+    // The routine refresh applies immediately, before the selection screen
+    // for the genuinely-new account appears.
+    await waitFor(() => expect(onApplySpy).toHaveBeenCalledTimes(1))
+    expect(onApplySpy.mock.calls[0][0].accounts[0].balanceCents).toBe(12_000)
+
+    await waitFor(() => expect(screen.getByText('Choose accounts')).toBeInTheDocument())
+    expect(screen.getByRole('status').textContent).toMatch(/1 other account already in Finance Planner was refreshed automatically \(1 new transaction imported\)/)
+
+    await user.click(screen.getByRole('button', { name: 'Import selected accounts' }))
+    expect(onApplySpy).toHaveBeenCalledTimes(2)
+    const finalState = onApplySpy.mock.calls[1][0] as AppState
+    // The routine account/transaction must survive, exactly once each --
+    // never regressed back to its pre-refresh value, never duplicated.
+    expect(finalState.accounts.filter((account) => account.id === routineAccountId)).toHaveLength(1)
+    expect(finalState.accounts.find((account) => account.id === routineAccountId)?.balanceCents).toBe(12_000)
+    expect(finalState.transactions.filter((transaction) => transaction.description === 'Transaction B')).toHaveLength(1)
+    // The genuinely new account/transaction the user just confirmed is also present.
+    expect(finalState.accounts.some((account) => account.name === 'Tagesgeld')).toBe(true)
+    expect(finalState.transactions.filter((transaction) => transaction.description === 'Transaction C')).toHaveLength(1)
+  })
 })
 
 describe('connection attention, reconnect and disconnect', () => {
@@ -1227,5 +1505,187 @@ describe('dialog accessibility', () => {
     await user.keyboard('{Escape}')
     await waitFor(() => expect(trigger).toHaveFocus())
     expect(document.getElementById('main-content')).not.toHaveAttribute('inert')
+  })
+})
+
+// Fixed 2026-08-27 (PR #154, seventh Mock ASPSP pass): `connections` was
+// plain React state, destroyed on unmount -- navigating away and back made
+// a genuinely still-connected "Bank connection / Connected" card disappear
+// even though nothing was ever disconnected server-side. Fixed with a
+// dedicated GET /api/connectors/connections mount fetch, independent of
+// provider-status loading and never triggering a provider sync merely to
+// list what's already stored.
+describe('persisted connections survive page remount (defect: connection disappears on navigation)', () => {
+  const STORED_ENABLEBANKING: ConnectorConnection = { id: 'enablebanking', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected', lastSyncAt: '2026-08-26T14:19:00.000Z' }
+
+  it('a stored connection appears on a fresh mount, without any provider sync being triggered', async () => {
+    ;(fetchStoredConnections as Mock).mockResolvedValueOnce([STORED_ENABLEBANKING])
+    renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+    expect(screen.getAllByText('Connected').length).toBeGreaterThan(0)
+    expect(synchronizeConnections).not.toHaveBeenCalled()
+  })
+
+  it('navigating away (unmount) and back (remount) still shows the connection', async () => {
+    ;(fetchStoredConnections as Mock).mockResolvedValue([STORED_ENABLEBANKING])
+    const first = renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+    first.unmount()
+
+    renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+  })
+
+  it('no stored connection -> the normal empty state, not an error', async () => {
+    ;(fetchStoredConnections as Mock).mockResolvedValueOnce([])
+    renderConnections()
+    await waitFor(() => expect(fetchStoredConnections).toHaveBeenCalled())
+    expect(screen.getByRole('heading', { name: 'Connect your financial accounts' })).toBeInTheDocument()
+    expect(screen.queryByText('Bank connection')).not.toBeInTheDocument()
+  })
+
+  it('a failed stored-connections request does not crash the page and leaves the normal empty state (never erases a connection it never had)', async () => {
+    ;(fetchStoredConnections as Mock).mockRejectedValueOnce(new Error('network error'))
+    renderConnections()
+    await waitFor(() => expect(fetchStoredConnections).toHaveBeenCalled())
+    expect(screen.getByRole('heading', { name: 'Connect your financial accounts' })).toBeInTheDocument()
+  })
+
+  // Found by adversarial review (2026-08-27): listStoredConnections()
+  // awaits each provider's stored row sequentially server-side, so the
+  // mount-time fetchStoredConnections() request can still be in flight when
+  // the user disconnects a connection that a FASTER synchronize() call
+  // already surfaced. Without tracking this, the slow fetch resolving
+  // afterward with its now-stale pre-disconnect snapshot would resurrect a
+  // connection in the UI that was genuinely just deleted server-side.
+  it('a disconnect completing before the mount-time stored-connections fetch resolves is not undone when that stale fetch finally lands', async () => {
+    window.history.pushState({}, '', '/?provider=enablebanking')
+    let resolveStored!: (value: ConnectorConnection[]) => void
+    ;(fetchStoredConnections as Mock).mockImplementation(() => new Promise((resolve) => { resolveStored = resolve }))
+    ;(synchronizeConnections as Mock).mockResolvedValueOnce([{ connection: STORED_ENABLEBANKING, accounts: [], transactions: [] }])
+    ;(disconnectConnector as Mock).mockResolvedValueOnce({ disconnected: true, providerRevoked: true, providerRevokeReason: 'confirmed' })
+
+    renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Bank connection').closest('button')!)
+    await user.click(screen.getByRole('button', { name: /^Disconnect$/ }))
+    await user.click(screen.getByRole('button', { name: 'Yes, disconnect' }))
+    await waitFor(() => expect(disconnectConnector).toHaveBeenCalledWith('enablebanking'))
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Connect your financial accounts' })).toBeInTheDocument())
+
+    // The slow mount-time fetch (issued before the disconnect) now resolves
+    // with the stale, still-connected snapshot -- it must not resurrect it.
+    resolveStored([STORED_ENABLEBANKING])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.getByRole('heading', { name: 'Connect your financial accounts' })).toBeInTheDocument()
+    expect(screen.queryByText('Bank connection')).not.toBeInTheDocument()
+  })
+
+  it('a fresher post-sync connection result is never clobbered by a slower, now-stale stored-connections fetch resolving after it', async () => {
+    window.history.pushState({}, '', '/?provider=enablebanking')
+    let resolveStored!: (value: ConnectorConnection[]) => void
+    ;(fetchStoredConnections as Mock).mockImplementation(() => new Promise((resolve) => { resolveStored = resolve }))
+    ;(synchronizeConnections as Mock).mockResolvedValueOnce([{ connection: { ...STORED_ENABLEBANKING, lastSyncAt: '2026-08-27T09:00:00.000Z' }, accounts: [], transactions: [] }])
+
+    renderConnections()
+    // synchronize() (triggered by the ?provider= callback-return effect)
+    // resolves on its own microtask queue; wait for its result to land.
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+
+    // The stored-connections fetch (issued at mount, in parallel) resolves
+    // LATE, with a stale pre-sync snapshot -- it must not overwrite the
+    // fresher post-sync connection state that's already showing.
+    resolveStored([{ ...STORED_ENABLEBANKING, lastSyncAt: '2026-08-20T00:00:00.000Z' }])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.getByText('Bank connection')).toBeInTheDocument()
+  })
+})
+
+// Restore ("un-remove") UX (2026-08-27, PR #154, BLOCKER 1 fix): since
+// account exclusions are now durable and survive disconnect/reconnect (see
+// server/src/account-exclusion-store.js), "Remove account" must not be an
+// irreversible hidden tombstone -- the Connections page's "Manage
+// connection" screen lists excluded accounts with an individual Restore
+// action.
+describe('Restore (un-remove) a previously excluded provider account', () => {
+  const STABLE_ID = 'a'.repeat(64)
+  const CONNECTION_WITH_EXCLUSION: ConnectorConnection = {
+    id: 'enablebanking',
+    provider: 'enablebanking',
+    displayName: 'Bank connection',
+    status: 'connected',
+    excludedAccounts: [{ stableAccountId: STABLE_ID, accountName: 'Savings account', createdAt: '2026-08-26T00:00:00.000Z' }],
+  }
+
+  it('lists a removed account with its display name and a Restore action on the Manage connection screen', async () => {
+    ;(fetchStoredConnections as Mock).mockResolvedValueOnce([CONNECTION_WITH_EXCLUSION])
+    renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Bank connection').closest('button')!)
+    expect(screen.getByText('Removed accounts')).toBeInTheDocument()
+    expect(screen.getByText('Savings account')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Restore Savings account' })).toBeInTheDocument()
+  })
+
+  it('clicking Restore calls restoreProviderAccount and removes the row from the list on success', async () => {
+    ;(fetchStoredConnections as Mock).mockResolvedValueOnce([CONNECTION_WITH_EXCLUSION])
+    renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Bank connection').closest('button')!)
+    await user.click(screen.getByRole('button', { name: 'Restore Savings account' }))
+    expect(restoreProviderAccount).toHaveBeenCalledWith('enablebanking', STABLE_ID)
+    await waitFor(() => expect(screen.queryByText('Removed accounts')).not.toBeInTheDocument())
+  })
+
+  it('shows an actionable error and keeps the account listed when restore fails', async () => {
+    ;(fetchStoredConnections as Mock).mockResolvedValueOnce([CONNECTION_WITH_EXCLUSION])
+    ;(restoreProviderAccount as Mock).mockRejectedValueOnce(new Error('network error'))
+    renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Bank connection').closest('button')!)
+    await user.click(screen.getByRole('button', { name: 'Restore Savings account' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('network error')
+    expect(screen.getByText('Savings account')).toBeInTheDocument()
+  })
+
+  it('a connection with no excluded accounts shows no "Removed accounts" section', async () => {
+    ;(fetchStoredConnections as Mock).mockResolvedValueOnce([{ ...CONNECTION_WITH_EXCLUSION, excludedAccounts: [] }])
+    renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Bank connection').closest('button')!)
+    expect(screen.queryByText('Removed accounts')).not.toBeInTheDocument()
+  })
+
+  // Found by a second adversarial-review pass (2026-08-27, same day): a
+  // sync (manual refresh or the automatic post-provider-return sync)
+  // unconditionally replaces the whole `connections` array with
+  // synchronizeConnections()'s result. Unless that result ALSO carries
+  // excludedAccounts (not only the mount-only GET /api/connectors/connections
+  // overview), the "Removed accounts / Restore" section would silently
+  // vanish immediately after any sync, even though the exclusion itself
+  // stayed fully enforced server-side the whole time.
+  it('the Restore list survives a sync, not only a fresh mount', async () => {
+    ;(fetchStoredConnections as Mock).mockResolvedValueOnce([CONNECTION_WITH_EXCLUSION])
+    ;(synchronizeConnections as Mock).mockResolvedValueOnce([{ connection: CONNECTION_WITH_EXCLUSION, accounts: [], transactions: [] }])
+    renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /Refresh all/ }))
+    await waitFor(() => expect(synchronizeConnections).toHaveBeenCalled())
+
+    await user.click(screen.getByText('Bank connection').closest('button')!)
+    expect(screen.getByText('Removed accounts')).toBeInTheDocument()
+    expect(screen.getByText('Savings account')).toBeInTheDocument()
   })
 })

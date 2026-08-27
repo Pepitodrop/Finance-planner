@@ -1,12 +1,14 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDownRight,
   ArrowLeftRight,
   ArrowUpRight,
   Landmark,
+  MoreHorizontal,
   PiggyBank,
   Plus,
   Target,
+  Trash2,
   WalletCards,
 } from 'lucide-react'
 import {
@@ -23,9 +25,11 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { ConfirmationDialog } from '../../app/ConfirmationDialog'
+import { connectorProviderFromAccountId } from '../../connectors'
 import { formatMoney } from '../../finance'
 import { MerchantLogo } from '../../MerchantLogo'
-import type { AppState, Transaction } from '../../types'
+import type { Account, AppState, Transaction } from '../../types'
 import type { DestinationId } from '../../app/navigation'
 import { buildDashboardViewModel, isDetectedTransfer } from './dashboardModel'
 
@@ -37,7 +41,59 @@ interface DashboardProps {
   onAddTransaction: () => void
   onEditTransaction: (transaction: Transaction) => void
   onNavigate: (destination: DestinationId) => void
+  // Coordinated removal (fixed 2026-08-27, independent review, BLOCKER 2):
+  // returns whether it actually succeeded, so this dialog can show a real
+  // error and let the account stay visible on failure, rather than
+  // optimistically closing and hoping a fire-and-forget call worked. Only
+  // ever offered when removeTargetCannotBeRemovedSafely is false (a
+  // stableId is present) -- see onRemoveLegacyAccountLocally below for the
+  // no-stableId path.
+  onRemoveAccount: (account: Account) => Promise<{ ok: true } | { ok: false; error: string }>
+  // Fixed 2026-08-27, fourth independent review, BLOCKER 2: a provider
+  // account with no stableId has no trustworthy identity to durably
+  // exclude by, so onRemoveAccount above correctly refuses it -- but that
+  // previously left this exact class of account (including the duplicate
+  // an earlier PR #154 head's reconnect bug created) permanently
+  // undeletable. This is a deliberately WEAKER, local-only counterpart:
+  // removes the account/its transactions from local state, writes no
+  // durable exclusion, and makes no suppression guarantee -- see its doc
+  // comment in App.tsx for the full rationale. Never call this for an
+  // account that DOES have a stableId; use onRemoveAccount for that.
+  onRemoveLegacyAccountLocally: (account: Account) => Promise<{ ok: true } | { ok: false; error: string }>
   referenceDate?: Date
+}
+
+// Mirrors TransactionsPage.tsx's TransactionActions -- same "⋯" trigger +
+// dismiss-on-outside-click/Escape menu pattern, reused here instead of a
+// second bespoke implementation. Only one action exists today (Remove
+// account), kept as a menu rather than a bare icon button so a future
+// second per-account action has an obvious place to go, and so the
+// destructive action is never a single unconfirmed click -- this only
+// *opens* the confirmation dialog, it never removes anything itself.
+function DashboardAccountActions({ account, onRequestRemove }: { account: Account; onRequestRemove: (account: Account) => void }) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const close = (event: MouseEvent | KeyboardEvent) => {
+      if (event instanceof KeyboardEvent && event.key === 'Escape') {
+        setOpen(false)
+        requestAnimationFrame(() => triggerRef.current?.focus())
+      } else if (event instanceof MouseEvent && !containerRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', close)
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', close) }
+  }, [open])
+
+  return <div className="dashboard-account-actions" ref={containerRef}>
+    <button ref={triggerRef} type="button" className="dashboard-account-actions-trigger" aria-label={`Actions for ${account.name}`} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((current) => !current)}><MoreHorizontal size={16}/></button>
+    {open && <div className="dashboard-account-actions-menu" role="menu">
+      <button type="button" role="menuitem" onClick={() => { setOpen(false); onRequestRemove(account) }}><Trash2 size={15}/> Remove account</button>
+    </div>}
+  </div>
 }
 
 const ACCOUNT_TYPE_LABELS = {
@@ -53,11 +109,46 @@ function signedMoney(transaction: Transaction): string {
   return `${transaction.type === 'income' ? '+' : '−'}${formatMoney(transaction.amountCents)}`
 }
 
-export function Dashboard({ state, userName, onAddTransaction, onEditTransaction, onNavigate, referenceDate = new Date() }: DashboardProps) {
+export function Dashboard({ state, userName, onAddTransaction, onEditTransaction, onNavigate, onRemoveAccount, onRemoveLegacyAccountLocally, referenceDate = new Date() }: DashboardProps) {
   const model = useMemo(() => buildDashboardViewModel(state, referenceDate), [referenceDate, state])
   const firstName = userName?.trim().split(/\s+/)[0] || 'there'
   const categoryTotalCents = model.categories.reduce((sum, category) => sum + category.amountCents, 0)
   const projectedEndCents = Math.round((model.projection.at(-1)?.balance ?? model.totalBalanceCents / 100) * 100)
+  const [removeTarget, setRemoveTarget] = useState<Account | null>(null)
+  const [removeBusy, setRemoveBusy] = useState(false)
+  const [removeError, setRemoveError] = useState('')
+  const removeTargetTransactionCount = removeTarget ? state.transactions.filter((transaction) => transaction.accountId === removeTarget.id).length : 0
+  const removeTargetProvider = removeTarget ? connectorProviderFromAccountId(removeTarget.id) : undefined
+  // Fail-conservative (independent review, BLOCKER 2): a provider account
+  // with no stableId has no trustworthy key Finance Planner can ever
+  // exclude it by, so a "Remove account" that claims to guarantee
+  // permanent removal would be a promise this app cannot keep. Detected
+  // here, before any destructive action is even offered, not after a
+  // failed attempt.
+  const removeTargetCannotBeRemovedSafely = Boolean(removeTargetProvider) && !removeTarget?.stableId
+  const closeRemoveDialog = () => { setRemoveTarget(null); setRemoveBusy(false); setRemoveError('') }
+  const confirmRemove = async () => {
+    if (!removeTarget) return
+    setRemoveBusy(true)
+    setRemoveError('')
+    const result = await onRemoveAccount(removeTarget)
+    setRemoveBusy(false)
+    if (result.ok) setRemoveTarget(null)
+    else setRemoveError(result.error)
+  }
+  // BLOCKER 2 (fourth independent review, 2026-08-27): the local-only
+  // counterpart to confirmRemove() above, used exactly when
+  // removeTargetCannotBeRemovedSafely is true (no stableId) -- see
+  // onRemoveLegacyAccountLocally's doc comment on DashboardProps.
+  const confirmRemoveLegacy = async () => {
+    if (!removeTarget) return
+    setRemoveBusy(true)
+    setRemoveError('')
+    const result = await onRemoveLegacyAccountLocally(removeTarget)
+    setRemoveBusy(false)
+    if (result.ok) setRemoveTarget(null)
+    else setRemoveError(result.error)
+  }
 
   return <div className="dashboard-page" data-dashboard-ready="true" lang="en">
     <header className="dashboard-toolbar">
@@ -149,6 +240,7 @@ export function Dashboard({ state, userName, onAddTransaction, onEditTransaction
             <span className="dashboard-row-icon" aria-hidden="true"><Landmark size={18}/></span>
             <span><strong>{account.name}</strong><small>{ACCOUNT_TYPE_LABELS[account.type]}</small></span>
             <b>{formatMoney(account.balanceCents)}</b>
+            <DashboardAccountActions account={account} onRequestRemove={setRemoveTarget}/>
           </div>)}
         </div> : <div className="dashboard-empty"><strong>No accounts recorded</strong><span>Connect or add an account to include it in your balance.</span><button type="button" onClick={() => onNavigate('connections')}>Open Connections</button></div>}
       </article>
@@ -182,5 +274,61 @@ export function Dashboard({ state, userName, onAddTransaction, onEditTransaction
         </div> : <div className="dashboard-empty"><strong>No transactions yet</strong><span>Use the Add transaction button above to record your first transaction.</span></div>}
       </article>
     </section>
+
+    {removeTargetCannotBeRemovedSafely ? (
+      // BLOCKER 2 (fourth independent review, 2026-08-27): this used to be
+      // a dead-end, info-only dialog with no destructive action at all --
+      // which meant a provider account with no stableId (e.g. the exact
+      // duplicate an earlier PR #154 head's reconnect bug created) was
+      // permanently undeletable from the Dashboard, even though the user
+      // explicitly needs to remove accounts here. Now offers an explicit,
+      // clearly-weaker LOCAL-ONLY removal instead -- see
+      // onRemoveLegacyAccountLocally's doc comment on DashboardProps. The
+      // wording below is deliberately explicit that this is NOT the same
+      // durable-exclusion promise the modern removal below makes.
+      <ConfirmationDialog
+        open={removeTarget !== null}
+        severity="warning"
+        heading={`Remove legacy account "${removeTarget?.name ?? ''}"?`}
+        headingId="dashboard-remove-account-title"
+        confirmLabel={removeBusy ? 'Removing…' : 'Remove local copy'}
+        busy={removeBusy}
+        onConfirm={() => { void confirmRemoveLegacy() }}
+        onClose={() => { if (!removeBusy) closeRemoveDialog() }}
+        footer={<button type="button" className="data-tools-link" onClick={() => { closeRemoveDialog(); onNavigate('connections') }} disabled={removeBusy}>Go to Connections to disconnect the bank instead</button>}
+      >
+        <p>This account was imported by an older Finance Planner connection and does not contain a stable bank identifier.</p>
+        <p>Finance Planner can remove this local account and its recorded transactions, but cannot guarantee the bank will not return it again during a future sync. If it returns again, you may need to remove it again or disconnect the bank.</p>
+        {removeError && <p className="status-message error-message" role="alert">{removeError} You can try again or cancel.</p>}
+      </ConfirmationDialog>
+    ) : (
+      <ConfirmationDialog
+        open={removeTarget !== null}
+        severity="danger"
+        heading={`Remove "${removeTarget?.name ?? ''}"?`}
+        headingId="dashboard-remove-account-title"
+        confirmLabel={removeBusy ? 'Removing account…' : 'Remove account'}
+        busy={removeBusy}
+        onConfirm={() => { void confirmRemove() }}
+        // Found by adversarial review (2026-08-27): ConfirmationDialog's
+        // Escape handler and backdrop click both call onClose
+        // unconditionally, regardless of `busy` -- only the Cancel/Confirm
+        // buttons themselves check it. Without this guard, dismissing the
+        // dialog while confirmRemove() is still in flight would close it
+        // immediately; if that in-flight call later fails, the resulting
+        // setRemoveError() would fire into an already-closed dialog and the
+        // actionable error would be silently lost (no data-integrity impact
+        // -- a success still applies correctly either way -- but a failure
+        // becomes invisible).
+        onClose={() => { if (!removeBusy) closeRemoveDialog() }}
+      >
+        <p>This removes the account and its imported/recorded transactions from Finance Planner.</p>
+        <p>{removeTargetTransactionCount === 0
+          ? 'This account has no recorded transactions.'
+          : `This account has ${removeTargetTransactionCount} transaction${removeTargetTransactionCount === 1 ? '' : 's'}. Removing the account will also remove ${removeTargetTransactionCount === 1 ? 'that transaction' : `those ${removeTargetTransactionCount} transactions`}.`}</p>
+        {removeTargetProvider && <p>If this account belongs to a connected bank, the bank connection itself will remain active unless you choose to disconnect it separately. This account will not be automatically re-imported on future syncs of that connection.</p>}
+        {removeError && <p className="status-message error-message" role="alert">{removeError} You can try again or cancel.</p>}
+      </ConfirmationDialog>
+    )}
   </div>
 }

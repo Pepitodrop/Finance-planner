@@ -42,7 +42,7 @@ export class EncryptedStore {
     this.path = path
     this.backupPath = `${path}.bak`
     this.key = keyFromSecret(secret)
-    this.data = { connections: {}, oauthNonces: {}, webhookEvents: {} }
+    this.data = { connections: {}, oauthNonces: {}, webhookEvents: {}, accountExclusions: {} }
     this.writeQueue = Promise.resolve()
   }
 
@@ -50,6 +50,7 @@ export class EncryptedStore {
     this.data.connections ??= {}
     this.data.oauthNonces ??= {}
     this.data.webhookEvents ??= {}
+    this.data.accountExclusions ??= {}
   }
 
   decode(contents) {
@@ -162,10 +163,42 @@ export class EncryptedStore {
     })
   }
 
+  // Durable account-exclusion methods (2026-08-27, PR #154): deliberately
+  // NOT part of `connections[userId][provider]` -- disconnecting a provider
+  // calls remove() above, which must never touch these. Mirrors the
+  // Postgres-backed connector_account_exclusions table's contract exactly
+  // (see addAccountExclusionMethods() in database.js): idempotent add,
+  // idempotent remove, list. The write-queue in mutate() already serializes
+  // every call against this store instance, so two near-simultaneous
+  // exclusion writes can't race each other the way a bare read-modify-write
+  // on a single JSON field could.
+  async addAccountExclusion(userId, provider, stableAccountId, accountName) {
+    if (!/^[a-f0-9]{64}$/.test(stableAccountId)) throw new Error('Invalid stable account id.')
+    const name = typeof accountName === 'string' && accountName.trim() ? accountName.trim().slice(0, 160) : undefined
+    return this.mutate(() => {
+      this.data.accountExclusions[userId] ??= {}
+      this.data.accountExclusions[userId][provider] ??= {}
+      this.data.accountExclusions[userId][provider][stableAccountId] = { accountName: name, createdAt: new Date().toISOString() }
+    })
+  }
+
+  async removeAccountExclusion(userId, provider, stableAccountId) {
+    return this.mutate(() => {
+      delete this.data.accountExclusions?.[userId]?.[provider]?.[stableAccountId]
+    })
+  }
+
+  async listAccountExclusions(userId, provider) {
+    const entries = this.data.accountExclusions?.[userId]?.[provider] || {}
+    return Object.entries(entries).map(([stableAccountId, value]) => ({ stableAccountId, accountName: value?.accountName, createdAt: value?.createdAt }))
+  }
+
   async removeUser(userId) {
     return this.mutate(() => {
       const connectorConnections = Object.keys(this.data.connections?.[userId] || {}).length
       delete this.data.connections[userId]
+      const accountExclusions = Object.values(this.data.accountExclusions?.[userId] || {}).reduce((sum, byProvider) => sum + Object.keys(byProvider).length, 0)
+      delete this.data.accountExclusions[userId]
       let oauthNonces = 0
       for (const [key, nonce] of Object.entries(this.data.oauthNonces)) {
         if (nonce?.userId === userId) {
@@ -173,7 +206,7 @@ export class EncryptedStore {
           oauthNonces += 1
         }
       }
-      return { connectorConnections, oauthNonces }
+      return { connectorConnections, accountExclusions, oauthNonces }
     })
   }
 
@@ -243,33 +276,62 @@ export class EncryptedStore {
     })
   }
 
-  // Consumes the single-use nonce and returns the pending credential it
-  // guarded, without yet promoting it into data.connections -- some
-  // providers (Enable Banking) still need to complete a server-side exchange
-  // (an authorization code -> session call) before the connection is safe to
-  // activate, and that exchange is a network call that must never happen
-  // inside mutate()'s serialized write queue. See finalizeConnection() for
-  // the second, provider-independent step.
-  async consumePendingConnectionSetup(input) {
+  // CLAIMS (does not delete) the pending credential guarded by this nonce,
+  // exactly once -- see PostgresStore.claimPendingConnectionSetup()'s doc
+  // comment for the full race this fixes and the return-shape contract,
+  // which this mirrors exactly. mutate()'s write queue already serializes
+  // every call against this store instance, so within one process this is
+  // trivially exactly-once; it exists mainly so server.js's callback route
+  // has one coherent contract regardless of which store backs it (this one,
+  // for non-Postgres deployments, or PostgresStore in production).
+  async claimPendingConnectionSetup(input) {
     return this.mutate(() => {
       const key = nonceKey(input.nonce)
       const stored = this.data.oauthNonces[key]
-      if (!stored || !stored.pendingConnection) return null
+      if (!stored || !stored.pendingConnection) return { status: 'not_found' }
       if (stored.expiresAt <= input.now) {
         delete this.data.oauthNonces[key]
-        return null
+        return { status: 'not_found' }
       }
-      const connection = stored.pendingConnection
       if (
-        connection.consentId !== input.consentId ||
-        connection.redirectUri !== input.redirectUri ||
         stored.consentId !== input.consentId ||
         stored.userId !== input.userId ||
         stored.provider !== input.provider ||
         stored.redirectUri !== input.redirectUri
-      ) return null
+      ) return { status: 'not_found' }
+      const connection = stored.pendingConnection
+      if (connection.consentId !== input.consentId || connection.redirectUri !== input.redirectUri) return { status: 'not_found' }
+      if (stored.claimToken) return { status: 'in_progress' }
+      const claimToken = randomBytes(24).toString('base64url')
+      stored.claimToken = claimToken
+      return { status: 'claimed', claimToken, connection }
+    })
+  }
+
+  // Read-only (well, mutate() still serializes it against concurrent writes,
+  // but it never changes anything) -- see PostgresStore's twin.
+  async pendingConnectionSetupExists(input) {
+    return this.mutate(() => {
+      const key = nonceKey(input.nonce)
+      const stored = this.data.oauthNonces[key]
+      if (!stored || stored.expiresAt <= input.now) return false
+      return (
+        stored.consentId === input.consentId &&
+        stored.userId === input.userId &&
+        stored.provider === input.provider &&
+        stored.redirectUri === input.redirectUri
+      )
+    })
+  }
+
+  // See PostgresStore.releasePendingConnectionSetup()'s doc comment.
+  async releasePendingConnectionSetup(input) {
+    return this.mutate(() => {
+      const key = nonceKey(input.nonce)
+      const stored = this.data.oauthNonces[key]
+      if (!stored || stored.claimToken !== input.claimToken) return false
       delete this.data.oauthNonces[key]
-      return connection
+      return true
     })
   }
 

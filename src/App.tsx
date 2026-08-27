@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Plus, Undo2 } from 'lucide-react'
 import { AccountPage } from './AccountPage'
+import { removeAccountFromState, restoreAccountToState } from './accountState'
 import { AiPanel, type AiPanelAcceptanceMode } from './AiPanel'
 import type { AiSuggestion } from './ai'
 import type { AuthUser } from './AuthGate'
 import { learnBehavior } from './behavior'
 import { ConnectionsPanel } from './ConnectionsPanel'
+import { connectorProviderFromAccountId, excludeProviderAccount } from './connectors'
 import type { ConnectionsAcceptanceMode } from './features/connections/connectionsAcceptanceFixtures'
 import { DataTools, type DataToolsAcceptanceMode } from './DataTools'
 import { accountsAcceptanceState, initialState, planningAcceptanceState } from './data'
@@ -19,7 +21,7 @@ import { RecurringPaymentsPage } from './features/recurring/RecurringPaymentsPag
 import { SubscriptionsPage, type SubscriptionsAcceptanceMode } from './features/subscriptions/SubscriptionsPage'
 import { loadState, resetStoredState, saveState } from './storage'
 import { addTransactionToState, deleteTransactionFromState, updateTransactionInState } from './transactionState'
-import type { AppState, Transaction, TransactionType } from './types'
+import type { Account, AppState, Transaction, TransactionType } from './types'
 import { validateTransactionInput } from './validation'
 import { ApplicationShell } from './app/ApplicationShell'
 import { initialTabFromSearch, type DestinationId } from './app/navigation'
@@ -42,6 +44,7 @@ function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
   const [transactionType, setTransactionType] = useState<TransactionType>('expense')
   const [formError, setFormError] = useState('')
   const [deletedTransaction, setDeletedTransaction] = useState<Transaction | null>(null)
+  const [removedManualAccount, setRemovedManualAccount] = useState<{ account: Account; transactions: Transaction[] } | null>(null)
   const [requestedTransactionAccount, setRequestedTransactionAccount] = useState<string | null>(null)
   const [accountsAcceptanceMode, setAccountsAcceptanceMode] = useState<'accounts' | 'empty' | 'detail' | 'credit' | null>(null)
   const [planningAcceptanceMode, setPlanningAcceptanceMode] = useState<'goals' | 'goals-empty' | 'goal-editor' | 'recurring' | 'recurring-empty' | 'budget-consent' | 'budget-result' | null>(null)
@@ -152,6 +155,94 @@ function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
     setDeletedTransaction(null)
   }
 
+  // Dashboard's "Remove account" -- see accountState.ts's doc comments for
+  // why this never touches the provider connection itself.
+  //
+  // Fixed 2026-08-27 (independent review, BLOCKER 2): removal of a
+  // provider-linked account is now a single COORDINATED, awaited operation,
+  // never fire-and-forget. The confirmation copy promises the account
+  // "will not be automatically re-imported" -- that promise must be true.
+  // Order: persist the durable server-side exclusion FIRST (see
+  // excludeProviderAccount() / migration 011's connector_account_exclusions
+  // table, independent of the live connector credential so it survives
+  // disconnect/reconnect); only once that succeeds does local AppState
+  // change. If the exclusion call fails, local state is untouched -- the
+  // account stays visible, and the caller (Dashboard's confirmation dialog)
+  // shows an actionable error with Retry, never a silent lie. A provider
+  // account with no stableId is refused here defensively (Dashboard's own
+  // pre-check is the primary gate -- see the fail-conservative UX there)
+  // rather than ever removing an account Finance Planner cannot durably
+  // suppress from re-import.
+  //
+  // Manual accounts (no provider) remain synchronous, local-only, and keep
+  // the short-lived Undo toast -- there is no server-side exclusion to
+  // coordinate with.
+  const removeAccount = async (account: Account): Promise<{ ok: true } | { ok: false; error: string }> => {
+    const provider = connectorProviderFromAccountId(account.id)
+    if (!provider) {
+      setState((current) => {
+        const result = removeAccountFromState(current, account.id)
+        setRemovedManualAccount({ account: result.deletedAccount, transactions: result.deletedTransactions })
+        return result.state
+      })
+      return { ok: true }
+    }
+    if (!account.stableId) {
+      return { ok: false, error: 'This connected account cannot currently be removed safely because the bank did not provide a stable account identifier. You can disconnect the bank connection instead.' }
+    }
+    try {
+      await excludeProviderAccount(provider, account.stableId, account.name)
+    } catch (reason) {
+      return { ok: false, error: reason instanceof Error ? reason.message : 'The account could not be removed. Please try again.' }
+    }
+    setState((current) => removeAccountFromState(current, account.id).state)
+    return { ok: true }
+  }
+
+  // Dashboard's "Remove local legacy account" (fixed 2026-08-27, fourth
+  // independent review, BLOCKER 2): a provider-linked account with no
+  // `stableId` -- e.g. one imported by an earlier PR #154 head before
+  // `stableId` existed, or a duplicate the seventh-pass reconnect-
+  // duplication bug created -- has no trustworthy identity Finance Planner
+  // can ever key a durable server-side exclusion by. `removeAccount()`
+  // above correctly refuses it outright, since its confirmation copy
+  // promises "will not be automatically re-imported," a promise this app
+  // cannot keep with no stable identity to exclude by. Without ANY removal
+  // path, that class of account (the exact duplicate this PR's earlier bug
+  // produced) became permanently undeletable from the Dashboard, even
+  // though the user explicitly needs to be able to remove accounts there.
+  //
+  // This is a deliberately WEAKER, purely local operation: it removes the
+  // account and its transactions from THIS Finance Planner's own state
+  // (persisted through the same generic `saveState(state)` effect every
+  // other state change already goes through -- no separate plumbing
+  // needed), but writes NO durable exclusion row and makes NO suppression
+  // guarantee. `removeAccountFromState()` is the same atomic account+
+  // transactions helper the modern path already uses -- it never touches
+  // exclusions itself, so reusing it here for a no-exclusion removal is not
+  // a new domain operation, only a new caller of an existing one. If the
+  // provider returns an indistinguishable account on a future sync, it may
+  // resurface -- Dashboard's confirmation copy for this path must say so
+  // explicitly, never implying the same durability the modern path offers.
+  // Refuses (fails closed) for a manual account (nothing "legacy" about
+  // one -- use removeAccount() instead) or a modern account that DOES have
+  // a stableId (which must always go through the stronger, durable-
+  // exclusion path above, never this one).
+  const removeLegacyAccountLocally = async (account: Account): Promise<{ ok: true } | { ok: false; error: string }> => {
+    const provider = connectorProviderFromAccountId(account.id)
+    if (!provider || account.stableId) {
+      return { ok: false, error: 'This account does not qualify for legacy local removal.' }
+    }
+    setState((current) => removeAccountFromState(current, account.id).state)
+    return { ok: true }
+  }
+
+  const undoRemoveAccount = () => {
+    if (!removedManualAccount) return
+    setState((current) => restoreAccountToState(current, removedManualAccount.account, removedManualAccount.transactions))
+    setRemovedManualAccount(null)
+  }
+
   const applyAiSuggestion = (transactionId: string, suggestion: AiSuggestion) => {
     const source = state.transactions.find((transaction) => transaction.id === transactionId)
     if (source) learnBehavior(source, suggestion.category, suggestion.recurringProbability >= 75)
@@ -203,7 +294,7 @@ function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
         {tab === 'ai' && <button type="button" className="primary" onClick={openNewTransaction}><Plus size={18}/> Manual entry</button>}
       </header>}
 
-      {tab === 'dashboard' && <Dashboard state={state} userName={userName} onAddTransaction={openNewTransaction} onEditTransaction={openEditTransaction} onNavigate={navigate}/>}
+      {tab === 'dashboard' && <Dashboard state={state} userName={userName} onAddTransaction={openNewTransaction} onEditTransaction={openEditTransaction} onNavigate={navigate} onRemoveAccount={removeAccount} onRemoveLegacyAccountLocally={removeLegacyAccountLocally}/>}
 
       {tab === 'transactions' && <TransactionsPage
         transactions={state.transactions}
@@ -226,6 +317,11 @@ function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
     {deletedTransaction && <div className="undo-toast" role="status">
       <span>“{deletedTransaction.description}” was deleted.</span>
       <button type="button" onClick={undoDelete}><Undo2 size={16}/> Undo</button>
+    </div>}
+
+    {removedManualAccount && <div className="undo-toast" role="status">
+      <span>“{removedManualAccount.account.name}” was removed.</span>
+      <button type="button" onClick={undoRemoveAccount}><Undo2 size={16}/> Undo</button>
     </div>}
 
     {dialogOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setDialogOpen(false)}>

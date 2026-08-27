@@ -85,7 +85,7 @@ test('oauth nonce consumption rejects consent mismatches without consuming the v
   }
 })
 
-test('pending connection setup and nonce registration persist as one transition; consumePendingConnectionSetup + finalizeConnection replace a currently-working connection only once both steps succeed', async () => {
+test('pending connection setup and nonce registration persist as one transition; claimPendingConnectionSetup + finalizeConnection replace a currently-working connection only once both steps succeed', async () => {
   const { directory, path, store } = await fixture()
   try {
     const input = setupInput()
@@ -97,15 +97,24 @@ test('pending connection setup and nonce registration persist as one transition;
     await restarted.load()
     assert.equal(restarted.get(input.userId, input.provider).requisitionId, 'req-previously-working', 'the working connection must not be overwritten before consumption')
 
-    const consumed = await restarted.consumePendingConnectionSetup({ ...input, now: Date.now() })
-    assert.equal(consumed?.requisitionId, 'req-atomic')
-    assert.equal(restarted.get(input.userId, input.provider).requisitionId, 'req-previously-working', 'consuming the nonce alone must not yet touch the working connection -- that is finalizeConnection\'s job, standing in for a provider completeCallback() step that has not run yet')
+    const claim = await restarted.claimPendingConnectionSetup({ ...input, now: Date.now() })
+    assert.equal(claim.status, 'claimed')
+    assert.equal(claim.connection?.requisitionId, 'req-atomic')
+    assert.equal(restarted.get(input.userId, input.provider).requisitionId, 'req-previously-working', 'claiming the nonce alone must not yet touch the working connection -- that is finalizeConnection\'s job, standing in for a provider completeCallback() step that has not run yet')
 
-    // The nonce is single-use: replay must fail even though finalizeConnection was never called.
-    assert.equal(await restarted.consumePendingConnectionSetup({ ...input, now: Date.now() }), null)
+    // The nonce is claimed, not deleted -- a second claim attempt while
+    // unresolved must see it as in progress, never as available to re-claim.
+    assert.equal((await restarted.claimPendingConnectionSetup({ ...input, now: Date.now() })).status, 'in_progress')
 
-    await restarted.finalizeConnection({ userId: input.userId, provider: input.provider, connection: consumed, connectedAt: '2026-07-27T12:00:00.000Z' })
+    await restarted.finalizeConnection({ userId: input.userId, provider: input.provider, connection: claim.connection, connectedAt: '2026-07-27T12:00:00.000Z' })
     assert.equal(restarted.get(input.userId, input.provider).requisitionId, 'req-atomic', 'finalization replaces the working connection with the newly-verified one')
+
+    // Only after the claimer releases it (here, simulating the success path)
+    // does the nonce genuinely disappear -- matching the original single-use
+    // guarantee, just moved to after finalization instead of before the
+    // provider network call.
+    assert.equal(await restarted.releasePendingConnectionSetup({ nonce: input.nonce, claimToken: claim.claimToken }), true)
+    assert.equal((await restarted.claimPendingConnectionSetup({ ...input, now: Date.now() })).status, 'not_found')
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -120,7 +129,7 @@ test('failed pending setup persistence rolls back both the pending credential an
     await assert.rejects(() => store.createPendingConnectionSetup(input), /disk unavailable/)
     store.save = originalSave
     assert.equal(store.get(input.userId, input.provider), null)
-    assert.equal(await store.consumePendingConnectionSetup({ ...input, now: Date.now() }), null)
+    assert.equal((await store.claimPendingConnectionSetup({ ...input, now: Date.now() })).status, 'not_found')
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -131,8 +140,8 @@ test('finalizeConnection retries a transient write failure internally and still 
   try {
     const input = setupInput()
     await store.createPendingConnectionSetup(input)
-    const pending = await store.consumePendingConnectionSetup({ ...input, now: Date.now() })
-    assert.ok(pending)
+    const claim = await store.claimPendingConnectionSetup({ ...input, now: Date.now() })
+    assert.equal(claim.status, 'claimed')
 
     let attempts = 0
     const originalSave = store.save.bind(store)
@@ -141,7 +150,7 @@ test('finalizeConnection retries a transient write failure internally and still 
       if (attempts < 2) throw new Error('disk unavailable')
       return originalSave(...args)
     }
-    await store.finalizeConnection({ userId: input.userId, provider: input.provider, connection: pending, connectedAt: '2026-07-27T12:00:00.000Z' })
+    await store.finalizeConnection({ userId: input.userId, provider: input.provider, connection: claim.connection, connectedAt: '2026-07-27T12:00:00.000Z' })
     store.save = originalSave
 
     assert.ok(attempts >= 2, 'finalizeConnection should retry a transient failure before succeeding')
@@ -153,32 +162,32 @@ test('finalizeConnection retries a transient write failure internally and still 
   }
 })
 
-test('a persistent finalizeConnection failure never touches a previously-working connection, and the already-consumed nonce cannot be reused for a silent retry', async () => {
+test('a persistent finalizeConnection failure never touches a previously-working connection, and the already-claimed nonce cannot be reused for a silent retry', async () => {
   const { directory, store } = await fixture()
   try {
     const input = setupInput()
     await store.set(input.userId, input.provider, { requisitionId: 'req-previously-working', connectedAt: '2026-07-01T00:00:00.000Z' })
     await store.createPendingConnectionSetup(input)
-    const pending = await store.consumePendingConnectionSetup({ ...input, now: Date.now() })
-    assert.ok(pending)
+    const claim = await store.claimPendingConnectionSetup({ ...input, now: Date.now() })
+    assert.equal(claim.status, 'claimed')
 
     const originalSave = store.save.bind(store)
     store.save = async () => { throw new Error('disk unavailable') }
     await assert.rejects(
-      () => store.finalizeConnection({ userId: input.userId, provider: input.provider, connection: pending, connectedAt: '2026-07-27T12:00:00.000Z' }),
+      () => store.finalizeConnection({ userId: input.userId, provider: input.provider, connection: claim.connection, connectedAt: '2026-07-27T12:00:00.000Z' }),
       /disk unavailable/,
     )
     assert.equal(store.get(input.userId, input.provider).requisitionId, 'req-previously-working', 'a failed finalization must not have touched the still-working connection')
 
     // mutate() persists unconditionally on every call, including a no-op
     // lookup -- restore save() first so this checks the real question
-    // (is the nonce gone for good) rather than re-hitting the same
-    // still-broken disk.
+    // (is the nonce still exclusively claimed) rather than re-hitting the
+    // same still-broken disk.
     store.save = originalSave
     assert.equal(
-      await store.consumePendingConnectionSetup({ ...input, now: Date.now() }),
-      null,
-      'the nonce was already consumed by the first (ultimately-failed) attempt and cannot be reused -- the user must restart the connection attempt, same as any code-exchange OAuth flow',
+      (await store.claimPendingConnectionSetup({ ...input, now: Date.now() })).status,
+      'in_progress',
+      'the nonce is still claimed by the first (ultimately-failed, not-yet-released) attempt and cannot be re-claimed for a silent retry',
     )
   } finally {
     await rm(directory, { recursive: true, force: true })

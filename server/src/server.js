@@ -2,6 +2,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
 import { URL } from 'node:url'
 import { deleteAccountData } from './account-deletion.js'
+import { applyAccountExclusions, isValidStableAccountId, withConnectionInstitutionId } from './account-exclusions.js'
 import { createAiRouter } from './ai-router.js'
 import { createAuthRouter } from './auth-router.js'
 import { behaviorEventsFromFinanceState } from './budget-learning.js'
@@ -13,7 +14,7 @@ import { createFinanceRouter } from './finance-router.js'
 import { createGoogleSubscriptionsRouter } from './google-subscriptions-router.js'
 import { OperationalMetrics } from './operational-metrics.js'
 import { authorizeProviderUser, describeProviderForUser } from './provider-access.js'
-import { callbackHasCompletionSignal, completedConnectionMatchesState } from './provider-callback.js'
+import { callbackHasCompletionSignal, completeConnectorCallback } from './provider-callback.js'
 import { createOpenBankingProviderRegistry } from './providers.js'
 import { HttpError, SlidingWindowRateLimiter, classifyError, clientIp, rateLimitTier, requestId, validateProductionConfig } from './runtime-security.js'
 import { bearerToken, createSession, issueState, verifySessionClaims, verifyState } from './security.js'
@@ -204,6 +205,37 @@ function connection(provider, stored, error) {
   }
 }
 
+// Read-only connector-overview boundary for a normal Connections page mount
+// (fixed 2026-08-27, PR #154, seventh Mock ASPSP pass): GET /api/connectors
+// only ever returned provider descriptors, never the user's own persisted
+// connector rows, so a ConnectionsPage remount (its `connections` state is
+// plain useState, destroyed on unmount) had no way to learn an Enable
+// Banking connection already existed without re-running a full provider
+// synchronization -- the connected card simply vanished on navigation, even
+// though nothing was ever disconnected. Reuses the exact same connection()
+// helper buildSyncPayload() already trusts for its own connection summaries
+// -- id/provider/displayName/status/lastSyncAt/consentExpiresAt/
+// institutionId/error only, never a credential/session/token field -- so
+// this adds no new secret-exposure surface, only a new, cheaper way to read
+// the same bounded shape without touching any provider network API.
+async function listStoredConnections(user) {
+  const results = []
+  for (const { id: provider } of providerRegistry.list()) {
+    const stored = await store.get(user, provider)
+    if (!stored) continue
+    // excludedAccounts (added 2026-08-27, PR #154): lets the Connections
+    // page render a "Removed from Finance Planner [Restore]" row per
+    // excluded account -- without this, an exclusion is an invisible,
+    // effectively irreversible tombstone once the account itself has been
+    // deleted from local AppState (Finance Planner has no other record of
+    // it). Bounded, secret-free (stableAccountId + an optional display name
+    // captured at removal time, never a raw IBAN/account number).
+    const excludedAccounts = await store.listAccountExclusions(user, provider)
+    results.push({ ...connection(provider, stored), excludedAccounts })
+  }
+  return results
+}
+
 async function start(provider, request, response) {
   const user = userId(request)
   const adapter = providerAdapter(provider)
@@ -258,6 +290,22 @@ async function buildSyncPayload(user) {
   for (const { id: provider } of providerRegistry.list()) {
     const stored = await store.get(user, provider)
     if (!stored) continue
+    // Exclusions now live in a durable store independent of this credential
+    // row (see database.js's addAccountExclusionMethods() / migration 011)
+    // -- fixed 2026-08-27 after independent review found the previous
+    // excludedStableAccountIds-inside-the-credential design lost every
+    // exclusion on disconnect/reconnect. Fetched once per provider, outside
+    // the try block, and attached to EVERY connection object this function
+    // returns (success or failure) -- found by a second review pass the
+    // same day: ConnectionsPage.tsx's synchronize() unconditionally
+    // replaces its whole `connections` array with this function's sync
+    // response, so if `excludedAccounts` were only ever attached by
+    // listStoredConnections() (the mount-only overview fetch), the
+    // Connections page's "Removed accounts / Restore" section would
+    // silently vanish after every single sync -- exactly the moment a user
+    // is most likely to check it -- even though the exclusion itself
+    // remained fully enforced server-side the whole time.
+    const excludedAccounts = await store.listAccountExclusions(user, provider)
     try {
       const adapter = providerAdapter(provider)
       authorizeProviderUser(adapter, user, env)
@@ -265,10 +313,21 @@ async function buildSyncPayload(user) {
       const lastSyncAt = new Date().toISOString()
       await store.set(user, provider, { ...synced.credential, consentId: stored.consentId, redirectUri: stored.redirectUri, lastSyncAt, consentExpiresAt: synced.consentExpiresAt })
       metrics.recordBank(provider, 'success')
-      results.push({ connection: { ...connection(provider, stored), lastSyncAt, consentExpiresAt: synced.consentExpiresAt }, accounts: synced.accounts, transactions: synced.transactions, reconciliation: synced.reconciliation })
+      const excludedStableAccountIds = excludedAccounts.map((exclusion) => exclusion.stableAccountId)
+      const filtered = applyAccountExclusions(excludedStableAccountIds, synced.accounts, synced.transactions)
+      // Found by independent review (2026-08-27, PR #154, fourth review
+      // round): neither provider adapter's sync() sets institutionId on the
+      // accounts it returns -- so a real bank import always produced
+      // Account.institutionId === undefined, which silently disabled
+      // buildSyncPreview()'s unreconciledLegacyAccounts guard entirely. See
+      // withConnectionInstitutionId()'s doc comment in account-exclusions.js
+      // for why this is enriched here (from the already-validated stored
+      // connection, never a browser-supplied value at sync time).
+      const accounts = withConnectionInstitutionId(filtered.accounts, stored.institutionId)
+      results.push({ connection: { ...connection(provider, stored), lastSyncAt, consentExpiresAt: synced.consentExpiresAt, excludedAccounts }, accounts, transactions: filtered.transactions, reconciliation: synced.reconciliation })
     } catch (error) {
       metrics.recordBank(provider, /consent.*expired/i.test(String(error?.message || error)) ? 'expired' : 'failure')
-      results.push({ connection: connection(provider, stored, error instanceof Error ? error.message : 'Synchronization failed.'), accounts: [], transactions: [] })
+      results.push({ connection: { ...connection(provider, stored, error instanceof Error ? error.message : 'Synchronization failed.'), excludedAccounts }, accounts: [], transactions: [] })
     }
   }
   return { connections: results, synchronizedAt: new Date().toISOString() }
@@ -402,6 +461,54 @@ const server = createServer(async (request, response) => {
       const providers = providerRegistry.adapters().map((adapter) => describeProviderForUser(adapter, user, env))
       return send(response, 200, { providers })
     }
+    // Read-only stored-connection overview: see listStoredConnections()
+    // above. Explicit literal path (not a provider-id regex match) so it
+    // can never collide with a real provider id.
+    if (request.method === 'GET' && url.pathname === '/api/connectors/connections') {
+      const user = userId(request)
+      const connections = await listStoredConnections(user)
+      return send(response, 200, { connections })
+    }
+    const exclusionMatch = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})\/exclusions$/)
+    if (request.method === 'POST' && exclusionMatch) {
+      const user = userId(request)
+      const provider = exclusionMatch[1]
+      const adapter = providerAdapter(provider)
+      authorizeProviderUser(adapter, user, env)
+      const stored = await store.get(user, provider)
+      if (!stored) throw new HttpError(404, 'connector_not_connected', 'No stored connection for this provider.')
+      const input = await body(request)
+      const stableAccountId = String(input.stableAccountId || '')
+      if (!isValidStableAccountId(stableAccountId)) throw new HttpError(400, 'invalid_stable_account_id', 'Invalid stable account id.')
+      const accountName = typeof input.accountName === 'string' ? input.accountName : undefined
+      // Durable, connection-independent storage (fixed 2026-08-27, PR #154,
+      // after independent review): addAccountExclusion() persists to
+      // connector_account_exclusions (migration 011) / EncryptedStore's own
+      // accountExclusions, atomically and idempotently -- never a read-
+      // modify-write on this credential row, and never lost by a later
+      // disconnect/reconnect of this same provider.
+      await store.addAccountExclusion(user, provider, stableAccountId, accountName)
+      return send(response, 200, { excluded: true })
+    }
+    // Restore ("un-remove") a previously-excluded account -- see the
+    // Connections page's "Removed from Finance Planner [Restore]" row.
+    // Deliberately does NOT require an existing stored connection: a user
+    // may want to restore an exclusion for a provider they haven't
+    // reconnected yet, and the operation is a harmless no-op either way if
+    // the account never resurfaces. A subsequent normal sync (never this
+    // endpoint) is what actually brings the account back through the
+    // reviewed import path -- this never resurrects old local transactions
+    // by guessing.
+    const restoreMatch = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})\/exclusions\/([a-f0-9]{64})$/)
+    if (request.method === 'DELETE' && restoreMatch) {
+      const user = userId(request)
+      const provider = restoreMatch[1]
+      const stableAccountId = restoreMatch[2]
+      const adapter = providerAdapter(provider)
+      authorizeProviderUser(adapter, user, env)
+      await store.removeAccountExclusion(user, provider, stableAccountId)
+      return send(response, 200, { restored: true })
+    }
     const institutionsMatch = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})\/institutions$/)
     if (request.method === 'GET' && institutionsMatch) {
       const user = userId(request)
@@ -506,63 +613,32 @@ const server = createServer(async (request, response) => {
         redirectWithoutError(state.redirectUri)
         return
       }
-      // Two provider-agnostic steps, never one -- see providers.js's
-      // completeCallback() doc comment and the postgres-store.js/
-      // crypto-store.js consumePendingConnectionSetup()/finalizeConnection()
-      // doc comments for the full reasoning. The nonce is consumed first
-      // (single local operation, still atomic and replay-proof); only once
-      // that succeeds AND the provider's own completion step succeeds does
-      // the connection get promoted into the live connector_connections
-      // record. No provider-specific branching lives here -- every provider
-      // implements the same completeCallback() contract (a pass-through for
-      // GoCardless/PayPal, a real code-for-session exchange for Enable
-      // Banking).
-      let pending
-      try {
-        pending = await store.consumePendingConnectionSetup({ nonce: state.nonce, consentId: state.consentId, userId: state.sub, provider, redirectUri: state.redirectUri, now: Date.now() })
-      } catch {
-        redirectWithError(state.redirectUri)
-        return
-      }
-      if (!pending) {
-        let replayed = false
-        try {
-          const stored = await store.get(state.sub, provider)
-          replayed = completedConnectionMatchesState(stored, state, provider)
-        } catch {}
-        if (!replayed) { redirectWithError(state.redirectUri); return }
-        const success = new URL(state.redirectUri)
-        success.searchParams.set('provider', provider)
-        response.writeHead(302, { Location: success.toString(), 'Cache-Control': 'no-store', 'X-Request-ID': id })
-        return response.end()
-      }
+      // The exactly-once-claim / concurrent-duplicate-safe completion
+      // algorithm lives in provider-callback.js's completeConnectorCallback()
+      // -- extracted (2026-08-25, fixing a live concurrent-callback race
+      // found in a Mock ASPSP run) so it can be exercised directly with
+      // mocked store/providerAdapter dependencies, not only through
+      // source-text assertions against this route. No provider-specific
+      // branching lives here or there -- every provider implements the same
+      // completeCallback() contract (a pass-through for GoCardless/PayPal, a
+      // real code-for-session exchange for Enable Banking). Never logs the
+      // code/state/token/payload -- only a fixed event name, provider id,
+      // and timing.
       let completed
       try {
-        completed = await providerAdapter(provider).completeCallback({ code: url.searchParams.get('code'), pending })
-      } catch (error) {
-        // The nonce is already burned and any existing working connection
-        // (reconnect case) is untouched -- this connection attempt simply
-        // never gets finalized. Distinguish "the user declined at the
-        // provider" (authorization_denied, an honest and distinct message)
-        // from every other failure (network error, malformed response,
-        // rejected code -- the generic copy), but never reflect the raw
-        // provider/error text itself.
-        redirectWithError(state.redirectUri, error?.code === 'authorization_denied' ? 'access_denied' : 'invalid_state')
+        completed = await completeConnectorCallback({
+          store,
+          providerAdapter: providerAdapter(provider),
+          state,
+          code: url.searchParams.get('code'),
+          log: (fields) => console.log(JSON.stringify({ level: 'info', requestId: id, ...fields })),
+        })
+      } catch {
+        redirectWithError(state.redirectUri)
         return
       }
-      try {
-        await store.finalizeConnection({ userId: state.sub, provider, connection: completed, connectedAt: new Date().toISOString() })
-      } catch {
-        // completeCallback() already succeeded -- for a provider like Enable
-        // Banking, a real session/consent now exists at their end with zero
-        // local trace of it. Best-effort ask the provider to revoke what it
-        // just created rather than leaving it permanently orphaned. Never
-        // lets a revoke failure change the error the user sees, and never
-        // throws (disconnect() implementations already never throw; the
-        // wrapper is defense-in-depth against a future adapter breaking
-        // that contract).
-        try { await providerAdapter(provider).disconnect(completed) } catch {}
-        redirectWithError(state.redirectUri)
+      if (completed.outcome === 'error') {
+        redirectWithError(state.redirectUri, completed.errorCode)
         return
       }
       const success = new URL(state.redirectUri)

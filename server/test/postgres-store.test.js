@@ -58,7 +58,7 @@ test('PostgresStore preserves encrypted connector and one-time nonce behavior', 
     const stillWorking = await store.get(userId, 'gocardless')
     assert.equal(stillWorking.accessToken, 'previously-working-token', 'the working connection must not be overwritten before activation')
 
-    const consumed = await store.consumePendingConnectionSetup({
+    const claim = await store.claimPendingConnectionSetup({
       userId,
       provider: 'gocardless',
       consentId,
@@ -66,11 +66,13 @@ test('PostgresStore preserves encrypted connector and one-time nonce behavior', 
       redirectUri,
       now: Date.now(),
     })
-    assert.equal(consumed?.accessToken, 'secret-token')
+    assert.equal(claim.status, 'claimed')
+    assert.equal(claim.connection?.accessToken, 'secret-token')
 
-    // The nonce is single-use: a second consumption attempt (replay) must
-    // fail even before completeCallback()/finalizeConnection() ever run.
-    const replayed = await store.consumePendingConnectionSetup({
+    // The nonce is claimed, not deleted -- a second claim attempt while
+    // unresolved (completeCallback()/finalizeConnection() have not run yet)
+    // must see it as in progress, not as available to re-claim.
+    const duplicate = await store.claimPendingConnectionSetup({
       userId,
       provider: 'gocardless',
       consentId,
@@ -78,12 +80,12 @@ test('PostgresStore preserves encrypted connector and one-time nonce behavior', 
       redirectUri,
       now: Date.now(),
     })
-    assert.equal(replayed, null)
+    assert.equal(duplicate.status, 'in_progress')
 
     await store.finalizeConnection({
       userId,
       provider: 'gocardless',
-      connection: consumed,
+      connection: claim.connection,
       connectedAt: '2026-07-27T20:00:00.000Z',
     })
 
@@ -91,12 +93,19 @@ test('PostgresStore preserves encrypted connector and one-time nonce behavior', 
     assert.equal(stored.accessToken, 'secret-token')
     assert.equal(stored.connectedAt, '2026-07-27T20:00:00.000Z')
 
+    // Only releasing the claim (the success path, after finalizeConnection())
+    // actually removes the nonce -- matching the original single-use
+    // guarantee, just moved to after finalization instead of before the
+    // provider network call.
+    assert.equal(await store.releasePendingConnectionSetup({ nonce, claimToken: claim.claimToken }), true)
+    assert.equal((await store.claimPendingConnectionSetup({ userId, provider: 'gocardless', consentId, nonce, redirectUri, now: Date.now() })).status, 'not_found')
+
     await store.remove(userId, 'gocardless')
     assert.equal(await store.get(userId, 'gocardless'), null)
   })
 })
 
-test('consumePendingConnectionSetup/finalizeConnection: a working connection survives a reconnect attempt whose provider-side exchange never completes', { skip: !databaseUrl }, async () => {
+test('claimPendingConnectionSetup/finalizeConnection: a working connection survives a reconnect attempt whose provider-side exchange never completes', { skip: !databaseUrl }, async () => {
   await withDatabase(async (pool) => {
     const store = new PostgresStore(pool, 'test-master-key-with-at-least-32-characters')
     const userId = `user-${randomUUID()}`
@@ -115,20 +124,100 @@ test('consumePendingConnectionSetup/finalizeConnection: a working connection sur
       connection: { consentId, redirectUri, aspspName: 'ING-DiBa' },
     })
 
-    // Simulates the server callback route consuming the nonce successfully,
+    // Simulates the server callback route claiming the nonce successfully,
     // then the provider's completeCallback() (the code-for-session exchange)
-    // failing -- finalizeConnection() is deliberately never called in that
-    // case. The nonce is spent (one-shot, matching real OAuth code
-    // single-use semantics) but the previously-working connection must be
-    // completely untouched.
-    const consumed = await store.consumePendingConnectionSetup({ userId, provider: 'enablebanking', consentId, nonce, redirectUri, now: Date.now() })
-    assert.ok(consumed, 'the nonce is still valid the first time it is consumed')
+    // failing -- finalizeConnection() is deliberately never called, and the
+    // claim is released the same way the real failure path does. The nonce
+    // is spent (one-shot, matching real OAuth code single-use semantics) but
+    // the previously-working connection must be completely untouched.
+    const claim = await store.claimPendingConnectionSetup({ userId, provider: 'enablebanking', consentId, nonce, redirectUri, now: Date.now() })
+    assert.equal(claim.status, 'claimed', 'the nonce is still valid the first time it is claimed')
 
     const stillWorking = await store.get(userId, 'enablebanking')
     assert.equal(stillWorking.sessionId, 'still-working-session', 'the old connection must survive a completeCallback() failure')
 
-    const replay = await store.consumePendingConnectionSetup({ userId, provider: 'enablebanking', consentId, nonce, redirectUri, now: Date.now() })
-    assert.equal(replay, null, 'the nonce cannot be consumed twice, even after the first consumer never finalized')
+    await store.releasePendingConnectionSetup({ nonce, claimToken: claim.claimToken })
+    const replay = await store.claimPendingConnectionSetup({ userId, provider: 'enablebanking', consentId, nonce, redirectUri, now: Date.now() })
+    assert.equal(replay.status, 'not_found', 'the nonce cannot be claimed twice, even after the first claimer never finalized')
+  })
+})
+
+// The centerpiece regression for the live concurrent-duplicate-callback race
+// (2026-08-25, Mock ASPSP run against PR #154): two literally concurrent
+// claim attempts for the exact same signed attempt, issued against real
+// Postgres via Promise.all (not sequenced by the test), must still resolve
+// to exactly one 'claimed' and one 'in_progress' -- the row-level lock taken
+// by claimPendingConnectionSetup()'s UPDATE is what enforces this, not
+// anything in this test or in JS. This is what makes the fix correct across
+// multiple connector processes/instances sharing one Postgres database, not
+// just within a single process's event loop.
+test('claimPendingConnectionSetup is exactly-once under real concurrent Postgres clients', { skip: !databaseUrl }, async () => {
+  await withDatabase(async (pool) => {
+    const storeA = new PostgresStore(pool, 'test-master-key-with-at-least-32-characters')
+    const storeB = new PostgresStore(pool, 'test-master-key-with-at-least-32-characters')
+    const userId = `user-${randomUUID()}`
+    const consentId = randomUUID()
+    const nonce = randomUUID()
+    const redirectUri = 'https://finance.example.test/callback'
+    const input = { userId, provider: 'enablebanking', consentId, nonce, redirectUri, now: Date.now() }
+
+    await storeA.createPendingConnectionSetup({ ...input, expiresAt: Date.now() + 60_000, connection: { consentId, redirectUri, aspspName: 'ING-DiBa' } })
+
+    const [resultA, resultB] = await Promise.all([
+      storeA.claimPendingConnectionSetup(input),
+      storeB.claimPendingConnectionSetup(input),
+    ])
+    const statuses = [resultA.status, resultB.status].sort()
+    assert.deepEqual(statuses, ['claimed', 'in_progress'], 'exactly one concurrent claim attempt wins; the other must observe in_progress, never a second claimed result and never not_found')
+
+    const winner = resultA.status === 'claimed' ? resultA : resultB
+    assert.equal(winner.connection?.aspspName, 'ING-DiBa')
+
+    // The loser polling again while unresolved still sees in_progress, never
+    // a chance to also become 'claimed'.
+    assert.equal((await storeA.claimPendingConnectionSetup(input)).status, 'in_progress')
+
+    await storeA.finalizeConnection({ userId, provider: 'enablebanking', connection: winner.connection, connectedAt: '2026-07-27T20:00:00.000Z' })
+    await storeA.releasePendingConnectionSetup({ nonce, claimToken: winner.claimToken })
+
+    const stored = await storeA.get(userId, 'enablebanking')
+    assert.equal(stored.aspspName, 'ING-DiBa')
+    assert.ok(stored.connectedAt)
+  })
+})
+
+// Found by independent review (2026-08-25): the payload-consistency check
+// originally ran AFTER the claim's COMMIT, so a mismatch left claim_token
+// set on a row nobody held the token for -- permanently stuck as "claimed"
+// (with no way to ever release it) until the retention sweep's natural
+// expiry, rather than being rolled back and left genuinely re-claimable.
+test('claimPendingConnectionSetup rolls back (does not commit) when the pending payload disagrees with the nonce row, so the nonce is never left stuck as claimed-by-no-one', { skip: !databaseUrl }, async () => {
+  await withDatabase(async (pool) => {
+    const store = new PostgresStore(pool, 'test-master-key-with-at-least-32-characters')
+    const userId = `user-${randomUUID()}`
+    const consentId = randomUUID()
+    const nonce = randomUUID()
+    const redirectUri = 'https://finance.example.test/callback'
+
+    // Deliberately inconsistent: the row's own consent_id/redirect_uri
+    // columns (what the claim's WHERE clause matches against) say one
+    // thing, but the embedded encrypted payload disagrees -- this would
+    // only happen from a caller bug/data corruption, never through normal
+    // use, but it's exactly the defensive check the pre-fix
+    // consumePendingConnectionSetup() already had (and correctly rolled
+    // back on).
+    await store.createPendingConnectionSetup({
+      userId, provider: 'enablebanking', consentId, nonce, redirectUri,
+      expiresAt: Date.now() + 60_000,
+      connection: { consentId: 'a-different-consent-id-than-the-row-itself', redirectUri, aspspName: 'ING-DiBa' },
+    })
+
+    const result = await store.claimPendingConnectionSetup({ userId, provider: 'enablebanking', consentId, nonce, redirectUri, now: Date.now() })
+    assert.equal(result.status, 'not_found')
+
+    const row = await pool.query('SELECT claim_token FROM oauth_nonces WHERE user_id=$1', [userId])
+    assert.equal(row.rowCount, 1, 'the row itself must still exist (rolled back, not deleted)')
+    assert.equal(row.rows[0].claim_token, null, 'a rolled-back claim attempt must never leave claim_token set on the row -- otherwise nobody holds the token needed to ever release it')
   })
 })
 

@@ -108,33 +108,116 @@ export class PostgresStore {
     return result.rowCount === 1
   }
 
-  // Consumes the single-use nonce and returns the pending credential it
-  // guarded, without yet promoting it into connector_connections -- some
-  // providers (Enable Banking) still need to complete a server-side exchange
-  // (an authorization code -> session call) before the connection is safe to
-  // activate, and that exchange is a network call that must never happen
-  // inside an open DB transaction. Stays a single local transaction (no
-  // network I/O) so nonce consumption itself remains atomic and replay-proof
-  // -- unchanged in substance from the single-step activateConnection() this
-  // replaces. See finalizeConnection() for the second, provider-independent
-  // step, and server.js's callback route for how the two are sequenced
-  // around providerAdapter(provider).completeCallback().
-  async consumePendingConnectionSetup(input) {
+  // CLAIMS (does not delete) the pending credential guarded by this nonce,
+  // exactly once -- fixes a concurrent-duplicate-callback race found live
+  // (2026-08-25, Mock ASPSP run against PR #154): the previous
+  // consumePendingConnectionSetup() DELETEd the row here, before
+  // completeCallback() (a network call to the provider) and
+  // finalizeConnection() ever ran, so a second delivery of the same signed
+  // callback arriving in that window saw the nonce as already gone, found no
+  // finalized connection yet either, and was rejected as invalid_state --
+  // even though the first delivery went on to finalize successfully moments
+  // later. Marking the row claimed IN PLACE instead lets a concurrent
+  // duplicate see, from shared Postgres state, that this exact verified
+  // attempt is already being completed (status: 'in_progress') and wait for
+  // its outcome, rather than being told the attempt never existed.
+  //
+  // Returns exactly one of:
+  //   { status: 'claimed', claimToken, connection } -- this call is the
+  //     exactly-once winner; proceed to providerAdapter.completeCallback()
+  //     and finalizeConnection(), then call releasePendingConnectionSetup().
+  //   { status: 'in_progress' } -- a matching row exists but is already
+  //     claimed by an earlier delivery of the SAME verified attempt (same
+  //     nonce_hash + consent_id + user_id + provider + redirect_uri) that
+  //     has not yet resolved. Never returned for an unrelated/expired/
+  //     mismatched nonce -- see waitForPendingConnectionCompletion().
+  //   { status: 'not_found' } -- no matching, unexpired row exists (never
+  //     registered, wrong consent/user/provider/redirectUri, expired, or
+  //     already resolved and released by its claimer). The caller's existing
+  //     completedConnectionMatchesState() replay check is what distinguishes
+  //     "this is a genuine unrelated/expired callback" from "this is a
+  //     delayed duplicate of an attempt that already finished."
+  //
+  // The claim itself stays a single local transaction (no network I/O), so
+  // it remains atomic and exactly-once under real concurrent Postgres
+  // clients -- the row-level lock taken by the UPDATE is what actually
+  // enforces "at most one winner," not application-level logic. This is
+  // therefore correct across multiple connector processes/instances sharing
+  // one Postgres database, not just within one process.
+  async claimPendingConnectionSetup(input) {
     const client = await this.pool.connect()
     try {
       await client.query('BEGIN')
-      const nonce = await client.query('DELETE FROM oauth_nonces WHERE nonce_hash=$1 AND consent_id=$2 AND user_id=$3 AND provider=$4 AND redirect_uri=$5 AND expires_at > to_timestamp($6/1000.0) RETURNING pending_payload', [nonceKey(input.nonce), input.consentId, input.userId, input.provider, input.redirectUri, input.now])
-      if (!nonce.rowCount || !nonce.rows[0].pending_payload) { await client.query('ROLLBACK'); return null }
-      const connection = this.decode(nonce.rows[0].pending_payload)
-      if (connection.consentId !== input.consentId || connection.redirectUri !== input.redirectUri) { await client.query('ROLLBACK'); return null }
+      const claimToken = randomBytes(24).toString('base64url')
+      const claimed = await client.query(
+        `UPDATE oauth_nonces SET claim_token=$7
+         WHERE nonce_hash=$1 AND consent_id=$2 AND user_id=$3 AND provider=$4 AND redirect_uri=$5
+           AND expires_at > to_timestamp($6/1000.0) AND claim_token IS NULL
+         RETURNING pending_payload`,
+        [nonceKey(input.nonce), input.consentId, input.userId, input.provider, input.redirectUri, input.now, claimToken],
+      )
+      if (claimed.rowCount === 1) {
+        // Validated BEFORE commit, matching the old consumePendingConnectionSetup()
+        // and EncryptedStore.claimPendingConnectionSetup() -- committing the
+        // claim first and only then discovering a payload mismatch would
+        // leave claim_token set on a row nobody holds the token for, so it
+        // could never be released and would sit "claimed" until the
+        // retention sweep's natural expiry (found by review, 2026-08-25).
+        if (!claimed.rows[0].pending_payload) { await client.query('ROLLBACK'); return { status: 'not_found' } }
+        const connection = this.decode(claimed.rows[0].pending_payload)
+        if (connection.consentId !== input.consentId || connection.redirectUri !== input.redirectUri) { await client.query('ROLLBACK'); return { status: 'not_found' } }
+        await client.query('COMMIT')
+        return { status: 'claimed', claimToken, connection }
+      }
+      // Not claimed by us -- find out whether that's because it's already
+      // claimed by someone else (wait for them) or genuinely doesn't exist
+      // (unrelated/expired/mismatched nonce, handled by the caller's
+      // existing replay-check path).
+      const existing = await client.query(
+        `SELECT 1 FROM oauth_nonces
+         WHERE nonce_hash=$1 AND consent_id=$2 AND user_id=$3 AND provider=$4 AND redirect_uri=$5 AND expires_at > to_timestamp($6/1000.0)`,
+        [nonceKey(input.nonce), input.consentId, input.userId, input.provider, input.redirectUri, input.now],
+      )
       await client.query('COMMIT')
-      return connection
+      return { status: existing.rowCount ? 'in_progress' : 'not_found' }
     } catch (error) {
       await client.query('ROLLBACK')
       throw error
     } finally {
       client.release()
     }
+  }
+
+  // Read-only: used by waitForPendingConnectionCompletion() to poll whether
+  // a claimed attempt has resolved yet, without attempting (or being able)
+  // to claim it itself. Never mutates anything.
+  async pendingConnectionSetupExists(input) {
+    const result = await this.pool.query(
+      `SELECT 1 FROM oauth_nonces WHERE nonce_hash=$1 AND consent_id=$2 AND user_id=$3 AND provider=$4 AND redirect_uri=$5 AND expires_at > to_timestamp($6/1000.0)`,
+      [nonceKey(input.nonce), input.consentId, input.userId, input.provider, input.redirectUri, input.now],
+    )
+    return result.rowCount > 0
+  }
+
+  // Releases a resolved claim -- called after EITHER a successful
+  // finalizeConnection() OR a failed completeCallback()/finalizeConnection(),
+  // in both cases only once the outcome is final. Matched by claimToken, so
+  // only the actual claimer (never a waiting duplicate, which never receives
+  // a claimToken) can release it. Deleting the row here (rather than earlier,
+  // before the network call) is the whole point of this fix -- a concurrent
+  // duplicate's claimPendingConnectionSetup() call sees 'in_progress' right
+  // up until this runs, then 'not_found' afterward, at which point its
+  // existing completedConnectionMatchesState() check against the
+  // now-finalized (or, on failure, still-absent) connector_connections row
+  // is what actually determines its own success/failure -- this method
+  // itself makes no success/failure claim, it only ends the claim's
+  // exclusivity window.
+  async releasePendingConnectionSetup(input) {
+    const result = await this.pool.query(
+      'DELETE FROM oauth_nonces WHERE nonce_hash=$1 AND claim_token=$2 RETURNING 1',
+      [nonceKey(input.nonce), input.claimToken],
+    )
+    return result.rowCount === 1
   }
 
   // Provider-independent: promotes an already-verified connection (the

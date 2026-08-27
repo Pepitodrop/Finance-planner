@@ -49,9 +49,9 @@ Finance Planner still does **not** read, copy, mutate, store or log credential v
 
 ## Verification status
 
-The sandbox warning and CSS refinement are **IMPLEMENTED on PR #144 but not yet redeployed/re-verified live**.
+The sandbox warning and CSS refinement are **IMPLEMENTED on PR #154 but not yet redeployed/re-verified live** since they landed.
 
-The prior live matrix remains unchanged until a new deployment is tested:
+**Updated 2026-08-25 — a real Mock ASPSP production run got further than this note previously recorded:**
 
 - Enable Banking configuration: LIVE VERIFIED
 - `/aspsps`: LIVE VERIFIED
@@ -59,15 +59,24 @@ The prior live matrix remains unchanged until a new deployment is tested:
 - real bank logos/logo proxy: LIVE VERIFIED
 - `POST /auth` accepted: LIVE VERIFIED
 - official Auth Flow widget rendering: previously live-observed before this UI refinement
-- successful sandbox authorization: NOT YET VERIFIED
-- callback: NOT YET VERIFIED
-- `POST /sessions`: NOT YET VERIFIED
-- balances: NOT YET VERIFIED
-- transactions: NOT YET VERIFIED
+- successful sandbox authorization: **LIVE VERIFIED** (Mock ASPSP, no real bank credentials needed)
+- callback: **LIVE VERIFIED** — an `enablebanking` connector connection was persisted, the first ever in this codebase
+- `POST /sessions`: **LIVE VERIFIED** (implied by the persisted connection)
+- balances: NOT YET VERIFIED — the first sync after this persisted connection failed with a real provider HTTP 422 (an account-handling contract bug in `EnableBankingProvider.sync()`, unrelated to this note's UI work — see [[Enable Banking]]'s fourth-pass entry and [[Provider Status]] for the full root cause and fix). **Code-fixed, locally test-verified only, awaiting re-verification.**
+- transactions: NOT YET VERIFIED — same block
 - disconnect: NOT YET VERIFIED
+- second-sync deduplication: NOT YET VERIFIED — blocked on the first sync succeeding live
+
+This pass also exercised the provider-authorization **popup** bridge (`src/providerReturnBridge.ts`) against a real callback for the first time. Two review rounds on PR #154 found and fixed a total of five bugs in it: an unreachable popup-blocked fallback, later corrected into a genuine fail-closed rejection after a second review caught that the first fix's fallback would have recreated the vault-reset problem the bridge exists to prevent (see [[Rejected Approaches]]); its own test suite silently never executing for lack of a jsdom environment pragma; unbounded provider/error validation on the return signal; and a logout cleanup gap. See [[Provider Authorization Popup Bridge]] for full detail. Also code-fixed, awaiting runtime re-verification.
+
+**Updated again 2026-08-25 — fifth pass, a temporary deployment carrying the fixes above:**
+
+- **Popup opens, original tab stays mounted, original vault stays unlocked: LIVE VERIFIED.** This is the first live confirmation that the popup bridge's core purpose (no same-tab vault-reset regression) actually works in a real browser.
+- **New defect found and fixed: concurrent-duplicate-callback race.** The connector logged two `GET /api/connectors/callback` deliveries for one authorization; the original tab accepted the faster one, which returned `invalid_state`, even though the slower delivery finalized the connection successfully moments later (confirmed by a read-only DB check). Root-caused and fixed with a claim lifecycle replacing immediate nonce deletion — see [[Provider Callback Binding]]'s "Fixed 2026-08-25: concurrent-duplicate-callback race" section. **Code-fixed, locally test-verified only (including against a real local Postgres container) — not yet re-verified live.**
+- Balances/transactions/disconnect/second-sync-dedup: **still NOT YET VERIFIED** — this pass was blocked by the callback race before any of them could be trusted, same as before.
 
 ## Production use
 
 A real Volksbank Köln Bonn connection belongs to a separate **Enable Banking production application**, not the sandbox application. Production and sandbox applications are separate environments and must not be conflated.
 
-Related: [[Enable Banking]] · [[Enable Banking Auth Flow Widget]] · [[Bank Family Directory Resolution]] · [[Connections Page]] · [[Provider Status]] · [[Provider Callback Binding]] · [[Institution Logo Proxy]] · [[Rate Limiting]]
+Related: [[Enable Banking]] · [[Enable Banking Auth Flow Widget]] · [[Bank Family Directory Resolution]] · [[Connections Page]] · [[Provider Status]] · [[Provider Callback Binding]] · [[Institution Logo Proxy]] · [[Rate Limiting]] · [[Provider Authorization Popup Bridge]]

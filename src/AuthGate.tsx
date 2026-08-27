@@ -3,6 +3,7 @@ import { Fingerprint, KeyRound, LogIn, RefreshCw, ShieldCheck, UserPlus, X } fro
 import { startRegistration } from '@simplewebauthn/browser'
 import { RUNTIME_SURFACE_PRIORITY } from './runtime-surfaces/runtimeSurfacePolicy'
 import { runtimeSurfaceRegistration, useRuntimeSurface } from './runtime-surfaces/runtimeSurfaceContext'
+import { clearPendingConnectorAttempt } from './providerReturnBridge'
 
 export interface AuthUser { id: string; email: string; name: string; picture?: string; passkeyCount: number }
 export interface AuthActions { logout: () => Promise<void> }
@@ -128,7 +129,38 @@ export function AuthGate({ children }: AuthGateProps) {
   const dismissPrompt = () => { localStorage.setItem(PASSKEY_PROMPT_KEY, 'true'); setPromptDismissed(true) }
 
   const logout = useCallback(async () => {
-    await api('/api/auth/logout', { method: 'POST' })
+    try {
+      await api('/api/auth/logout', { method: 'POST' })
+    } finally {
+      // An in-flight bank-connection popup attempt is bound to this browser
+      // tab, not to this user session -- without clearing it, a different
+      // user logging into the same tab afterward could have a stale return
+      // signal from the PREVIOUS user's attempt silently accepted (see
+      // clearPendingConnectorAttempt()'s doc comment for why this is a
+      // logout-only concern, not something a vault lock needs to do too).
+      // Runs in `finally`, not after the request settles successfully
+      // (fixed 2026-08-25, PR #154 review): this is purely local browser
+      // hygiene, unrelated to whether the server accepted the request, so a
+      // failed/lost logout response must not leave a stale binding behind
+      // either -- ApplicationShell.tsx's signOut() still surfaces the
+      // request failure and lets the user retry regardless.
+      //
+      // This does NOT cancel or revoke anything server-side. The signed
+      // OAuth/PSD2 `state` issued at `/start` time (server/src/security.js
+      // issueState(), 10-minute default TTL) and its matching
+      // `oauth_nonces` row remain valid until they naturally expire or are
+      // consumed by a real callback -- clearing this tab's local storage has
+      // no effect on that. A provider popup opened by this same user before
+      // logout can therefore still complete and finalize a connection for
+      // that user within the state's TTL, even after they've logged out
+      // client-side; the connection is bound to whichever account the
+      // signed state's own `sub` names, not to whether that account is
+      // currently logged in in any particular tab. This is a known,
+      // documented gap (not fixed here -- would need a new server-side
+      // "invalidate this user's pending connection setup" path, which
+      // doesn't exist today), tracked in the project's Known Issues notes.
+      clearPendingConnectorAttempt()
+    }
     setUser(null)
   }, [])
 

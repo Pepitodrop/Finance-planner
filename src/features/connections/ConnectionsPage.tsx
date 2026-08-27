@@ -32,7 +32,9 @@ import {
   disconnectConnector,
   fetchProviderInstitutions,
   fetchProviderStatus,
+  fetchStoredConnections,
   providerInstitutionLogoUrl,
+  restoreProviderAccount,
   selectSyncPreviewAccounts,
   startConnector,
   synchronizeConnections,
@@ -41,11 +43,13 @@ import {
   type ConnectorProvider,
   type ConnectorStartContext,
   type ConnectorStartResult,
+  type ExcludedAccountSummary,
   type ProviderDescriptor,
   type ProviderInstitution,
   type SyncPreview,
 } from '../../connectors'
 import { EnableBankingAuthFlow, type EnableBankingAuthFlowStatus } from './EnableBankingAuthFlow'
+import { abandonConnectorPopupAttempt } from '../../providerReturnBridge'
 import { institutionLettermark, institutionLogoUrl } from '../../institution-logos'
 import { normalizeManualCreditCard } from '../../manualCreditCard'
 import { applyStatementImport, buildStatementPreview, parseStatement, type StatementPreview } from '../../statementImport'
@@ -144,7 +148,26 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [connections, setConnections] = useState<ConnectorConnection[]>([])
+  // Guards against a real race found by adversarial review (2026-08-27):
+  // the mount-time fetchStoredConnections() request (listStoredConnections()
+  // awaits each provider's store row sequentially server-side, so it can be
+  // slower than a single-provider disconnect) could resolve AFTER the user
+  // disconnects that same provider, and its functional updater's
+  // `current.length ? current : stored` check would then apply `stored`
+  // over an emptied `connections` array -- resurrecting a connection in the
+  // UI that was genuinely just deleted server-side. Tracks every provider
+  // disconnected during this mount so the stored-connections effect can
+  // filter it back out no matter which request resolves last.
+  const disconnectedProvidersRef = useRef<Set<ConnectorProvider>>(new Set())
   const [previews, setPreviews] = useState<SyncPreview[]>([])
+  // Found by adversarial review (2026-08-27, PR #154): when a routine
+  // refresh (Blocker 1) and a genuinely-new/reconnected account both occur
+  // in the same sync batch, the routine refresh applies silently while the
+  // Choose-accounts screen is shown for the other accounts -- `message`
+  // only renders on the overview screen (see below), so the user had no
+  // feedback that anything was already refreshed until they returned to
+  // it, if ever. Rendered directly on SyncSelectionScreen instead.
+  const [routineRefreshSummary, setRoutineRefreshSummary] = useState<{ accounts: number; transactions: number } | null>(null)
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(new Set())
   const [statementPreview, setStatementPreview] = useState<StatementPreview | null>(null)
   const [statementFileName, setStatementFileName] = useState('')
@@ -163,6 +186,14 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   // fixtureStatus prop -- see the acceptanceMode effect below. Always null
   // outside VITE_ACCEPTANCE_FIXTURES=true fixture wiring.
   const [authFlowFixtureStatus, setAuthFlowFixtureStatus] = useState<EnableBankingAuthFlowStatus | null>(null)
+  // Set only when startProvider() got back a 'popup' result -- the current
+  // tab never navigates in this mode (only the popup does), so this is what
+  // moves the modal out of the otherwise-permanent "busy" state a plain
+  // 'redirect' result would leave it in. A successful popup return remounts
+  // this whole component (ConnectionsPanel's key bump), which naturally
+  // clears this state along with everything else -- this only needs to
+  // handle the "still waiting" and "user closed the popup" cases itself.
+  const [popupAttempt, setPopupAttempt] = useState<Extract<ConnectorStartResult, { mode: 'popup' }>['attempt'] | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [category, setCategory] = useState<InstitutionCategory>('popular')
   const [selectedInstitutionId, setSelectedInstitutionId] = useState<string | null>(null)
@@ -200,6 +231,15 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   const [attentionProvider, setAttentionProvider] = useState<ConnectorProvider | null>(null)
   const [attentionError, setAttentionError] = useState('')
   const [disconnectConfirming, setDisconnectConfirming] = useState(false)
+  // Restore ("un-remove") a previously-excluded account (2026-08-27, PR
+  // #154): tracks which single stableAccountId is mid-request (so only
+  // that row's button shows a busy state and duplicate clicks on the SAME
+  // row are prevented) and a per-attempt error message. restoreProviderAccount()
+  // only deletes the durable exclusion record -- it never guesses old local
+  // transactions back into existence; a subsequent normal sync is what
+  // actually re-imports the account through the reviewed path.
+  const [restoringAccountId, setRestoringAccountId] = useState<string | null>(null)
+  const [restoreError, setRestoreError] = useState('')
 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -277,6 +317,56 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     if (import.meta.env.VITE_ACCEPTANCE_FIXTURES === 'true' && PROVIDER_STATUS_FIXTURE_MODES.has(acceptanceMode)) return
     return loadProviderStatus()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per mount; a fresh acceptanceMode always gets a fresh mount (see the `key` prop where ConnectionsPage is used)
+  }, [])
+
+  // Fixed 2026-08-27 (PR #154, seventh Mock ASPSP pass): `connections` is
+  // plain React state, destroyed whenever ConnectionsPage unmounts (e.g.
+  // navigating to Subscriptions and back). It used to only ever get
+  // populated by synchronize()/the provider-return callback flow, so a
+  // fresh mount had no way to learn an already-persisted connector
+  // connection existed -- a real "Connected" card would silently vanish and
+  // re-appear as the empty "Connect your financial accounts" state even
+  // though nothing was ever disconnected. This loads the same bounded,
+  // secret-free connection summary from the persisted server-side row,
+  // independently of provider-status loading (deliberately a *separate*
+  // effect/request, not folded into loadProviderStatus() above) and without
+  // triggering any provider network synchronization merely to list what's
+  // already stored.
+  //
+  // Under acceptance fixtures, every mode that cares about `connections`
+  // already sets it deterministically in the effect above -- skip the real
+  // fetch there entirely so it can never race a fixture's value in a jsdom
+  // test with no real backend.
+  useEffect(() => {
+    if (import.meta.env.VITE_ACCEPTANCE_FIXTURES === 'true' && acceptanceMode) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const stored = await fetchStoredConnections()
+        // Functional updater, not a bare setConnections(stored): if
+        // synchronize() (from an in-flight provider-return callback) has
+        // already populated `connections` with fresher post-sync data by
+        // the time this resolves, that fresher value must win, never be
+        // clobbered by this merely-as-of-mount snapshot. An empty result
+        // here (or this request failing, see catch below) must also never
+        // erase an already-known connection some other path already set.
+        //
+        // Also filters out anything in disconnectedProvidersRef: this
+        // request can resolve AFTER a disconnect that happened while it was
+        // in flight, and without this filter the `current.length ? current
+        // : stored` check above would apply the (now-stale) `stored` list
+        // over the just-emptied `connections` array, resurrecting a
+        // connection in the UI that was genuinely just deleted server-side.
+        const filtered = stored.filter((connection) => !disconnectedProvidersRef.current.has(connection.provider))
+        if (!cancelled) setConnections((current) => (current.length ? current : filtered))
+      } catch {
+        // Best-effort: a failed stored-connections fetch must not erase an
+        // already-known connection, and must not block the rest of the
+        // page (provider status / setup flow) from working.
+      }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per mount, same contract as loadProviderStatus above
   }, [])
 
   // Same generation-counter contract as loadProviderStatus above: four
@@ -369,7 +459,26 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
 
   const selectedInstitution = syntheticInstitution ?? (selectedInstitutionId ? institutionById(selectedInstitutionId) : undefined)
   const filteredInstitutions = useMemo(() => filterInstitutions(searchTerm, category), [searchTerm, category])
-  const discoveredAccounts = useMemo(() => previews.flatMap((preview) => preview.accountsToCreate), [previews])
+  // Includes accountsToUpdate: a reconnect match (see buildSyncPreview())
+  // still needs to appear in the selection screen and count toward
+  // "Accounts selected: X of Y" -- it is a real account the sync discovered,
+  // just one Finance Planner already knows under a different provider
+  // session id, not a brand-new one.
+  const discoveredAccounts = useMemo(() => previews.flatMap((preview) => [...preview.accountsToCreate, ...preview.accountsToUpdate]), [previews])
+  // Found live 2026-08-27 (PR #154, third independent review, Blocker 2):
+  // this must be visible on the Choose-accounts screen itself, not only via
+  // the overview screen's `message` banner -- the whole point of surfacing
+  // an unreconciled legacy account is to warn the user BEFORE they import a
+  // possibly-duplicate new account, and `message` only ever renders while
+  // `screen === 'overview'` (see below), which the user has already left by
+  // the time this screen is showing.
+  const unreconciledLegacyAccounts = useMemo(() => previews.flatMap((preview) => preview.unreconciledLegacyAccounts), [previews])
+  // Surfaced in SyncSelectionScreen so a reconnect's silent-but-safe account
+  // reconciliation is never invisible to the user -- an ambiguous merge
+  // must be understandable, not a surprise (found during design review,
+  // 2026-08-27): without this, a user reconnecting a bank sees their own
+  // existing account re-listed with no indication it isn't a duplicate.
+  const reconnectedAccountIds = useMemo(() => new Set(previews.flatMap((preview) => preview.accountsToUpdate.map((account) => account.id))), [previews])
   const selection = summarizeAccountSelection(discoveredAccounts.map((account) => account.id), selectedAccountIds)
   const selectedPreviews = useMemo(() => previews.map((preview) => selectSyncPreviewAccounts(preview, selectedAccountIds)), [previews, selectedAccountIds])
   const summary = useMemo(() => selectedPreviews.reduce((result, preview) => ({
@@ -388,6 +497,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setError('')
     setPreviews([])
     setSelectedAccountIds(new Set())
+    setRoutineRefreshSummary(null)
     if (isProviderReturn) setScreen('checking')
     try {
       const payloads = await synchronizeConnections()
@@ -395,14 +505,83 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
       const successful = payloads.filter((payload) => payload.connection.status !== 'error')
       const next = successful.map((payload) => buildSyncPreview(state, payload))
       const failed = payloads.filter((payload) => payload.connection.status === 'error')
-      const discovered = next.flatMap((preview) => preview.accountsToCreate)
-      setPreviews(next)
+
+      // Found live 2026-08-27 (PR #154, third independent review, Blocker
+      // 1): routineAccountUpdates (an ordinary "Refresh" on an
+      // already-connected account -- no reauthorization, no new account)
+      // must apply immediately and unconditionally, never gated behind the
+      // "choose accounts" selection screen the way a brand-new or
+      // reconnected account correctly still is. Applied here, directly to
+      // the CURRENT app state, before the selection screen (if any) is even
+      // computed -- see routinePortionOf()/withoutRoutine() below, which
+      // split each preview so the routine bucket is consumed exactly once
+      // here and never re-applied when the user later confirms a selection.
+      const routineIds = next.map((preview) => new Set(preview.routineAccountUpdates.map((account) => account.id)))
+      const routinePortionOf = (preview: SyncPreview, ids: Set<string>): SyncPreview => ({
+        ...preview,
+        accountsToCreate: [],
+        accountsToUpdate: [],
+        transactionsToImport: preview.transactionsToImport.filter((transaction) => ids.has(transaction.accountId)),
+        unreconciledLegacyAccounts: [],
+      })
+      const withoutRoutine = (preview: SyncPreview, ids: Set<string>): SyncPreview => ({
+        ...preview,
+        routineAccountUpdates: [],
+        transactionsToImport: preview.transactionsToImport.filter((transaction) => !ids.has(transaction.accountId)),
+        // Backfills are pure identity metadata on transactions that already
+        // exist locally (see SyncPreview.transactionsToUpdate) -- applied
+        // once, immediately, alongside the routine bucket; never reapplied
+        // by a later selection-screen confirmation.
+        transactionsToUpdate: [],
+      })
+      const hasRoutineChanges = next.some((preview) => preview.routineAccountUpdates.length > 0 || preview.transactionsToUpdate.length > 0)
+      let routineTransactionCount = 0
+      const routineAccountCount = next.reduce((sum, preview) => sum + preview.routineAccountUpdates.length, 0)
+      if (hasRoutineChanges) {
+        const routinelyUpdatedState = next.reduce((current, preview, index) => {
+          const portion = routinePortionOf(preview, routineIds[index])
+          routineTransactionCount += portion.transactionsToImport.length
+          return applySyncPreview(current, portion)
+        }, state)
+        onApply(routinelyUpdatedState)
+        setRoutineRefreshSummary({ accounts: routineAccountCount, transactions: routineTransactionCount })
+      }
+      const strippedNext = next.map((preview, index) => withoutRoutine(preview, routineIds[index]))
+
+      // Includes accountsToUpdate: a pure reconnect (the sync only found
+      // accounts Finance Planner already has under a different provider
+      // session id, no genuinely new accounts) must still route through the
+      // selection/import step rather than being reported as "No new
+      // accounts were found" -- the refreshed balance/metadata needs the
+      // user's explicit Import, exactly like a brand-new account does.
+      const discovered = strippedNext.flatMap((preview) => [...preview.accountsToCreate, ...preview.accountsToUpdate])
+      const unreconciledCount = next.reduce((sum, preview) => sum + preview.unreconciledLegacyAccounts.length, 0)
+      // Found live 2026-08-27 (PR #154, third independent review, Blocker
+      // 2): an existing provider account that couldn't be matched by id or
+      // stableId this sync is never silently merged into a new account --
+      // surfaced here as an explicit warning so the user can check for a
+      // duplicate manually (e.g. via Remove account) rather than the code
+      // guessing at a fuzzy match.
+      const unreconciledWarning = unreconciledCount
+        ? ` ${unreconciledCount} existing account(s) from this connection could not be automatically matched this time -- please check for duplicates before importing new accounts.`
+        : ''
+      setPreviews(strippedNext)
       setSelectedAccountIds(new Set(discovered.map((account) => account.id)))
       if (discovered.length) {
+        // The unreconciled-legacy-account warning (if any) is rendered
+        // directly inside SyncSelectionScreen via the unreconciledLegacyAccounts
+        // memo above, not via `message` -- `message` only renders on the
+        // overview screen, which the user has already left here.
         setScreen('sync-selection')
       } else {
         setScreen('overview')
-        setMessage(failed.length ? `No connection could be updated successfully. ${failed.length} connection(s) need attention.` : 'No new accounts were found.')
+        if (failed.length) {
+          setMessage(`No connection could be updated successfully. ${failed.length} connection(s) need attention.${unreconciledWarning}`)
+        } else if (hasRoutineChanges) {
+          setMessage(`${routineTransactionCount ? `Refreshed. ${routineTransactionCount} new transaction(s) imported.` : 'Your accounts are already up to date.'}${unreconciledWarning}`)
+        } else {
+          setMessage(`No new accounts were found.${unreconciledWarning}`)
+        }
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Synchronization failed.')
@@ -410,7 +589,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     } finally {
       setBusy(false)
     }
-  }, [state])
+  }, [state, onApply])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -450,19 +629,54 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
       const result = await startConnector(provider, context)
       if (result.mode === 'embedded-auth') {
         // Enable Banking only: stay on Step 3 and render the official Auth
-        // Flow widget instead of leaving Finance Planner. Every other
-        // provider's 'redirect' result means the browser is already
-        // navigating away by the time this resolves, so busy correctly
-        // stays true for it (there's nothing left to interact with here).
+        // Flow widget instead of leaving Finance Planner.
         setEmbeddedAuthFlow(result)
         setBusy(false)
+      } else if (result.mode === 'popup') {
+        // The current tab never navigates in this mode -- only the popup
+        // does. Leaving busy=true here (as a plain 'redirect' result
+        // correctly does, since that tab really is about to unload) would
+        // permanently strand the modal with no way to proceed: nothing in
+        // this tab is ever coming to replace it. Clearing busy and showing
+        // an explicit waiting state is what actually fixes that.
+        setPopupAttempt(result.attempt)
+        setBusy(false)
       }
+      // A plain 'redirect' result means this tab really is navigating away
+      // -- busy correctly stays true. In production this only happens for
+      // providers without an embedded widget, since a real popup either
+      // opens (handled above) or startConnector() rejects before /start is
+      // ever called (handled in the catch below); the redirect/embedded
+      // fallback for a blocked popup only exists under acceptance fixtures.
     } catch (reason) {
+      // Also reached when startConnector() fails closed because the browser
+      // blocked the popup or couldn't create the tab-local return binding --
+      // that is a normal, retryable start failure here, not a crash: the
+      // user can allow pop-ups / site storage and press the button again.
       onError(reason instanceof Error ? reason.message : 'The connection could not be started.')
       setBusy(false)
     }
   }
 
+  // Deliberately no `popupAttempt.popup.closed` polling here (removed
+  // 2026-08-25, found by PR #154 review, see [[Provider Authorization Popup
+  // Bridge]] in the project vault). Finance Planner sends
+  // `Cross-Origin-Opener-Policy: same-origin` (server/src/server.js) -- a
+  // real security control, not something to weaken for this. Once the
+  // popup navigates from this origin to the cross-origin OAuth/PSD2
+  // provider, that COOP policy moves the popup into a different browsing
+  // context group, severing this tab's `WindowProxy` reference to it. From
+  // that point on, `.closed` is not a "sometimes stale" signal -- it is
+  // fully unreliable and can read `true` while the real authorization
+  // window is still open and the user is mid-login. Since `startConnector()`
+  // only ever returns `{mode: 'popup'}` *after* the popup has already been
+  // navigated to the provider (see connectors.ts), there was never a safe
+  // window in which polling here observed a trustworthy value -- so instead
+  // of trying to patch the heuristic, "the popup closed on its own" is no
+  // longer detected automatically at all. The user can always end the wait
+  // explicitly (Cancel, or the "Try again" action in PopupWaitingStep below),
+  // and a genuine completion is still driven entirely by the bounded
+  // popup-return bridge (providerReturnBridge.ts), never by this signal.
   const connectorContext = (): ConnectorStartContext => {
     if (!selectedInstitution) return {}
     if (selectedInstitution.provider === 'ais') {
@@ -486,11 +700,27 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
 
   const refreshAll = () => void synchronize(false)
 
+  const restoreAccount = async (provider: ConnectorProvider, stableAccountId: string) => {
+    setRestoringAccountId(stableAccountId)
+    setRestoreError('')
+    try {
+      await restoreProviderAccount(provider, stableAccountId)
+      setConnections((current) => current.map((connection) => connection.provider !== provider
+        ? connection
+        : { ...connection, excludedAccounts: (connection.excludedAccounts ?? []).filter((excluded) => excluded.stableAccountId !== stableAccountId) }))
+    } catch (reason) {
+      setRestoreError(reason instanceof Error ? reason.message : 'The account could not be restored. Please try again.')
+    } finally {
+      setRestoringAccountId(null)
+    }
+  }
+
   const disconnect = async (provider: ConnectorProvider) => {
     setBusy(true)
     setAttentionError('')
     try {
       const result = await disconnectConnector(provider)
+      disconnectedProvidersRef.current.add(provider)
       setConnections((current) => current.filter((connection) => connection.provider !== provider))
       setMessage(
         result.providerRevokeReason === 'provider_error'
@@ -532,9 +762,23 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     // different one) must never be reused for a fresh setup session.
     setEmbeddedAuthFlow(null)
     setAuthFlowFixtureStatus(null)
+    // A still-open popup from an abandoned previous attempt must be
+    // genuinely closed (not just forgotten in React state), or it's left
+    // dangling as an orphaned browser window with a stale pending-attempt
+    // record in sessionStorage.
+    if (popupAttempt) abandonConnectorPopupAttempt(popupAttempt)
+    setPopupAttempt(null)
     setSetupOpen(true)
   }
-  const closeSetup = useCallback(() => { if (!busy) { setSetupOpen(false); setSetupError(''); setEmbeddedAuthFlow(null); setAuthFlowFixtureStatus(null) } }, [busy])
+  const closeSetup = useCallback(() => {
+    if (busy) return
+    setSetupOpen(false)
+    setSetupError('')
+    setEmbeddedAuthFlow(null)
+    setAuthFlowFixtureStatus(null)
+    if (popupAttempt) abandonConnectorPopupAttempt(popupAttempt)
+    setPopupAttempt(null)
+  }, [busy, popupAttempt])
 
   const openManualAccount = (hintedType: ConnectorAccountType = 'checking', hintedName = '') => {
     setManualName(hintedName)
@@ -573,6 +817,8 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     // -- never let a stale authorizationId survive a re-resolution.
     setEmbeddedAuthFlow(null)
     setAuthFlowFixtureStatus(null)
+    if (popupAttempt) abandonConnectorPopupAttempt(popupAttempt)
+    setPopupAttempt(null)
   }
 
   const chooseInstitution = (id: string) => {
@@ -582,6 +828,8 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
     setSetupError('')
     setEmbeddedAuthFlow(null)
     setAuthFlowFixtureStatus(null)
+    if (popupAttempt) abandonConnectorPopupAttempt(popupAttempt)
+    setPopupAttempt(null)
     if (institution.provider === 'manual') {
       openManualAccount(defaultAccountTypeForInstitution(institution), institution.name === 'Virtuelles / manuelles Konto' ? '' : institution.name)
       return
@@ -743,8 +991,8 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   const cancelStatement = () => { setStatementPreview(null); setScreen('overview') }
   const rollback = () => { if (!rollbackState) return; onApply(rollbackState); setRollbackState(null); setMessage('The last import was fully reversed.') }
 
-  const openAttention = (provider: ConnectorProvider) => { setAttentionProvider(provider); setDisconnectConfirming(false); setAttentionError(''); setScreen('attention') }
-  const closeAttention = () => { setAttentionProvider(null); setDisconnectConfirming(false); setAttentionError(''); setScreen('overview') }
+  const openAttention = (provider: ConnectorProvider) => { setAttentionProvider(provider); setDisconnectConfirming(false); setAttentionError(''); setRestoreError(''); setScreen('attention') }
+  const closeAttention = () => { setAttentionProvider(null); setDisconnectConfirming(false); setAttentionError(''); setRestoreError(''); setScreen('overview') }
 
   const setupDialogRef = useDialog<HTMLDivElement>({ open: setupOpen, onClose: closeSetup })
   const manualDialogRef = useDialog<HTMLDivElement>({ open: manualOpen, onClose: closeManualAccount })
@@ -764,6 +1012,7 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
 
     {screen === 'sync-selection' && <SyncSelectionScreen
       accounts={discoveredAccounts}
+      reconnectedAccountIds={reconnectedAccountIds}
       selectedAccountIds={selectedAccountIds}
       onToggle={toggleAccount}
       selection={selection}
@@ -772,6 +1021,8 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
       pending={summary.pending}
       quality={averageQuality}
       warnings={qualityWarnings}
+      unreconciledLegacyAccountNames={unreconciledLegacyAccounts.map((account) => account.name)}
+      routineRefreshSummary={routineRefreshSummary}
       onCancel={cancelSync}
       onImport={importPreview}
     />}
@@ -787,6 +1038,9 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
       onDisconnectRequest={() => setDisconnectConfirming(true)}
       onDisconnectCancel={() => setDisconnectConfirming(false)}
       onDisconnectConfirm={() => void disconnect(attentionConnection.provider)}
+      restoringAccountId={restoringAccountId}
+      restoreError={restoreError}
+      onRestoreAccount={(stableAccountId) => void restoreAccount(attentionConnection.provider, stableAccountId)}
     />}
 
     {screen === 'statement-preview' && statementPreview && <StatementPreviewScreen
@@ -857,6 +1111,26 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
                 fixtureStatus={authFlowFixtureStatus}
                 onCancel={closeSetup}
               />
+            : popupAttempt
+            ? <PopupWaitingStep
+                institution={selectedInstitution}
+                resolvedInstitutionName={resolvedProviderInstitution?.name}
+                resolvedInstitutionId={resolvedProviderInstitution?.id}
+                onCancel={closeSetup}
+                onRetry={() => {
+                  // Always abandon the current attempt first: since a
+                  // closed/still-open popup can no longer be told apart
+                  // (see the note above connectorContext), a user-initiated
+                  // retry must not leave a first, possibly still-live popup
+                  // authorizing in the background while a second one starts
+                  // -- that would risk two concurrent authorization attempts
+                  // for the same connection.
+                  abandonConnectorPopupAttempt(popupAttempt)
+                  setPopupAttempt(null)
+                  const provider = effectiveProvider()
+                  if (provider) void startProvider(provider, connectorContext(), setSetupError)
+                }}
+              />
             : <RedirectConfirmationStep
                 institution={selectedInstitution}
                 resolvedInstitutionName={resolvedProviderInstitution?.name}
@@ -885,6 +1159,11 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
             // survive into a real widget attempt started right afterward,
             // permanently short-circuiting it into a fake error/loading state.
             if (setupStep === 3 && embeddedAuthFlow) { setEmbeddedAuthFlow(null); setAuthFlowFixtureStatus(null); return }
+            // Same collapse-one-level behavior for an open provider popup:
+            // back out of the waiting view without leaving Step 3, and
+            // actually close the real popup window rather than abandoning
+            // it silently in the background.
+            if (setupStep === 3 && popupAttempt) { abandonConnectorPopupAttempt(popupAttempt); setPopupAttempt(null); return }
             setSetupStep(setupStep === 3 ? previousSetupStepFromConfirmation(selectedInstitution) : 1)
           }}><ArrowLeft size={18}/></button>
           <p className="connections-step-label">Step {setupStep} of 3</p>
@@ -1215,6 +1494,59 @@ function EnableBankingAuthorizationStep({ institution, resolvedInstitutionName, 
   </div>
 }
 
+interface PopupWaitingStepProps {
+  institution: { id: string; name: string; provider: string; kind: string }
+  resolvedInstitutionName?: string
+  resolvedInstitutionId?: string
+  onCancel: () => void
+  onRetry: () => void
+}
+
+// Renders once startProvider() has opened the provider's authorization page
+// in a separate popup window (see ConnectionsPage's popupAttempt state) --
+// this replaces RedirectConfirmationStep's post-confirm view whenever a
+// popup was actually opened, for every provider (not Enable-Banking-only
+// like EnableBankingAuthorizationStep above). The current tab never
+// navigates in this mode, so this calm waiting state is what replaces the
+// otherwise-permanent "busy" UI a plain same-tab redirect would correctly
+// leave in its place. A successful/failed popup return is handled entirely
+// outside this component -- ConnectionsPanel remounts the whole page once
+// the return signal arrives, which unmounts this view along with
+// everything else.
+//
+// Deliberately a single, steady state -- no "the popup was closed early"
+// branch (removed 2026-08-25, PR #154 review). Finance Planner's COOP
+// policy (`same-origin`) severs this tab's ability to read the popup's
+// `.closed` property reliably once it navigates cross-origin to the
+// provider, so that signal can read "closed" while the real authorization
+// window is still open mid-login -- using it here would risk showing a
+// false "window closed" error (and inviting a Retry that starts a second,
+// redundant authorization) during an entirely normal wait. The user ends
+// the wait explicitly instead: Cancel abandons the attempt outright, and
+// "Try again" (always available, not conditionally shown) closes whatever
+// popup exists -- open or not, this tab genuinely cannot tell -- before
+// starting a fresh one.
+function PopupWaitingStep({ institution, resolvedInstitutionName, resolvedInstitutionId, onCancel, onRetry }: PopupWaitingStepProps) {
+  return <div className="connections-confirmation connections-auth-flow-step">
+    <div className="connections-institution-banner">
+      <span className="connections-row-icon"><InstitutionIcon key={resolvedInstitutionId ?? institution.id} institution={institution}/></span>
+      <span className="connections-row-body"><strong>{institution.name}</strong>{resolvedInstitutionName && resolvedInstitutionName !== institution.name && <small>{resolvedInstitutionName}</small>}</span>
+    </div>
+    <h2 id="connections-setup-title" className="connections-setup-title">Continue in the secure window</h2>
+    <div className="connections-auth-flow-frame" aria-live="polite">
+      <p className="connections-auth-flow-loading">Bank authorization opened in a secure window. Complete it there; Finance Planner will update automatically when it returns.</p>
+      <p className="connections-fallback-message">
+        Didn't get a window, or need to start over?{' '}
+        <button type="button" className="connections-text-button connections-retry-button" onClick={onRetry}>Try again</button>
+      </p>
+    </div>
+    <p className="connections-footnote connections-auth-flow-footer"><ShieldCheck size={14}/> Finance Planner never receives your online-banking credentials.</p>
+    <div className="connections-modal-actions">
+      <button type="button" className="secondary" onClick={onCancel}>Cancel</button>
+    </div>
+  </div>
+}
+
 interface RedirectConfirmationStepProps {
   institution: { id: string; name: string; provider: string; kind: string }
   resolvedInstitutionName?: string
@@ -1316,6 +1648,11 @@ function RedirectConfirmationStep({ institution, resolvedInstitutionName, resolv
 
 interface SyncSelectionScreenProps {
   accounts: Account[]
+  // Account ids buildSyncPreview() matched to an EXISTING Finance Planner
+  // account via stable identity (a reconnect under a new provider session
+  // id), as opposed to a genuinely new account -- see the doc comment on
+  // reconnectedAccountIds above where this is computed.
+  reconnectedAccountIds: Set<string>
   selectedAccountIds: Set<string>
   onToggle: (accountId: string) => void
   selection: { selectedCount: number; totalCount: number }
@@ -1324,19 +1661,37 @@ interface SyncSelectionScreenProps {
   pending: number
   quality: number
   warnings: string[]
+  // Found live 2026-08-27 (PR #154, third independent review, Blocker 2):
+  // existing provider accounts this sync could not reconcile by exact id or
+  // stableId -- rendered here, not merely computed, so a user about to
+  // import a new account gets an explicit chance to check for a duplicate
+  // first. See SyncPreview.unreconciledLegacyAccounts's doc comment.
+  unreconciledLegacyAccountNames: string[]
+  // Found by adversarial review (2026-08-27, PR #154): a routine refresh
+  // (Blocker 1) applies silently to accounts NOT shown on this screen while
+  // this screen is showing for OTHER (new/reconnected) accounts in the same
+  // sync batch -- without this, the user gets no feedback at all that
+  // anything else was already updated.
+  routineRefreshSummary: { accounts: number; transactions: number } | null
   onCancel: () => void
   onImport: () => void
 }
 
-function SyncSelectionScreen({ accounts, selectedAccountIds, onToggle, selection, transactionsAvailable, duplicates, pending, quality, warnings, onCancel, onImport }: SyncSelectionScreenProps) {
+function SyncSelectionScreen({ accounts, reconnectedAccountIds, selectedAccountIds, onToggle, selection, transactionsAvailable, duplicates, pending, quality, warnings, unreconciledLegacyAccountNames, routineRefreshSummary, onCancel, onImport }: SyncSelectionScreenProps) {
   return <div className="connections-sync-screen">
     <header className="connections-subpage-header"><button type="button" className="connections-back" onClick={onCancel}><ArrowLeft size={18}/> Back</button><h2>Choose accounts</h2></header>
     <p className="connections-setup-subtitle">We discovered the following accounts. Select the ones you want to import.</p>
+    {routineRefreshSummary && <p className="status-message success-message" role="status">
+      {routineRefreshSummary.accounts} other account{routineRefreshSummary.accounts === 1 ? '' : 's'} already in Finance Planner {routineRefreshSummary.accounts === 1 ? 'was' : 'were'} refreshed automatically{routineRefreshSummary.transactions ? ` (${routineRefreshSummary.transactions} new transaction${routineRefreshSummary.transactions === 1 ? '' : 's'} imported)` : ''}.
+    </p>}
+    {unreconciledLegacyAccountNames.length > 0 && <p className="status-message error-message" role="alert">
+      Could not automatically match {unreconciledLegacyAccountNames.length} existing account{unreconciledLegacyAccountNames.length === 1 ? '' : 's'} from this connection ({unreconciledLegacyAccountNames.join(', ')}) during this reconnect. Check below for a possible duplicate before importing.
+    </p>}
     <div className="connections-account-select-list">
       {accounts.map((account) => <label className="connections-account-select-row" key={account.id}>
         <input type="checkbox" checked={selectedAccountIds.has(account.id)} onChange={() => onToggle(account.id)}/>
         <span className="connections-row-icon">{account.type === 'credit-card' ? <CreditCard size={18}/> : <Landmark size={18}/>}</span>
-        <span><strong>{account.name}</strong><small>{account.type === 'credit-card' ? 'Credit card' : account.type === 'savings' ? 'Savings' : account.type === 'investment' ? 'Investment' : 'Checking'}</small></span>
+        <span><strong>{account.name}</strong><small>{reconnectedAccountIds.has(account.id) ? 'Already in Finance Planner — refreshing balance' : account.type === 'credit-card' ? 'Credit card' : account.type === 'savings' ? 'Savings' : account.type === 'investment' ? 'Investment' : 'Checking'}</small></span>
         <span className="connections-account-select-balance"><strong>{formatEuro(account.type === 'credit-card' && account.creditCard ? -account.creditCard.amountOwedCents : account.balanceCents)}</strong><small>Current balance</small></span>
       </label>)}
       {accounts.length === 0 && <p className="connections-empty-copy">No accounts were discovered for the accounts you selected.</p>}
@@ -1369,9 +1724,12 @@ interface AttentionScreenProps {
   onDisconnectRequest: () => void
   onDisconnectCancel: () => void
   onDisconnectConfirm: () => void
+  restoringAccountId: string | null
+  restoreError: string
+  onRestoreAccount: (stableAccountId: string) => void
 }
 
-function AttentionScreen({ connection, reason, busy, confirming, error, onBack, onReconnect, onDisconnectRequest, onDisconnectCancel, onDisconnectConfirm }: AttentionScreenProps) {
+function AttentionScreen({ connection, reason, busy, confirming, error, onBack, onReconnect, onDisconnectRequest, onDisconnectCancel, onDisconnectConfirm, restoringAccountId, restoreError, onRestoreAccount }: AttentionScreenProps) {
   const copy = reason ? ATTENTION_REASON_COPY[reason] : null
   return <div className="connections-attention-screen">
     <header className="connections-subpage-header"><button type="button" className="connections-back" onClick={onBack}><ArrowLeft size={18}/> Back</button><h2>Connections</h2></header>
@@ -1394,6 +1752,27 @@ function AttentionScreen({ connection, reason, busy, confirming, error, onBack, 
     </section>}
     <p className="connections-setup-subtitle">Your previously imported transactions will remain in Finance Planner unless you explicitly remove this account through a supported workflow.</p>
     {error && <p className="status-message error-message" role="alert">{error}</p>}
+
+    {connection.excludedAccounts && connection.excludedAccounts.length > 0 && <section className="connections-reason-section" aria-labelledby="connections-removed-accounts-title">
+      <p id="connections-removed-accounts-title" className="connections-section-label">Removed accounts</p>
+      {restoreError && <p className="status-message error-message" role="alert">{restoreError}</p>}
+      <div className="connections-account-select-list">
+        {connection.excludedAccounts.map((excluded: ExcludedAccountSummary) => <div className="connections-account-select-row connections-account-select-row--static" key={excluded.stableAccountId}>
+          <span className="connections-row-icon"><Landmark size={18}/></span>
+          <span><strong>{excluded.accountName || 'Removed account'}</strong><small>Removed from Finance Planner</small></span>
+          <button
+            type="button"
+            className="secondary"
+            disabled={restoringAccountId === excluded.stableAccountId}
+            onClick={() => onRestoreAccount(excluded.stableAccountId)}
+            aria-label={`Restore ${excluded.accountName || 'removed account'}`}
+          >
+            {restoringAccountId === excluded.stableAccountId ? 'Restoring…' : 'Restore'}
+          </button>
+        </div>)}
+      </div>
+      <p className="connections-scope-footnote">Restoring an account only stops excluding it from future syncs -- it does not guess back old transactions. It reappears the next time this connection syncs.</p>
+    </section>}
 
     {!confirming ? <div className="connections-modal-actions connections-modal-actions--page">
       <button type="button" className="primary" disabled={busy} onClick={onReconnect}><RefreshCw size={17}/> Reconnect</button>

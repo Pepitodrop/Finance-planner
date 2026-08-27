@@ -238,6 +238,10 @@
 .connections-account-select-row input { width: 1.35rem; height: 1.35rem; accent-color: var(--fp-color-accent); }
 .connections-account-select-row strong { display: block; }
 .connections-account-select-row small { color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); }
+/* Restore ("un-remove") rows (2026-08-27, PR #154): no checkbox, so one
+   fewer column than the selectable-account row above -- icon, name/label,
+   the Restore button itself. */
+.connections-account-select-row--static { grid-template-columns: auto minmax(0, 1fr) auto; }
 .connections-account-select-balance { text-align: right; }
 .connections-account-select-balance strong { display: block; font-variant-numeric: tabular-nums; }
 .connections-account-select-balance small { color: var(--fp-color-text-muted); font-size: var(--fp-font-size-metadata); }
@@ -289,6 +293,7 @@
 @media (max-width: 480px) {
   .connections-institution-row { grid-template-columns: auto minmax(0, 1fr) auto; }
   .connections-account-select-row { grid-template-columns: auto auto minmax(0, 1fr); }
+  .connections-account-select-row--static { grid-template-columns: auto minmax(0, 1fr) auto; }
   .connections-account-select-balance { grid-column: 1 / -1; justify-self: end; text-align: right; }
   .connections-preview-table { display: block; overflow-x: auto; }
 }
