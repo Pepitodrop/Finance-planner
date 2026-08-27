@@ -25,7 +25,7 @@ vi.mock('./connectors', async (importOriginal) => {
 })
 
 import { excludeProviderAccount } from './connectors'
-import { loadState } from './storage'
+import { loadState, saveState } from './storage'
 import App from './App'
 
 const manualState: AppState = {
@@ -112,5 +112,69 @@ describe('App: coordinated provider-account removal (BLOCKER 2)', () => {
 
     await user.click(screen.getByRole('button', { name: /Undo/ }))
     expect(screen.getByText('Bargeld')).toBeInTheDocument()
+  })
+})
+
+// BLOCKER 2 (fourth independent review, 2026-08-27): the exact "duplicated
+// legacy/current pair" state this codebase's own previous live Mock ASPSP
+// passes produced -- two provider-linked accounts, both still lacking
+// stableId, both representing the same real bank account. Account A (the
+// stale duplicate) must be removable via the new local-only path; Account
+// B must be unaffected by removing A; the removal must never call
+// excludeProviderAccount (no durable exclusion is created for a legacy
+// removal); and the cleanup must persist across a reload (the mocked
+// saveState()/loadState() round-trip stands in for the real cloud/local
+// persistence this app already saves through on every state change).
+describe('App: remove local legacy account (fourth independent review, BLOCKER 2)', () => {
+  afterEach(() => { cleanup(); vi.resetAllMocks() })
+
+  const accountAId = 'connector:enablebanking:old-session-uid'
+  const accountBId = 'connector:enablebanking:current-session-uid'
+  const duplicatedPairState: AppState = {
+    accounts: [
+      { id: accountAId, externalId: 'old-session-uid', name: 'Altes Girokonto', type: 'checking', balanceCents: 695_950, currency: 'EUR' },
+      { id: accountBId, externalId: 'current-session-uid', stableId: 'c'.repeat(64), name: 'Girokonto', type: 'checking', balanceCents: 695_950, currency: 'EUR' },
+    ],
+    transactions: [
+      { id: 'connector:enablebanking:a-hist-1', accountId: accountAId, description: 'Salary', category: 'Income', type: 'income', amountCents: 250_000, date: '2026-08-01' },
+      { id: 'connector:enablebanking:b-hist-1', accountId: accountBId, description: 'Salary', category: 'Income', type: 'income', amountCents: 250_000, date: '2026-08-01' },
+    ],
+    goals: [],
+  }
+
+  it('removes only Account A (and only its transactions), never calls excludeProviderAccount, normalizes the doubled dashboard total, and a genuine reload of the saved state keeps Account A gone', async () => {
+    renderApp(duplicatedPairState)
+    const user = userEvent.setup()
+
+    // Sanity: the doubled state really does show both accounts' balances.
+    expect(screen.getByText('Altes Girokonto')).toBeInTheDocument()
+    expect(screen.getByText('Girokonto')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Actions for Altes Girokonto' }))
+    await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
+    expect(screen.getByRole('button', { name: 'Remove local copy' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Remove local copy' }))
+
+    await waitFor(() => expect(screen.queryByText('Altes Girokonto')).not.toBeInTheDocument())
+    expect(excludeProviderAccount).not.toHaveBeenCalled()
+    // Account B and its balance survive untouched.
+    expect(screen.getByText('Girokonto')).toBeInTheDocument()
+
+    // Persisted through the normal save path -- the mocked saveState()'s
+    // last call is what a reload would load back.
+    const lastSaved = vi.mocked(saveState).mock.calls.at(-1)?.[0] as AppState
+    expect(lastSaved.accounts.map((account) => account.id)).toEqual([accountBId])
+    expect(lastSaved.transactions.map((transaction) => transaction.id)).toEqual(['connector:enablebanking:b-hist-1'])
+
+    // Genuine round-trip (found by adversarial review, 2026-08-27, as a
+    // cosmetic gap in an earlier draft of this test): reload by feeding
+    // the EXACT state saveState() was called with back into loadState() on
+    // a fresh mount, rather than hand-constructing an equivalent-looking
+    // state -- proves the actual saved shape reloads correctly, not merely
+    // a shape someone believes matches it.
+    cleanup()
+    renderApp(lastSaved)
+    expect(screen.queryByText('Altes Girokonto')).not.toBeInTheDocument()
+    expect(screen.getByText('Girokonto')).toBeInTheDocument()
   })
 })

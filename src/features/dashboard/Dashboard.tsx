@@ -44,8 +44,22 @@ interface DashboardProps {
   // Coordinated removal (fixed 2026-08-27, independent review, BLOCKER 2):
   // returns whether it actually succeeded, so this dialog can show a real
   // error and let the account stay visible on failure, rather than
-  // optimistically closing and hoping a fire-and-forget call worked.
+  // optimistically closing and hoping a fire-and-forget call worked. Only
+  // ever offered when removeTargetCannotBeRemovedSafely is false (a
+  // stableId is present) -- see onRemoveLegacyAccountLocally below for the
+  // no-stableId path.
   onRemoveAccount: (account: Account) => Promise<{ ok: true } | { ok: false; error: string }>
+  // Fixed 2026-08-27, fourth independent review, BLOCKER 2: a provider
+  // account with no stableId has no trustworthy identity to durably
+  // exclude by, so onRemoveAccount above correctly refuses it -- but that
+  // previously left this exact class of account (including the duplicate
+  // an earlier PR #154 head's reconnect bug created) permanently
+  // undeletable. This is a deliberately WEAKER, local-only counterpart:
+  // removes the account/its transactions from local state, writes no
+  // durable exclusion, and makes no suppression guarantee -- see its doc
+  // comment in App.tsx for the full rationale. Never call this for an
+  // account that DOES have a stableId; use onRemoveAccount for that.
+  onRemoveLegacyAccountLocally: (account: Account) => Promise<{ ok: true } | { ok: false; error: string }>
   referenceDate?: Date
 }
 
@@ -95,7 +109,7 @@ function signedMoney(transaction: Transaction): string {
   return `${transaction.type === 'income' ? '+' : '−'}${formatMoney(transaction.amountCents)}`
 }
 
-export function Dashboard({ state, userName, onAddTransaction, onEditTransaction, onNavigate, onRemoveAccount, referenceDate = new Date() }: DashboardProps) {
+export function Dashboard({ state, userName, onAddTransaction, onEditTransaction, onNavigate, onRemoveAccount, onRemoveLegacyAccountLocally, referenceDate = new Date() }: DashboardProps) {
   const model = useMemo(() => buildDashboardViewModel(state, referenceDate), [referenceDate, state])
   const firstName = userName?.trim().split(/\s+/)[0] || 'there'
   const categoryTotalCents = model.categories.reduce((sum, category) => sum + category.amountCents, 0)
@@ -118,6 +132,19 @@ export function Dashboard({ state, userName, onAddTransaction, onEditTransaction
     setRemoveBusy(true)
     setRemoveError('')
     const result = await onRemoveAccount(removeTarget)
+    setRemoveBusy(false)
+    if (result.ok) setRemoveTarget(null)
+    else setRemoveError(result.error)
+  }
+  // BLOCKER 2 (fourth independent review, 2026-08-27): the local-only
+  // counterpart to confirmRemove() above, used exactly when
+  // removeTargetCannotBeRemovedSafely is true (no stableId) -- see
+  // onRemoveLegacyAccountLocally's doc comment on DashboardProps.
+  const confirmRemoveLegacy = async () => {
+    if (!removeTarget) return
+    setRemoveBusy(true)
+    setRemoveError('')
+    const result = await onRemoveLegacyAccountLocally(removeTarget)
     setRemoveBusy(false)
     if (result.ok) setRemoveTarget(null)
     else setRemoveError(result.error)
@@ -249,22 +276,30 @@ export function Dashboard({ state, userName, onAddTransaction, onEditTransaction
     </section>
 
     {removeTargetCannotBeRemovedSafely ? (
-      // Fail-conservative: no destructive action is offered at all when
-      // Finance Planner cannot guarantee the account stays removed (no
-      // stableId to durably exclude by) -- see the doc comment on
-      // removeTargetCannotBeRemovedSafely above.
+      // BLOCKER 2 (fourth independent review, 2026-08-27): this used to be
+      // a dead-end, info-only dialog with no destructive action at all --
+      // which meant a provider account with no stableId (e.g. the exact
+      // duplicate an earlier PR #154 head's reconnect bug created) was
+      // permanently undeletable from the Dashboard, even though the user
+      // explicitly needs to remove accounts here. Now offers an explicit,
+      // clearly-weaker LOCAL-ONLY removal instead -- see
+      // onRemoveLegacyAccountLocally's doc comment on DashboardProps. The
+      // wording below is deliberately explicit that this is NOT the same
+      // durable-exclusion promise the modern removal below makes.
       <ConfirmationDialog
         open={removeTarget !== null}
         severity="warning"
-        heading={`"${removeTarget?.name ?? ''}" can't be safely removed yet`}
+        heading={`Remove legacy account "${removeTarget?.name ?? ''}"?`}
         headingId="dashboard-remove-account-title"
-        confirmLabel="OK"
-        onConfirm={closeRemoveDialog}
-        onClose={closeRemoveDialog}
-        footer={<button type="button" className="data-tools-link" onClick={() => { closeRemoveDialog(); onNavigate('connections') }}>Go to Connections to disconnect the bank instead</button>}
+        confirmLabel={removeBusy ? 'Removing…' : 'Remove local copy'}
+        busy={removeBusy}
+        onConfirm={() => { void confirmRemoveLegacy() }}
+        onClose={() => { if (!removeBusy) closeRemoveDialog() }}
+        footer={<button type="button" className="data-tools-link" onClick={() => { closeRemoveDialog(); onNavigate('connections') }} disabled={removeBusy}>Go to Connections to disconnect the bank instead</button>}
       >
-        <p>This connected account cannot currently be removed safely because the bank did not provide a stable account identifier. Finance Planner cannot guarantee it would stay removed after your next sync.</p>
-        <p>You can disconnect the bank connection instead, from Connections.</p>
+        <p>This account was imported by an older Finance Planner connection and does not contain a stable bank identifier.</p>
+        <p>Finance Planner can remove this local account and its recorded transactions, but cannot guarantee the bank will not return it again during a future sync. If it returns again, you may need to remove it again or disconnect the bank.</p>
+        {removeError && <p className="status-message error-message" role="alert">{removeError} You can try again or cancel.</p>}
       </ConfirmationDialog>
     ) : (
       <ConfirmationDialog

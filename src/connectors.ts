@@ -305,15 +305,18 @@ export function buildSyncPreview(state: AppState, payload: SyncPayload): SyncPre
   //
   // Corrected 2026-08-27 (adversarial review follow-up): the id prefix
   // `connector:${provider}:` only encodes which PROVIDER an account came
-  // from, never which CONNECTION (a user can have two separate GoCardless
-  // bank connections) -- so the original version of this filter flagged
-  // every account from every OTHER live connection of the same provider as
-  // "unreconciled" on every sync, a false positive with nothing to do with
-  // this sync at all. It also had no way to ever stop flagging an account
-  // whose connection the user had genuinely disconnected (disconnect keeps
-  // the account's transaction history, so it would nag on every future
-  // sync of any same-provider connection, forever, with no way to silence
-  // it -- removal requires a stableId this class of account never has).
+  // from, never which specific BANK connection produced it. The credential
+  // store keys a stored connection as `connections[userId][provider]` (one
+  // row per user+provider, confirmed in crypto-store.js) -- so a user
+  // cannot hold two SIMULTANEOUS connections to the same provider; the
+  // realistic case is sequential: disconnect Bank A (GoCardless), which
+  // keeps Bank A's account rows and their transaction history locally, then
+  // connect Bank B through the SAME provider. The original version of this
+  // filter -- scoped by provider only -- would then flag Bank A's untouched
+  // local accounts as "unreconciled" on every subsequent Bank B sync,
+  // forever, purely because they share one provider, with no way to ever
+  // stop (removal requires a stableId this class of legacy account never
+  // has).
   // institutionId is the closest available signal for "same real bank
   // connection" (both Account and ConnectorConnection carry it) -- when
   // either side lacks it, this now conservatively does NOT flag rather

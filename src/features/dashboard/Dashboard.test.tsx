@@ -16,11 +16,12 @@ const populatedState: AppState = {
   goals: [{ id: 'goal', name: 'Emergency fund', targetCents: 1_000_000, currentCents: 500_000, targetDate: '2027-01-01' }],
 }
 
-function renderDashboard(state = populatedState, onRemoveAccountOverride?: RemoveAccountFn) {
+function renderDashboard(state = populatedState, onRemoveAccountOverride?: RemoveAccountFn, onRemoveLegacyAccountLocallyOverride?: RemoveAccountFn) {
   const onAddTransaction = vi.fn()
   const onEditTransaction = vi.fn()
   const onNavigate = vi.fn()
   const onRemoveAccount = onRemoveAccountOverride ?? vi.fn(async () => ({ ok: true as const }))
+  const onRemoveLegacyAccountLocally = onRemoveLegacyAccountLocallyOverride ?? vi.fn(async () => ({ ok: true as const }))
   render(<Dashboard
     state={state}
     userName="Alex Rivera"
@@ -28,9 +29,10 @@ function renderDashboard(state = populatedState, onRemoveAccountOverride?: Remov
     onEditTransaction={onEditTransaction}
     onNavigate={onNavigate}
     onRemoveAccount={onRemoveAccount}
+    onRemoveLegacyAccountLocally={onRemoveLegacyAccountLocally}
     referenceDate={new Date(2026, 7, 4, 19)}
   />)
-  return { onAddTransaction, onEditTransaction, onNavigate, onRemoveAccount }
+  return { onAddTransaction, onEditTransaction, onNavigate, onRemoveAccount, onRemoveLegacyAccountLocally }
 }
 
 describe('Dashboard', () => {
@@ -241,11 +243,14 @@ describe('Dashboard', () => {
       expect(screen.getByRole('dialog')).not.toHaveTextContent('bank connection')
     })
 
-    // Fail-conservative (independent review, BLOCKER 2): a provider account
-    // with no stableId has no trustworthy key to durably exclude it by, so
-    // Finance Planner must never offer a "Remove account" that claims a
-    // guarantee it cannot keep.
-    it('a provider account with no stableId offers no destructive removal, only a safe informational dialog pointing to Connections', async () => {
+    // Fail-conservative (independent review, BLOCKER 2), REVISED by a
+    // fourth independent review (2026-08-27): a provider account with no
+    // stableId still never gets the STRONG durable-exclusion removal
+    // (onRemoveAccount is never called for it), but it is no longer a dead
+    // end -- see the "legacy provider account (no stableId)" describe
+    // block below for the new local-only removal path this account now
+    // qualifies for instead.
+    it('a provider account with no stableId never calls the durable-exclusion onRemoveAccount, and can still navigate to Connections to disconnect instead', async () => {
       const user = userEvent.setup()
       const noStableIdState: AppState = {
         accounts: [{ id: 'connector:enablebanking:acct-2', externalId: 'acct-2', name: 'Sparkonto', type: 'savings', balanceCents: 20_000, currency: 'EUR' }],
@@ -255,14 +260,97 @@ describe('Dashboard', () => {
       const { onRemoveAccount, onNavigate } = renderDashboard(noStableIdState)
       await user.click(screen.getByRole('button', { name: 'Actions for Sparkonto' }))
       await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
-      const dialog = screen.getByRole('dialog')
-      expect(dialog).toHaveTextContent('cannot currently be removed safely')
       expect(screen.queryByRole('button', { name: 'Remove account' })).not.toBeInTheDocument()
       expect(onRemoveAccount).not.toHaveBeenCalled()
 
       await user.click(screen.getByRole('button', { name: /Go to Connections/ }))
       expect(onNavigate).toHaveBeenCalledWith('connections')
       expect(onRemoveAccount).not.toHaveBeenCalled()
+    })
+  })
+
+  // BLOCKER 2 (fourth independent review, 2026-08-27): a provider-linked
+  // account with no stableId -- e.g. one imported before stableId existed,
+  // or the exact duplicate an earlier PR #154 head's reconnect bug created
+  // -- was previously permanently undeletable from the Dashboard. This
+  // suite covers the new, explicitly-weaker LOCAL-ONLY removal path: it
+  // must never be confused with (or silently upgrade into) the durable
+  // exclusion-first path covered above.
+  describe('Remove legacy account (no stableId, local-only)', () => {
+    const legacyState: AppState = {
+      accounts: [{ id: 'connector:enablebanking:old-session-uid', externalId: 'old-session-uid', name: 'Altes Konto', type: 'checking', balanceCents: 30_000, currency: 'EUR' }],
+      transactions: [
+        { id: 'connector:enablebanking:hist-1', accountId: 'connector:enablebanking:old-session-uid', description: 'Miete', category: 'Wohnen', type: 'expense', amountCents: 80_000, date: '2026-07-01' },
+      ],
+      goals: [],
+    }
+
+    it('offers "Remove local copy" instead of the durable "Remove account" action', async () => {
+      const user = userEvent.setup()
+      renderDashboard(legacyState)
+      await user.click(screen.getByRole('button', { name: 'Actions for Altes Konto' }))
+      await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
+      expect(screen.getByRole('button', { name: 'Remove local copy' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Remove account' })).not.toBeInTheDocument()
+    })
+
+    // Item 4 from the review: the confirmation must clearly say suppression
+    // cannot be guaranteed, never implying the same durability the modern
+    // (stableId) removal path promises.
+    it('the confirmation copy clearly states provider suppression cannot be guaranteed, never claiming durable exclusion', async () => {
+      const user = userEvent.setup()
+      renderDashboard(legacyState)
+      await user.click(screen.getByRole('button', { name: 'Actions for Altes Konto' }))
+      await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
+      const dialog = screen.getByRole('dialog')
+      expect(dialog).toHaveTextContent('does not contain a stable bank identifier')
+      expect(dialog).toHaveTextContent('cannot guarantee the bank will not return it again')
+      expect(dialog).not.toHaveTextContent('will not be automatically re-imported')
+    })
+
+    it('confirming calls onRemoveLegacyAccountLocally (never onRemoveAccount) with the full account exactly once, and closes on success', async () => {
+      const user = userEvent.setup()
+      const { onRemoveAccount, onRemoveLegacyAccountLocally } = renderDashboard(legacyState)
+      await user.click(screen.getByRole('button', { name: 'Actions for Altes Konto' }))
+      await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
+      await user.click(screen.getByRole('button', { name: 'Remove local copy' }))
+      await waitFor(() => expect(onRemoveLegacyAccountLocally).toHaveBeenCalledTimes(1))
+      expect(onRemoveLegacyAccountLocally).toHaveBeenCalledWith(legacyState.accounts[0])
+      expect(onRemoveAccount).not.toHaveBeenCalled()
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    })
+
+    it('on failure, keeps the account visible, shows an actionable error, and lets the user retry', async () => {
+      const user = userEvent.setup()
+      const onRemoveLegacyAccountLocally = vi.fn()
+        .mockResolvedValueOnce({ ok: false, error: 'The account could not be removed. Please try again.' })
+        .mockResolvedValueOnce({ ok: true })
+      renderDashboard(legacyState, undefined, onRemoveLegacyAccountLocally)
+      await user.click(screen.getByRole('button', { name: 'Actions for Altes Konto' }))
+      await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
+      await user.click(screen.getByRole('button', { name: 'Remove local copy' }))
+      expect(await screen.findByRole('alert')).toHaveTextContent('The account could not be removed. Please try again. You can try again or cancel.')
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.getByText('Altes Konto')).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: 'Remove local copy' }))
+      expect(onRemoveLegacyAccountLocally).toHaveBeenCalledTimes(2)
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    })
+
+    it('shows a busy state and disables Cancel/Go-to-Connections while the request is running', async () => {
+      const user = userEvent.setup()
+      let resolveRemoval!: (value: { ok: true }) => void
+      const onRemoveLegacyAccountLocally = vi.fn(() => new Promise<{ ok: true } | { ok: false; error: string }>((resolve) => { resolveRemoval = resolve }))
+      renderDashboard(legacyState, undefined, onRemoveLegacyAccountLocally)
+      await user.click(screen.getByRole('button', { name: 'Actions for Altes Konto' }))
+      await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
+      await user.click(screen.getByRole('button', { name: 'Remove local copy' }))
+      expect(await screen.findByRole('button', { name: 'Removing…' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+
+      resolveRemoval({ ok: true })
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     })
   })
 })

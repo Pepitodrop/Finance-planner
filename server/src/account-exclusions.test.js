@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyAccountExclusions, isValidStableAccountId } from './account-exclusions.js'
+import { applyAccountExclusions, isValidStableAccountId, withConnectionInstitutionId } from './account-exclusions.js'
 
 const HASH_A = 'a'.repeat(64)
 const HASH_B = 'b'.repeat(64)
@@ -73,4 +73,39 @@ test('applyAccountExclusions excludes multiple accounts independently', () => {
   ]
   const result = applyAccountExclusions([HASH_A, HASH_B], accounts, [])
   assert.deepEqual(result.accounts.map((a) => a.externalId), ['e3'])
+})
+
+// Found by independent review (2026-08-27, PR #154, fourth review round):
+// EnableBankingProvider.sync() and GoCardlessProvider.sync() both return
+// accounts shaped exactly like these fixtures -- externalId/name/type/
+// balanceCents/currency/stableId, no institutionId -- so a real bank
+// import always produced Account.institutionId === undefined, silently
+// disabling buildSyncPreview()'s unreconciledLegacyAccounts guard for
+// every real sync. Fixed with withConnectionInstitutionId(), called from
+// server.js's buildSyncPayload() with the caller's own stored (server-
+// validated) institutionId -- these fixtures mirror the real adapter
+// output shape, not a hand-rolled one that already has institutionId.
+test('withConnectionInstitutionId backfills the stored connection institutionId onto an Enable Banking-shaped account with none (item 1-3 from the review)', () => {
+  const enableBankingShapedAccount = { externalId: 'acct-uid-123', name: 'Girokonto', type: 'checking', balanceCents: 10_000, currency: 'EUR', stableId: HASH_A }
+  const [result] = withConnectionInstitutionId([enableBankingShapedAccount], 'SPARKASSE_AACHEN_AACSDE33')
+  assert.equal(result.institutionId, 'SPARKASSE_AACHEN_AACSDE33')
+  // Every other field is passed through untouched.
+  assert.equal(result.externalId, 'acct-uid-123')
+  assert.equal(result.stableId, HASH_A)
+})
+
+test('withConnectionInstitutionId backfills the stored connection institutionId onto a GoCardless-shaped account with none (item 5 from the review)', () => {
+  const goCardlessShapedAccount = { externalId: 'gc-account-1', name: 'Girokonto', type: 'checking', balanceCents: 5_000, currency: 'EUR', stableId: HASH_B }
+  const [result] = withConnectionInstitutionId([goCardlessShapedAccount], 'DEUTSCHE_BANK_DEUTDEFF')
+  assert.equal(result.institutionId, 'DEUTSCHE_BANK_DEUTDEFF')
+})
+
+test('withConnectionInstitutionId never overwrites an institutionId an adapter already provided', () => {
+  const [result] = withConnectionInstitutionId([{ externalId: 'e1', institutionId: 'ALREADY_SET' }], 'FROM_STORED_CONNECTION')
+  assert.equal(result.institutionId, 'ALREADY_SET')
+})
+
+test('withConnectionInstitutionId never fabricates an institutionId when the stored connection has none either -- undefined stays undefined', () => {
+  const [result] = withConnectionInstitutionId([{ externalId: 'e1' }], undefined)
+  assert.equal(result.institutionId, undefined)
 })

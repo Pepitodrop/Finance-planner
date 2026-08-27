@@ -49,3 +49,24 @@ export function applyAccountExclusions(excludedStableAccountIds, accounts, trans
     transactions: transactions.filter((transaction) => !excludedExternalIds.has(transaction.externalAccountId)),
   }
 }
+
+// Found by independent review (2026-08-27, PR #154, fourth review round):
+// neither EnableBankingProvider.sync() nor GoCardlessProvider.sync() sets
+// institutionId on the accounts they return, so a real bank import always
+// produced Account.institutionId === undefined -- silently disabling
+// buildSyncPreview()'s unreconciledLegacyAccounts guard for every real sync
+// (that guard deliberately never flags an account when either side lacks
+// institutionId, specifically to avoid a false positive -- but with EVERY
+// account missing it, the guard could never fire at all). This enriches an
+// already-synced adapter response with the CALLER-SUPPLIED stored
+// institutionId -- never a browser-supplied one -- so it must only ever be
+// called with `stored.institutionId`, the value captured and validated
+// against the live provider directory at connection time (see server.js's
+// connection() helper, which already exposes this same field to the
+// client read-only). Extracted here, alongside applyAccountExclusions(),
+// for the same reason: server.js cannot be imported by a test without
+// starting a real HTTP server, so this pure mapping needs to live outside
+// it to be directly unit-tested against the real production shape.
+export function withConnectionInstitutionId(accounts, storedInstitutionId) {
+  return accounts.map((account) => ({ ...account, institutionId: account.institutionId ?? storedInstitutionId }))
+}

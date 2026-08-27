@@ -27,4 +27,10 @@ Disconnecting a provider deletes only the `connector_connections` row (`store.re
 
 Full account deletion (`server/src/account-deletion.js`) and factory reset (`server/scripts/factory-reset.mjs`) both explicitly clear `connector_account_exclusions` too, so a genuine full data wipe -- as opposed to an ordinary bank disconnect -- does correctly remove exclusion records.
 
+## Disconnect deliberately leaves local accounts/transactions in place
+
+Disconnecting a provider never removes the accounts or transactions it previously imported -- only the live `connector_connections` row goes away; the Finance Planner `Account`/`Transaction` rows those imports produced remain, by design (the user's own financial history isn't provider-owned). This is directly relevant to two mechanisms added 2026-08-27, PR #154, fourth independent review, both documented fully in [[Stable Account Identity and Reconnect Reconciliation]]:
+- `unreconciledLegacyAccounts` narrows its "belongs to this connection" match to `institutionId` equality specifically because a later sync of a NEW bank connected through the SAME provider must not flag the old, disconnected bank's leftover local accounts as ambiguous -- they belong to a different `institutionId` even though they share a provider.
+- An account left over from disconnect that predates `stableId` (or is a stale duplicate from an earlier bug) can be cleaned up from the Dashboard via "Remove local copy" -- a deliberately weaker, local-only removal, distinct from the durable-exclusion "Remove account" path, since there is no live connection left to exclude it from in the first place.
+
 Related: [[Bank Connections]] · [[Connections Page]] · [[postgres-store.js]] · [[Provider Institution Selection Contract]] · [[Provider Status]] · [[Stable Account Identity and Reconnect Reconciliation]]

@@ -199,6 +199,44 @@ function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
     return { ok: true }
   }
 
+  // Dashboard's "Remove local legacy account" (fixed 2026-08-27, fourth
+  // independent review, BLOCKER 2): a provider-linked account with no
+  // `stableId` -- e.g. one imported by an earlier PR #154 head before
+  // `stableId` existed, or a duplicate the seventh-pass reconnect-
+  // duplication bug created -- has no trustworthy identity Finance Planner
+  // can ever key a durable server-side exclusion by. `removeAccount()`
+  // above correctly refuses it outright, since its confirmation copy
+  // promises "will not be automatically re-imported," a promise this app
+  // cannot keep with no stable identity to exclude by. Without ANY removal
+  // path, that class of account (the exact duplicate this PR's earlier bug
+  // produced) became permanently undeletable from the Dashboard, even
+  // though the user explicitly needs to be able to remove accounts there.
+  //
+  // This is a deliberately WEAKER, purely local operation: it removes the
+  // account and its transactions from THIS Finance Planner's own state
+  // (persisted through the same generic `saveState(state)` effect every
+  // other state change already goes through -- no separate plumbing
+  // needed), but writes NO durable exclusion row and makes NO suppression
+  // guarantee. `removeAccountFromState()` is the same atomic account+
+  // transactions helper the modern path already uses -- it never touches
+  // exclusions itself, so reusing it here for a no-exclusion removal is not
+  // a new domain operation, only a new caller of an existing one. If the
+  // provider returns an indistinguishable account on a future sync, it may
+  // resurface -- Dashboard's confirmation copy for this path must say so
+  // explicitly, never implying the same durability the modern path offers.
+  // Refuses (fails closed) for a manual account (nothing "legacy" about
+  // one -- use removeAccount() instead) or a modern account that DOES have
+  // a stableId (which must always go through the stronger, durable-
+  // exclusion path above, never this one).
+  const removeLegacyAccountLocally = async (account: Account): Promise<{ ok: true } | { ok: false; error: string }> => {
+    const provider = connectorProviderFromAccountId(account.id)
+    if (!provider || account.stableId) {
+      return { ok: false, error: 'This account does not qualify for legacy local removal.' }
+    }
+    setState((current) => removeAccountFromState(current, account.id).state)
+    return { ok: true }
+  }
+
   const undoRemoveAccount = () => {
     if (!removedManualAccount) return
     setState((current) => restoreAccountToState(current, removedManualAccount.account, removedManualAccount.transactions))
@@ -256,7 +294,7 @@ function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
         {tab === 'ai' && <button type="button" className="primary" onClick={openNewTransaction}><Plus size={18}/> Manual entry</button>}
       </header>}
 
-      {tab === 'dashboard' && <Dashboard state={state} userName={userName} onAddTransaction={openNewTransaction} onEditTransaction={openEditTransaction} onNavigate={navigate} onRemoveAccount={removeAccount}/>}
+      {tab === 'dashboard' && <Dashboard state={state} userName={userName} onAddTransaction={openNewTransaction} onEditTransaction={openEditTransaction} onNavigate={navigate} onRemoveAccount={removeAccount} onRemoveLegacyAccountLocally={removeLegacyAccountLocally}/>}
 
       {tab === 'transactions' && <TransactionsPage
         transactions={state.transactions}

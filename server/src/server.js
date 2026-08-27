@@ -2,7 +2,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
 import { URL } from 'node:url'
 import { deleteAccountData } from './account-deletion.js'
-import { applyAccountExclusions, isValidStableAccountId } from './account-exclusions.js'
+import { applyAccountExclusions, isValidStableAccountId, withConnectionInstitutionId } from './account-exclusions.js'
 import { createAiRouter } from './ai-router.js'
 import { createAuthRouter } from './auth-router.js'
 import { behaviorEventsFromFinanceState } from './budget-learning.js'
@@ -315,7 +315,16 @@ async function buildSyncPayload(user) {
       metrics.recordBank(provider, 'success')
       const excludedStableAccountIds = excludedAccounts.map((exclusion) => exclusion.stableAccountId)
       const filtered = applyAccountExclusions(excludedStableAccountIds, synced.accounts, synced.transactions)
-      results.push({ connection: { ...connection(provider, stored), lastSyncAt, consentExpiresAt: synced.consentExpiresAt, excludedAccounts }, accounts: filtered.accounts, transactions: filtered.transactions, reconciliation: synced.reconciliation })
+      // Found by independent review (2026-08-27, PR #154, fourth review
+      // round): neither provider adapter's sync() sets institutionId on the
+      // accounts it returns -- so a real bank import always produced
+      // Account.institutionId === undefined, which silently disabled
+      // buildSyncPreview()'s unreconciledLegacyAccounts guard entirely. See
+      // withConnectionInstitutionId()'s doc comment in account-exclusions.js
+      // for why this is enriched here (from the already-validated stored
+      // connection, never a browser-supplied value at sync time).
+      const accounts = withConnectionInstitutionId(filtered.accounts, stored.institutionId)
+      results.push({ connection: { ...connection(provider, stored), lastSyncAt, consentExpiresAt: synced.consentExpiresAt, excludedAccounts }, accounts, transactions: filtered.transactions, reconciliation: synced.reconciliation })
     } catch (error) {
       metrics.recordBank(provider, /consent.*expired/i.test(String(error?.message || error)) ? 'expired' : 'failure')
       results.push({ connection: { ...connection(provider, stored, error instanceof Error ? error.message : 'Synchronization failed.'), excludedAccounts }, accounts: [], transactions: [] })

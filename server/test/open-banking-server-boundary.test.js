@@ -403,3 +403,29 @@ test('buildSyncPayload() attaches excludedAccounts to every connection object it
   assert.ok(exclusionsFetch >= 0 && successPush >= 0 && failurePush >= 0, 'excludedAccounts must be attached on both the success and failure branch')
   assert.ok(exclusionsFetch < tryBlockStart, 'excludedAccounts must be fetched outside (before) the try block, so it is available to both branches')
 })
+
+// Found by independent review (2026-08-27, PR #154, fourth review round):
+// neither provider adapter sets institutionId on the accounts it returns,
+// so a real bank import always produced Account.institutionId ===
+// undefined. buildSyncPayload() must enrich the accounts it forwards to
+// the browser with the STORED (server-validated at connection time)
+// institutionId -- never a browser-supplied value read at sync time, which
+// an attacker could otherwise use to suppress a legitimate
+// unreconciledLegacyAccounts ambiguity warning. See withConnectionInstitutionId()
+// in account-exclusions.js for the actual, directly-unit-tested mapping
+// this line calls.
+test('buildSyncPayload() enriches every returned account with the STORED connection institutionId, never a browser-supplied one', () => {
+  const helper = serverSource.slice(
+    serverSource.indexOf('async function buildSyncPayload(user)'),
+    serverSource.indexOf('function syncIdempotencyKey'),
+  )
+  // buildSyncPayload(user) deliberately takes ONLY the authenticated user
+  // id, never the raw HTTP request object -- so there is structurally no
+  // `request` in scope here for institutionId (or anything else) to be
+  // read from. This is what the exact match below actually proves: the
+  // slice this test operates on begins at the literal text
+  // `async function buildSyncPayload(user)`, so a signature accepting a
+  // `request` parameter would already make that anchor -- and therefore
+  // this whole test -- fail to find the right boundary.
+  assert.match(helper, /withConnectionInstitutionId\(filtered\.accounts, stored\.institutionId\)/, 'accounts must be enriched from the already-authorized stored connection, not any per-sync-request input')
+})

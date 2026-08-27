@@ -590,11 +590,15 @@ describe('unreconciled legacy accounts (Blocker 2: ambiguous legacy reconnect)',
 
   // Found by adversarial review (2026-08-27): the id prefix
   // `connector:${provider}:` only encodes which PROVIDER an account came
-  // from, never which CONNECTION -- a user with two SEPARATE GoCardless
-  // bank connections previously had syncing connection A flag every
-  // untouched account belonging to connection B (a different, still-live
-  // bank) as "unreconciled," purely because they share one provider.
-  it('does not flag an account belonging to a DIFFERENT live connection of the same provider (institutionId differs)', () => {
+  // from, never which specific BANK connection produced it. The realistic
+  // trigger (the credential store keeps one row per user+provider -- see
+  // the doc comment in connectors.ts) is sequential, not simultaneous: the
+  // user disconnected an old GoCardless bank (keeping its accounts/history
+  // locally, per Bank Disconnect Flow) and later connected a DIFFERENT bank
+  // through the same provider. Syncing the new bank must not flag the old
+  // bank's untouched local accounts as "unreconciled" purely because they
+  // share one provider.
+  it('does not flag an account left over from a DIFFERENT, previously-disconnected bank on the same provider (institutionId differs)', () => {
     const otherConnectionAccountId = 'connector:gocardless:other-bank-acct'
     const before: AppState = {
       accounts: [{ id: otherConnectionAccountId, externalId: 'other-bank-acct', institutionId: 'DEUTSCHE_BANK_DEUTDEFF', name: 'Deutsche Bank Girokonto', type: 'checking', balanceCents: 1_000, currency: 'EUR' }],
@@ -631,5 +635,91 @@ describe('unreconciled legacy accounts (Blocker 2: ambiguous legacy reconnect)',
     }
     const preview = buildSyncPreview(before, payload)
     expect(preview.unreconciledLegacyAccounts).toHaveLength(0)
+  })
+})
+
+// CURRENT DUPLICATE RECOVERY (fourth independent review, 2026-08-27): the
+// exact state this codebase's own previous live Mock ASPSP passes created
+// -- two provider-linked Finance Planner accounts both representing the
+// same real Mock account, BOTH still lacking stableId (imported before it
+// existed): Account A under an old, now-stale session externalId, Account
+// B under the CURRENT session's externalId. A routine sync of the current
+// connection must upgrade B in place (backfilling stableId/
+// stableTransactionId) while leaving A completely untouched -- Finance
+// Planner must never auto-merge or auto-delete A, since there is no
+// trustworthy identity linking it to B.
+describe('current duplicate recovery (legacy accounts both lacking stableId)', () => {
+  it('a routine sync of the current session backfills stableId/stableTransactionId onto Account B only; Account A is left untouched', () => {
+    const accountAId = 'connector:enablebanking:old-session-uid'
+    const accountBId = 'connector:enablebanking:current-session-uid'
+    const before: AppState = {
+      accounts: [
+        { id: accountAId, externalId: 'old-session-uid', name: 'Girokonto', type: 'checking', balanceCents: 695_950, currency: 'EUR' },
+        { id: accountBId, externalId: 'current-session-uid', name: 'Girokonto', type: 'checking', balanceCents: 695_950, currency: 'EUR' },
+      ],
+      transactions: [
+        { id: 'connector:enablebanking:a-hist-1', accountId: accountAId, description: 'Salary', category: 'Income', type: 'income', amountCents: 250_000, date: '2026-08-01' },
+        { id: 'connector:enablebanking:b-hist-1', accountId: accountBId, description: 'Salary', category: 'Income', type: 'income', amountCents: 250_000, date: '2026-08-01' },
+      ],
+      goals: [],
+    }
+    const STABLE_ID = 'c'.repeat(64)
+    const STABLE_TX_ID = 'd'.repeat(64)
+    const routineSyncPayload: SyncPayload = {
+      connection: { id: 'c', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [{ externalId: 'current-session-uid', stableId: STABLE_ID, name: 'Girokonto', type: 'checking', balanceCents: 695_950, currency: 'EUR' }],
+      transactions: [{ externalId: 'b-hist-1', externalAccountId: 'current-session-uid', stableTransactionId: STABLE_TX_ID, description: 'Salary', amountCents: 250_000, currency: 'EUR', bookingDate: '2026-08-01' }],
+    }
+
+    const preview = buildSyncPreview(before, routineSyncPayload)
+    // Account B exact-id matches -- routine refresh, not a create/reconnect.
+    expect(preview.accountsToCreate).toHaveLength(0)
+    expect(preview.accountsToUpdate).toHaveLength(0)
+    expect(preview.routineAccountUpdates).toHaveLength(1)
+    expect(preview.routineAccountUpdates[0].id).toBe(accountBId)
+    expect(preview.routineAccountUpdates[0].stableId).toBe(STABLE_ID)
+    // B's exact current-session transaction backfills stableTransactionId.
+    expect(preview.transactionsToUpdate).toHaveLength(1)
+    expect(preview.transactionsToUpdate[0].id).toBe('connector:enablebanking:b-hist-1')
+    expect(preview.transactionsToUpdate[0].stableTransactionId).toBe(STABLE_TX_ID)
+    expect(preview.transactionsToImport).toHaveLength(0)
+
+    const applied = applySyncPreview(before, preview)
+    // Finance Planner does NOT auto-merge/delete Account A -- both accounts
+    // still exist, A completely unchanged.
+    expect(applied.accounts).toHaveLength(2)
+    const accountA = applied.accounts.find((account) => account.id === accountAId)
+    const accountB = applied.accounts.find((account) => account.id === accountBId)
+    expect(accountA).toEqual(before.accounts[0])
+    expect(accountB?.stableId).toBe(STABLE_ID)
+    expect(accountB?.balanceCents).toBe(695_950)
+    const accountATransaction = applied.transactions.find((transaction) => transaction.id === 'connector:enablebanking:a-hist-1')
+    expect(accountATransaction).toEqual(before.transactions[0])
+    const accountBTransaction = applied.transactions.find((transaction) => transaction.id === 'connector:enablebanking:b-hist-1')
+    expect(accountBTransaction?.stableTransactionId).toBe(STABLE_TX_ID)
+  })
+
+  it('syncing B again after local legacy removal of A does not resurrect A, and stays clean if the provider only ever returns B', () => {
+    const accountBId = 'connector:enablebanking:current-session-uid'
+    const STABLE_ID = 'c'.repeat(64)
+    const STABLE_TX_ID = 'd'.repeat(64)
+    // Simulates the state right after the user manually removed Account A
+    // via Dashboard -> "Remove local legacy account" -- only B remains.
+    const afterLegacyRemoval: AppState = {
+      accounts: [{ id: accountBId, externalId: 'current-session-uid', stableId: STABLE_ID, name: 'Girokonto', type: 'checking', balanceCents: 695_950, currency: 'EUR' }],
+      transactions: [{ id: 'connector:enablebanking:b-hist-1', accountId: accountBId, description: 'Salary', category: 'Income', type: 'income', amountCents: 250_000, date: '2026-08-01', stableTransactionId: STABLE_TX_ID }],
+      goals: [],
+    }
+    const repeatedSyncPayload: SyncPayload = {
+      connection: { id: 'c', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [{ externalId: 'current-session-uid', stableId: STABLE_ID, name: 'Girokonto', type: 'checking', balanceCents: 695_950, currency: 'EUR' }],
+      transactions: [{ externalId: 'b-hist-1', externalAccountId: 'current-session-uid', stableTransactionId: STABLE_TX_ID, description: 'Salary', amountCents: 250_000, currency: 'EUR', bookingDate: '2026-08-01' }],
+    }
+    const preview = buildSyncPreview(afterLegacyRemoval, repeatedSyncPayload)
+    expect(preview.accountsToCreate).toHaveLength(0)
+    expect(preview.accountsToUpdate).toHaveLength(0)
+    const applied = applySyncPreview(afterLegacyRemoval, preview)
+    expect(applied.accounts).toHaveLength(1)
+    expect(applied.accounts[0].id).toBe(accountBId)
   })
 })
