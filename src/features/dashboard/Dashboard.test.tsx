@@ -1,8 +1,11 @@
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AppState } from '../../types'
+import type { Account, AppState } from '../../types'
 import { Dashboard } from './Dashboard'
+
+type RemoveAccountResult = { ok: true } | { ok: false; error: string }
+type RemoveAccountFn = (account: Account) => Promise<RemoveAccountResult>
 
 const populatedState: AppState = {
   accounts: [{ id: 'account', name: 'An account name deliberately long enough to truncate safely', type: 'checking', balanceCents: 12_345_678, currency: 'EUR' }],
@@ -13,11 +16,11 @@ const populatedState: AppState = {
   goals: [{ id: 'goal', name: 'Emergency fund', targetCents: 1_000_000, currentCents: 500_000, targetDate: '2027-01-01' }],
 }
 
-function renderDashboard(state = populatedState) {
+function renderDashboard(state = populatedState, onRemoveAccountOverride?: RemoveAccountFn) {
   const onAddTransaction = vi.fn()
   const onEditTransaction = vi.fn()
   const onNavigate = vi.fn()
-  const onRemoveAccount = vi.fn()
+  const onRemoveAccount = onRemoveAccountOverride ?? vi.fn(async () => ({ ok: true as const }))
   render(<Dashboard
     state={state}
     userName="Alex Rivera"
@@ -141,14 +144,74 @@ describe('Dashboard', () => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     })
 
-    it('confirming calls onRemoveAccount with the account id exactly once', async () => {
+    it('confirming calls onRemoveAccount with the full account exactly once, and closes the dialog on success', async () => {
       const user = userEvent.setup()
       const { onRemoveAccount } = renderDashboard(manualState)
       await user.click(screen.getByRole('button', { name: 'Actions for Bargeld' }))
       await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
       await user.click(screen.getByRole('button', { name: 'Remove account' }))
+      await waitFor(() => expect(onRemoveAccount).toHaveBeenCalledTimes(1))
+      expect(onRemoveAccount).toHaveBeenCalledWith(manualState.accounts[0])
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    })
+
+    it('shows the removing-in-progress state and disables duplicate submissions while the request is running', async () => {
+      const user = userEvent.setup()
+      let resolveRemoval!: (value: { ok: true }) => void
+      const onRemoveAccount = vi.fn(() => new Promise<{ ok: true } | { ok: false; error: string }>((resolve) => { resolveRemoval = resolve }))
+      renderDashboard(manualState, onRemoveAccount)
+      await user.click(screen.getByRole('button', { name: 'Actions for Bargeld' }))
+      await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
+      await user.click(screen.getByRole('button', { name: 'Remove account' }))
+      expect(await screen.findByRole('button', { name: 'Removing account…' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
       expect(onRemoveAccount).toHaveBeenCalledTimes(1)
-      expect(onRemoveAccount).toHaveBeenCalledWith('manual-account')
+
+      resolveRemoval({ ok: true })
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    })
+
+    // Found by adversarial review (2026-08-27): ConfirmationDialog's Escape
+    // handler and backdrop click call onClose unconditionally -- only the
+    // buttons themselves check `busy`. Without a guard, dismissing the
+    // dialog while removal is in flight would close it early; if that
+    // call later fails, the resulting error would fire into an
+    // already-closed dialog and be silently lost.
+    it('Escape does not close the dialog while a removal is in flight, so a later failure is never silently lost', async () => {
+      const user = userEvent.setup()
+      let resolveRemoval!: (value: { ok: false; error: string }) => void
+      const onRemoveAccount = vi.fn(() => new Promise<{ ok: true } | { ok: false; error: string }>((resolve) => { resolveRemoval = resolve }))
+      renderDashboard(manualState, onRemoveAccount)
+      await user.click(screen.getByRole('button', { name: 'Actions for Bargeld' }))
+      await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
+      await user.click(screen.getByRole('button', { name: 'Remove account' }))
+      await screen.findByRole('button', { name: 'Removing account…' })
+
+      await user.keyboard('{Escape}')
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+
+      resolveRemoval({ ok: false, error: 'The account could not be removed.' })
+      expect(await screen.findByRole('alert')).toHaveTextContent('The account could not be removed.')
+    })
+
+    it('on failure, keeps the account visible, shows an actionable error, and lets the user retry', async () => {
+      const user = userEvent.setup()
+      const onRemoveAccount = vi.fn()
+        .mockResolvedValueOnce({ ok: false, error: 'The account could not be removed. Please try again.' })
+        .mockResolvedValueOnce({ ok: true })
+      renderDashboard(manualState, onRemoveAccount)
+      await user.click(screen.getByRole('button', { name: 'Actions for Bargeld' }))
+      await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
+      await user.click(screen.getByRole('button', { name: 'Remove account' }))
+      expect(await screen.findByRole('alert')).toHaveTextContent('The account could not be removed. Please try again. You can try again or cancel.')
+      // Dialog stays open, account was never removed from the row list.
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.getByText('Bargeld')).toBeInTheDocument()
+
+      // Retry: clicking Remove account again re-attempts the same operation.
+      await user.click(screen.getByRole('button', { name: 'Remove account' }))
+      expect(onRemoveAccount).toHaveBeenCalledTimes(2)
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     })
 
     it('a zero-transaction account shows honest copy, never a false "1 transaction" claim', async () => {
@@ -176,6 +239,30 @@ describe('Dashboard', () => {
       await user.click(screen.getByRole('button', { name: 'Actions for Bargeld' }))
       await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
       expect(screen.getByRole('dialog')).not.toHaveTextContent('bank connection')
+    })
+
+    // Fail-conservative (independent review, BLOCKER 2): a provider account
+    // with no stableId has no trustworthy key to durably exclude it by, so
+    // Finance Planner must never offer a "Remove account" that claims a
+    // guarantee it cannot keep.
+    it('a provider account with no stableId offers no destructive removal, only a safe informational dialog pointing to Connections', async () => {
+      const user = userEvent.setup()
+      const noStableIdState: AppState = {
+        accounts: [{ id: 'connector:enablebanking:acct-2', externalId: 'acct-2', name: 'Sparkonto', type: 'savings', balanceCents: 20_000, currency: 'EUR' }],
+        transactions: [],
+        goals: [],
+      }
+      const { onRemoveAccount, onNavigate } = renderDashboard(noStableIdState)
+      await user.click(screen.getByRole('button', { name: 'Actions for Sparkonto' }))
+      await user.click(screen.getByRole('menuitem', { name: /Remove account/ }))
+      const dialog = screen.getByRole('dialog')
+      expect(dialog).toHaveTextContent('cannot currently be removed safely')
+      expect(screen.queryByRole('button', { name: 'Remove account' })).not.toBeInTheDocument()
+      expect(onRemoveAccount).not.toHaveBeenCalled()
+
+      await user.click(screen.getByRole('button', { name: /Go to Connections/ }))
+      expect(onNavigate).toHaveBeenCalledWith('connections')
+      expect(onRemoveAccount).not.toHaveBeenCalled()
     })
   })
 })

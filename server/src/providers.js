@@ -346,11 +346,42 @@ function tokenIsUsable(token, now = Date.now()) {
 // one -- see buildSyncPreview() in src/connectors.ts for the "no unsafe
 // automatic merge without a match" contract this feeds.
 export const STABLE_ACCOUNT_RAW_IDENTIFIER_PATTERN = /^[A-Za-z0-9+/=_-]{1,256}$/
-export function stableAccountId(env, provider, rawIdentifier) {
-  if (typeof rawIdentifier !== 'string' || !STABLE_ACCOUNT_RAW_IDENTIFIER_PATTERN.test(rawIdentifier)) return undefined
+const STABLE_ACCOUNT_ID_SHAPE = /^[a-f0-9]{64}$/
+
+function hmacDigest(env, message) {
   const secret = env.CONNECTOR_MASTER_KEY
   if (typeof secret !== 'string' || secret.length < 32) return undefined
-  return createHmac('sha256', secret).update(`${provider}:${rawIdentifier}`, 'utf8').digest('hex')
+  return createHmac('sha256', secret).update(message, 'utf8').digest('hex')
+}
+
+export function stableAccountId(env, provider, rawIdentifier) {
+  if (typeof rawIdentifier !== 'string' || !STABLE_ACCOUNT_RAW_IDENTIFIER_PATTERN.test(rawIdentifier)) return undefined
+  return hmacDigest(env, `${provider}:${rawIdentifier}`)
+}
+
+// Found live 2026-08-27 (PR #154, reconnect-dedup follow-up, independent
+// review): the reconnect fix reused transactionFingerprint() (accountId +
+// date + amountCents + description) as its de facto reconnect-dedup key,
+// which can collapse two GENUINELY DIFFERENT same-day/same-amount/same-
+// description transactions (e.g. two identical REWE purchases). Neither
+// Enable Banking's entry_reference nor GoCardless's transactionId is
+// documented as stable across sessions/requisitions the way the account-
+// level identification_hash/iban is -- but both ARE described as assigned
+// by the financial institution itself, not by the session, which is the
+// same structural property already relied on for account-level stability.
+// Namespacing that bank-assigned reference under the account's own proven-
+// stable identity (never the session-scoped account/requisition id) is
+// what turns it into a meaningfully more trustworthy cross-reconnect key
+// than before, without claiming a documented guarantee that doesn't exist.
+// Deliberately a SEPARATE function from stableAccountId() (not reused with
+// a colon-joined composite string) because the composite
+// `${accountStableId}:${reference}` would itself fail
+// STABLE_ACCOUNT_RAW_IDENTIFIER_PATTERN (no ':' in that charset) --
+// accountStableId's shape is validated directly here instead.
+export function stableTransactionId(env, provider, accountStableId, transactionReference) {
+  if (typeof accountStableId !== 'string' || !STABLE_ACCOUNT_ID_SHAPE.test(accountStableId)) return undefined
+  if (typeof transactionReference !== 'string' || !STABLE_ACCOUNT_RAW_IDENTIFIER_PATTERN.test(transactionReference)) return undefined
+  return hmacDigest(env, `${provider}:${accountStableId}:${transactionReference}`)
 }
 
 function completedHealth({ completedAt, consentExpiresAt = null, accounts, transactions }) {
@@ -721,7 +752,8 @@ class GoCardlessProvider extends OpenBankingProvider {
       // with no IBAN (e.g. some card products): stableAccountId() returns
       // undefined in that case, which is the correct fail-conservative
       // outcome, not an error.
-      accounts.push({ externalId: accountId, name: account.name || account.product || account.iban || 'Bankkonto', type, balanceCents, currency: 'EUR', stableId: stableAccountId(this.env, 'gocardless', account.iban) })
+      const accountStableId = stableAccountId(this.env, 'gocardless', account.iban)
+      accounts.push({ externalId: accountId, name: account.name || account.product || account.iban || 'Bankkonto', type, balanceCents, currency: 'EUR', stableId: accountStableId })
       for (const [pending, rows] of [[false, tx.transactions?.booked ?? []], [true, tx.transactions?.pending ?? []]]) {
         if (!Array.isArray(rows)) throw new Error('GoCardless transaction response is invalid.')
         for (const item of rows) {
@@ -731,7 +763,16 @@ class GoCardlessProvider extends OpenBankingProvider {
           const externalId = item.transactionId || `${accountId}:${item.bookingDate || item.valueDate}:${item.transactionAmount.amount}:${item.remittanceInformationUnstructured || ''}`
           if (seen.has(externalId)) continue
           seen.add(externalId)
-          transactions.push({ externalId, externalAccountId: accountId, description: item.creditorName || item.debtorName || item.remittanceInformationUnstructured || item.additionalInformation || 'Banktransaktion', amountCents: signedCents, currency: 'EUR', bookingDate: item.bookingDate || item.valueDate || window.dateTo, pending })
+          // stableTransactionId (2026-08-27, PR #154 reconnect-dedup follow-
+          // up): GoCardless documents transactionId as "Transaction
+          // identifier provided by the financial institution" -- bank-
+          // assigned, not requisition-scoped -- the same structural
+          // property relied on for Enable Banking's equivalent above. Never
+          // computed from the synthetic date/amount/description fallback
+          // key. See stableTransactionId()'s doc comment in this file for
+          // the full rationale and its conservative-fallback contract.
+          const txStableId = stableTransactionId(this.env, 'gocardless', accountStableId, item.transactionId)
+          transactions.push({ externalId, externalAccountId: accountId, stableTransactionId: txStableId, description: item.creditorName || item.debtorName || item.remittanceInformationUnstructured || item.additionalInformation || 'Banktransaktion', amountCents: signedCents, currency: 'EUR', bookingDate: item.bookingDate || item.valueDate || window.dateTo, pending })
         }
       }
     }
@@ -1221,7 +1262,13 @@ class EnableBankingProvider extends OpenBankingProvider {
       const balance = selectEnableBankingBalance(balances.balances)
       const type = await normalizeProviderAccountType({ cashAccountType: account.cashAccountType }, this.env, this.core)
       const balanceCents = await this.core.normalizeProviderAmount(balance)
-      accounts.push({ externalId: account.uid, name: account.name || 'Bankkonto', type, balanceCents, currency: 'EUR', stableId: stableAccountId(this.env, 'enablebanking', account.identificationHash) })
+      // Computed once per account, reused below for both the account's own
+      // stableId and every one of its transactions' stableTransactionId --
+      // see the doc comment on stableTransactionId's derivation further
+      // down for why this must be the account-level stable identity, never
+      // the session-scoped account.uid.
+      const accountStableId = stableAccountId(this.env, 'enablebanking', account.identificationHash)
+      accounts.push({ externalId: account.uid, name: account.name || 'Bankkonto', type, balanceCents, currency: 'EUR', stableId: accountStableId })
 
       // continuation_key pagination: strategy/date parameters stay
       // identical across every page (Enable Banking's documented
@@ -1313,9 +1360,35 @@ class EnableBankingProvider extends OpenBankingProvider {
             : `${account.uid}:${item.booking_date || item.value_date}:${item.transaction_amount.amount}:${(item.remittance_information || []).join(' ')}`
           if (seen.has(externalId)) continue
           seen.add(externalId)
+          // stableTransactionId (found live 2026-08-27, PR #154, reconnect-
+          // dedup follow-up): the pre-existing externalId above is
+          // namespaced with account.uid, which is session-scoped and
+          // changes on every reauthorization -- so it can never be used to
+          // recognize "this is the same real transaction" across a
+          // reconnect, only within one session. entry_reference itself is
+          // NOT documented by Enable Banking as cross-session stable
+          // (confirmed against the current official API reference: no such
+          // guarantee is stated, unlike the account-level
+          // identification_hash, which explicitly is). What IS true: it is
+          // "the ASPSP transaction identifier" -- assigned by the bank
+          // itself, not by the session -- which is the same structural
+          // property that justified treating identification_hash as
+          // account-stable. Deriving a value from entry_reference
+          // NAMESPACED BY THE ACCOUNT'S OWN STABLE IDENTITY (never the
+          // session-scoped account.uid) turns that bank-assigned reference
+          // into something meaningfully more trustworthy across a reconnect
+          // than before, without claiming a documentation guarantee that
+          // does not exist. Only computed when BOTH the account has a
+          // stableId AND a real entry_reference is present (never for the
+          // synthetic date/amount/description fallback key) -- see
+          // buildSyncPreview() in src/connectors.ts for how the absence of
+          // this value is handled conservatively during a reconnect,
+          // exactly like GoCardless's own equivalent below.
+          const txStableId = stableTransactionId(this.env, 'enablebanking', accountStableId, item.entry_reference)
           transactions.push({
             externalId,
             externalAccountId: account.uid,
+            stableTransactionId: txStableId,
             description: (item.remittance_information || []).join(' ') || 'Banktransaktion',
             amountCents: signedCents,
             currency: 'EUR',

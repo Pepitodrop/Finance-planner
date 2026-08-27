@@ -84,6 +84,55 @@ export async function rollbackDatabase(pool, targetVersion, downDir = downMigrat
   }
 }
 
+const STABLE_ACCOUNT_ID_PATTERN = /^[a-f0-9]{64}$/
+const MAX_ACCOUNT_EXCLUSION_NAME_LENGTH = 160
+
+// Durable, connection-independent account-exclusion methods (2026-08-27,
+// PR #154) -- mirrors addWebhookEventState()'s pattern of attaching driver-
+// specific implementations onto the already-unified `store` object rather
+// than branching on driver at every call site in server.js. Deliberately
+// NOT part of the connector-credential get/set/remove contract: disconnect
+// (store.remove()) must never touch these, and reconnect must never lose
+// them -- that was the exact defect found live and independently reviewed.
+//
+// Postgres driver: a dedicated connector_account_exclusions table (migration
+// 011), independent of connector_connections, with idempotent
+// INSERT ... ON CONFLICT DO NOTHING (no read-modify-write lost-update race).
+// File driver: EncryptedStore already implements the identical
+// addAccountExclusion()/removeAccountExclusion()/listAccountExclusions()
+// contract directly (see crypto-store.js) with its own name-bounding and
+// stable-id validation, serialized through its existing write queue -- this
+// branch just leaves `store`'s own methods in place rather than wrapping
+// them, so there's exactly one implementation to keep in sync, not two.
+export function addAccountExclusionMethods(store, pool) {
+  if (!pool) return store
+
+  store.addAccountExclusion = async (userId, provider, stableAccountId, accountName) => {
+    if (!STABLE_ACCOUNT_ID_PATTERN.test(stableAccountId)) throw new Error('Invalid stable account id.')
+    const name = typeof accountName === 'string' && accountName.trim() ? accountName.trim().slice(0, MAX_ACCOUNT_EXCLUSION_NAME_LENGTH) : null
+    // ON CONFLICT DO NOTHING: idempotent insert keyed by the table's own
+    // (user_id, provider, stable_account_id) primary key -- a duplicate
+    // exclusion request (retry, double-click) is a no-op, never an error,
+    // and never a lost-update race the way a read-modify-write on a JSON
+    // array would be.
+    await pool.query(
+      'INSERT INTO connector_account_exclusions (user_id, provider, stable_account_id, account_name) VALUES ($1,$2,$3,$4) ON CONFLICT (user_id, provider, stable_account_id) DO NOTHING',
+      [userId, provider, stableAccountId, name],
+    )
+  }
+  store.removeAccountExclusion = async (userId, provider, stableAccountId) => {
+    await pool.query('DELETE FROM connector_account_exclusions WHERE user_id=$1 AND provider=$2 AND stable_account_id=$3', [userId, provider, stableAccountId])
+  }
+  store.listAccountExclusions = async (userId, provider) => {
+    const result = await pool.query(
+      'SELECT stable_account_id, account_name, created_at FROM connector_account_exclusions WHERE user_id=$1 AND provider=$2 ORDER BY created_at ASC',
+      [userId, provider],
+    )
+    return result.rows.map((row) => ({ stableAccountId: row.stable_account_id, accountName: row.account_name || undefined, createdAt: row.created_at.toISOString() }))
+  }
+  return store
+}
+
 function addWebhookEventState(store, pool) {
   if (pool) {
     store.getWebhookEventState = async (provider, eventId, now = new Date()) => {
@@ -113,7 +162,7 @@ export async function createConnectorStore(env = process.env) {
     activeDatabasePool = null
     const store = new EncryptedStore(env.CONNECTOR_STORE_PATH || './data/connectors.enc.json', env.CONNECTOR_MASTER_KEY || '')
     await store.load()
-    return { store: addWebhookEventState(store, null), pool: null, retention: null, close: async () => {}, driver }
+    return { store: addAccountExclusionMethods(addWebhookEventState(store, null), null), pool: null, retention: null, close: async () => {}, driver }
   }
   if (driver !== 'postgres') throw new Error('CONNECTOR_STORE_DRIVER must be file or postgres.')
 
@@ -127,7 +176,7 @@ export async function createConnectorStore(env = process.env) {
     retention.start()
     activeDatabasePool = pool
     return {
-      store: addWebhookEventState(store, pool),
+      store: addAccountExclusionMethods(addWebhookEventState(store, pool), pool),
       pool,
       retention,
       close: async () => {

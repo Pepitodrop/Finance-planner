@@ -93,17 +93,22 @@ describe('reconnect reconciliation (stableId)', () => {
     expect(second.transactionsToImport).toHaveLength(0)
   })
 
-  it('B. reauthorization: same stable economic account, NEW session externalId, same historical transactions -> reuses the existing Finance Planner account id, updates balance in place, does not duplicate historical transactions', () => {
+  // stableTransactionId is what makes this an AUTHORITATIVE dedup match,
+  // not the fuzzy fingerprint -- see the "Blocker 3" describe block below
+  // for the full identity-collapse regression this distinguishes.
+  const STABLE_TX_ID = 'c'.repeat(64)
+
+  it('B. reauthorization: same stable economic account, NEW session externalId, same historical transaction (same stableTransactionId) -> reuses the existing Finance Planner account id, updates balance in place, does not duplicate the historical transaction', () => {
     const existingAccountId = 'connector:enablebanking:old-session-uid'
     const before: AppState = {
       accounts: [{ id: existingAccountId, externalId: 'old-session-uid', stableId: STABLE_ID, name: 'Girokonto', type: 'checking', balanceCents: 695_950, currency: 'EUR', lastSyncedAt: '2026-08-26T00:00:00.000Z' }],
-      transactions: [{ id: 'connector:enablebanking:old-session-uid:mock-tx-001', accountId: existingAccountId, description: 'Salary', category: 'Income', type: 'income', amountCents: 250_000, date: '2026-08-01' }],
+      transactions: [{ id: 'connector:enablebanking:old-session-uid:mock-tx-001', accountId: existingAccountId, description: 'Salary', category: 'Income', type: 'income', amountCents: 250_000, date: '2026-08-01', stableTransactionId: STABLE_TX_ID }],
       goals: [],
     }
     const reconnectPayload: SyncPayload = {
       connection: { id: 'connection-1', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
       accounts: [{ externalId: 'new-session-uid', stableId: STABLE_ID, name: 'Girokonto', type: 'checking', balanceCents: 695_950, currency: 'EUR' }],
-      transactions: [{ externalId: 'mock-tx-001', externalAccountId: 'new-session-uid', description: 'Salary', amountCents: 250_000, currency: 'EUR', bookingDate: '2026-08-01' }],
+      transactions: [{ externalId: 'mock-tx-001', externalAccountId: 'new-session-uid', stableTransactionId: STABLE_TX_ID, description: 'Salary', amountCents: 250_000, currency: 'EUR', bookingDate: '2026-08-01' }],
     }
 
     const preview = buildSyncPreview(before, reconnectPayload)
@@ -206,19 +211,19 @@ describe('reconnect reconciliation (stableId)', () => {
     expect(preview.accountsToCreate[0].id).toBe('connector:enablebanking:new-uid')
   })
 
-  it('E. new real transaction after reconnect: old rows dedup, the genuinely new transaction imports exactly once', () => {
+  it('E. new real transaction after reconnect: old rows dedup (via stableTransactionId), the genuinely new transaction imports exactly once', () => {
     const existingAccountId = 'connector:enablebanking:old-session-uid'
     const before: AppState = {
       accounts: [{ id: existingAccountId, externalId: 'old-session-uid', stableId: STABLE_ID, name: 'Girokonto', type: 'checking', balanceCents: 250_000, currency: 'EUR' }],
-      transactions: [{ id: 'connector:enablebanking:old-session-uid:mock-tx-001', accountId: existingAccountId, description: 'Salary', category: 'Income', type: 'income', amountCents: 250_000, date: '2026-08-01' }],
+      transactions: [{ id: 'connector:enablebanking:old-session-uid:mock-tx-001', accountId: existingAccountId, description: 'Salary', category: 'Income', type: 'income', amountCents: 250_000, date: '2026-08-01', stableTransactionId: STABLE_TX_ID }],
       goals: [],
     }
     const reconnectPayload: SyncPayload = {
       connection: { id: 'connection-1', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
       accounts: [{ externalId: 'new-session-uid', stableId: STABLE_ID, name: 'Girokonto', type: 'checking', balanceCents: 300_000, currency: 'EUR' }],
       transactions: [
-        { externalId: 'mock-tx-001', externalAccountId: 'new-session-uid', description: 'Salary', amountCents: 250_000, currency: 'EUR', bookingDate: '2026-08-01' },
-        { externalId: 'mock-tx-002', externalAccountId: 'new-session-uid', description: 'Freelance payment', amountCents: 50_000, currency: 'EUR', bookingDate: '2026-08-15' },
+        { externalId: 'mock-tx-001', externalAccountId: 'new-session-uid', stableTransactionId: STABLE_TX_ID, description: 'Salary', amountCents: 250_000, currency: 'EUR', bookingDate: '2026-08-01' },
+        { externalId: 'mock-tx-002', externalAccountId: 'new-session-uid', stableTransactionId: 'd'.repeat(64), description: 'Freelance payment', amountCents: 50_000, currency: 'EUR', bookingDate: '2026-08-15' },
       ],
     }
 
@@ -250,5 +255,129 @@ describe('reconnect reconciliation (stableId)', () => {
     const deselected = selectSyncPreviewAccounts(preview, [])
     expect(deselected.accountsToUpdate).toHaveLength(0)
     expect(deselected.transactionsToImport).toHaveLength(0)
+  })
+})
+
+// Blocker 3 (found by independent review, 2026-08-27): the reconnect-dedup
+// fix's fingerprint fallback (accountId + date + amountCents + description)
+// could collapse two GENUINELY DIFFERENT same-day/same-amount/same-
+// description transactions. stableTransactionId -- derived server-side from
+// a provider's bank-assigned transaction reference namespaced under the
+// account's own stable identity, never the session-scoped account id -- is
+// the fix. See stableTransactionId() in server/src/providers.js.
+describe('stable transaction identity (reconnect dedup correctness)', () => {
+  const STABLE_ID = '9'.repeat(64)
+  const ACCOUNT_ID = 'connector:enablebanking:acct-1'
+  const baseAccount = { id: ACCOUNT_ID, externalId: 'acct-1', stableId: STABLE_ID, name: 'Girokonto', type: 'checking' as const, balanceCents: 100_000, currency: 'EUR' as const }
+  const basePayloadAccount = { externalId: 'acct-1', stableId: STABLE_ID, name: 'Girokonto', type: 'checking' as const, balanceCents: 100_000, currency: 'EUR' as const }
+
+  it('A. exact same provider transaction id (same session, no reconnect) -> duplicate', () => {
+    const before: AppState = {
+      accounts: [baseAccount],
+      transactions: [{ id: 'connector:enablebanking:acct-1:tx-1', accountId: ACCOUNT_ID, description: 'REWE', category: 'Groceries', type: 'expense', amountCents: 2000, date: '2026-08-27' }],
+      goals: [],
+    }
+    const payload: SyncPayload = {
+      connection: { id: 'c', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [basePayloadAccount],
+      transactions: [{ externalId: 'tx-1', externalAccountId: 'acct-1', description: 'REWE', amountCents: -2000, currency: 'EUR', bookingDate: '2026-08-27' }],
+    }
+    const preview = buildSyncPreview(before, payload)
+    expect(preview.transactionsToImport).toHaveLength(0)
+    expect(preview.duplicateCount).toBe(1)
+  })
+
+  it('B. reconnect: same stableTransactionId, different session/external account id -> duplicate', () => {
+    const stableTxId = 'e'.repeat(64)
+    const before: AppState = {
+      accounts: [{ ...baseAccount, externalId: 'old-session-acct' }],
+      transactions: [{ id: 'connector:enablebanking:old-session-acct:tx-1', accountId: ACCOUNT_ID, description: 'REWE', category: 'Groceries', type: 'expense', amountCents: 2000, date: '2026-08-27', stableTransactionId: stableTxId }],
+      goals: [],
+    }
+    const payload: SyncPayload = {
+      connection: { id: 'c', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [{ ...basePayloadAccount, externalId: 'new-session-acct' }],
+      transactions: [{ externalId: 'new-tx-ref', externalAccountId: 'new-session-acct', stableTransactionId: stableTxId, description: 'REWE', amountCents: -2000, currency: 'EUR', bookingDate: '2026-08-27' }],
+    }
+    const preview = buildSyncPreview(before, payload)
+    expect(preview.transactionsToImport).toHaveLength(0)
+    expect(preview.duplicateCount).toBe(1)
+  })
+
+  it('C. two legitimate transactions, same account/date/amount/description, DIFFERENT stable transaction ids -> BOTH preserved', () => {
+    const before: AppState = { accounts: [baseAccount], transactions: [], goals: [] }
+    const payload: SyncPayload = {
+      connection: { id: 'c', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [basePayloadAccount],
+      transactions: [
+        { externalId: 'tx-morning', externalAccountId: 'acct-1', stableTransactionId: 'f'.repeat(64), description: 'REWE', amountCents: -2000, currency: 'EUR', bookingDate: '2026-08-27' },
+        { externalId: 'tx-evening', externalAccountId: 'acct-1', stableTransactionId: '1'.repeat(64), description: 'REWE', amountCents: -2000, currency: 'EUR', bookingDate: '2026-08-27' },
+      ],
+    }
+    const preview = buildSyncPreview(before, payload)
+    expect(preview.transactionsToImport).toHaveLength(2)
+    expect(preview.duplicateCount).toBe(0)
+  })
+
+  it('D. reconnect, same display data, NO stable transaction identity on either side -> conservative import, never silently discarded as a duplicate', () => {
+    const before: AppState = {
+      accounts: [{ ...baseAccount, externalId: 'old-session-acct' }],
+      transactions: [{ id: 'connector:enablebanking:old-session-acct:tx-1', accountId: ACCOUNT_ID, description: 'REWE', category: 'Groceries', type: 'expense', amountCents: 2000, date: '2026-08-27' }],
+      goals: [],
+    }
+    const payload: SyncPayload = {
+      connection: { id: 'c', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [{ ...basePayloadAccount, externalId: 'new-session-acct' }],
+      // A genuinely different transaction that happens to share date/amount/
+      // description with the pre-existing one, arriving with NO stable
+      // transaction identity -- must NOT be silently discarded.
+      transactions: [{ externalId: 'new-session-acct:2026-08-27:-20.00:REWE', externalAccountId: 'new-session-acct', description: 'REWE', amountCents: -2000, currency: 'EUR', bookingDate: '2026-08-27' }],
+    }
+    const preview = buildSyncPreview(before, payload)
+    expect(preview.transactionsToImport).toHaveLength(1)
+    expect(preview.duplicateCount).toBe(0)
+  })
+
+  it('F. previously imported history after reconnect remains exactly one copy (no stable id on either side, but same-session/pre-reconnect fingerprint dedup is unaffected)', () => {
+    // Routine, non-reconnect re-sync: the account id is unchanged (no
+    // reconnect occurred), so the exact-id check alone already prevents
+    // duplication -- confirms this path is untouched by the Blocker 3 fix.
+    const before: AppState = {
+      accounts: [baseAccount],
+      transactions: [{ id: 'connector:enablebanking:acct-1:tx-1', accountId: ACCOUNT_ID, description: 'REWE', category: 'Groceries', type: 'expense', amountCents: 2000, date: '2026-08-27' }],
+      goals: [],
+    }
+    const payload: SyncPayload = {
+      connection: { id: 'c', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [basePayloadAccount],
+      transactions: [{ externalId: 'tx-1', externalAccountId: 'acct-1', description: 'REWE', amountCents: -2000, currency: 'EUR', bookingDate: '2026-08-27' }],
+    }
+    const preview = buildSyncPreview(before, payload)
+    expect(preview.transactionsToImport).toHaveLength(0)
+    expect(preview.duplicateCount).toBe(1)
+  })
+
+  it('G. pending -> booked lifecycle: a pending transaction is excluded from import, and its later booked counterpart is not treated as a false duplicate', () => {
+    const before: AppState = { accounts: [baseAccount], transactions: [], goals: [] }
+    const pendingSync: SyncPayload = {
+      connection: { id: 'c', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [basePayloadAccount],
+      transactions: [{ externalId: 'tx-1', externalAccountId: 'acct-1', stableTransactionId: 'a1'.padEnd(64, '0'), description: 'REWE', amountCents: -2000, currency: 'EUR', bookingDate: '2026-08-27', pending: true }],
+    }
+    const pendingPreview = buildSyncPreview(before, pendingSync)
+    expect(pendingPreview.transactionsToImport).toHaveLength(0)
+    expect(pendingPreview.pendingCount).toBe(1)
+
+    // The same economic transaction later books -- same stableTransactionId,
+    // now pending:false -- imports exactly once (state is unchanged from
+    // before, since the pending version was never actually imported).
+    const bookedSync: SyncPayload = {
+      connection: { id: 'c', provider: 'enablebanking', displayName: 'Bank connection', status: 'connected' },
+      accounts: [basePayloadAccount],
+      transactions: [{ externalId: 'tx-1', externalAccountId: 'acct-1', stableTransactionId: 'a1'.padEnd(64, '0'), description: 'REWE', amountCents: -2000, currency: 'EUR', bookingDate: '2026-08-27', pending: false }],
+    }
+    const bookedPreview = buildSyncPreview(before, bookedSync)
+    expect(bookedPreview.transactionsToImport).toHaveLength(1)
+    expect(bookedPreview.duplicateCount).toBe(0)
   })
 })

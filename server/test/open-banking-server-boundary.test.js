@@ -325,20 +325,81 @@ test('listStoredConnections() is built from the same connection() summary buildS
 test('the account-exclusion endpoint authenticates, authorizes, requires an existing stored connection, and validates the stable-account-id shape before ever writing to the store', () => {
   const route = serverSource.slice(
     serverSource.indexOf('const exclusionMatch = url.pathname.match'),
-    serverSource.indexOf('const institutionsMatch = url.pathname.match'),
+    serverSource.indexOf('// Restore ("un-remove")'),
   )
-  assert.ok(route.length > 0, 'the /api/connectors/:provider/exclusions route was not found')
+  assert.ok(route.length > 0, 'the /api/connectors/:provider/exclusions POST route was not found')
   const authentication = route.indexOf('const user = userId(request)')
   const authorization = route.indexOf('authorizeProviderUser(adapter, user, env)')
   const storedLookup = route.indexOf('const stored = await store.get(user, provider)')
   const notConnectedGuard = route.indexOf("throw new HttpError(404, 'connector_not_connected'")
   const shapeValidation = route.indexOf('isValidStableAccountId(stableAccountId)')
-  const write = route.indexOf('await store.set(user, provider,')
+  const write = route.indexOf('await store.addAccountExclusion(user, provider,')
   assert.ok([authentication, authorization, storedLookup, notConnectedGuard, shapeValidation, write].every((index) => index >= 0))
   assert.ok(authentication < authorization, 'must authenticate before authorizing')
   assert.ok(authorization < storedLookup, 'must authorize before reading the stored connection')
   assert.ok(storedLookup < notConnectedGuard, 'must fail closed when no connection is stored for this provider')
   assert.ok(notConnectedGuard < shapeValidation, 'must confirm a connection exists before validating the request body')
   assert.ok(shapeValidation < write, 'must validate the stable-account-id shape before ever writing to the store')
-  assert.match(route, /addExcludedStableAccountId\(stored\.excludedStableAccountIds, stableAccountId\)/, 'must build the new list via the pure, unit-tested addExcludedStableAccountId() helper, not inline logic')
+  // Regression guard for BLOCKER 1 (2026-08-27, independent review): the
+  // write must go through the durable, connection-independent
+  // addAccountExclusion() store method (migration 011's
+  // connector_account_exclusions table / EncryptedStore's own
+  // accountExclusions), never a read-modify-write on this credential row
+  // via store.set() -- that was the exact design that lost every exclusion
+  // on disconnect/reconnect.
+  assert.doesNotMatch(route, /store\.set\(user, provider,\s*\{\s*\.\.\.stored/, 'must never persist exclusions via a read-modify-write on the connector credential')
+})
+
+// Regression guard for the Restore ("un-remove") UX (2026-08-27, PR #154):
+// removing a stable provider account must not be an irreversible hidden
+// tombstone. Restore deliberately does not require re-authorizing a full
+// sync -- it only deletes the durable exclusion record.
+test('the account-restore endpoint authenticates and authorizes before deleting the exclusion, and never requires an active connector connection', () => {
+  const route = serverSource.slice(
+    serverSource.indexOf('const restoreMatch = url.pathname.match'),
+    serverSource.indexOf('const institutionsMatch = url.pathname.match'),
+  )
+  assert.ok(route.length > 0, 'the /api/connectors/:provider/exclusions/:stableAccountId DELETE route was not found')
+  assert.match(route, /request\.method === 'DELETE'/)
+  const authentication = route.indexOf('const user = userId(request)')
+  const authorization = route.indexOf('authorizeProviderUser(adapter, user, env)')
+  const removal = route.indexOf('await store.removeAccountExclusion(user, provider, stableAccountId)')
+  assert.ok([authentication, authorization, removal].every((index) => index >= 0))
+  assert.ok(authentication < authorization && authorization < removal, 'must authenticate, then authorize, then delete the exclusion -- in that order')
+  assert.doesNotMatch(route, /store\.get\(user, provider\)/, 'restore must not require an existing stored connector connection')
+})
+
+// Regression guard for the Restore UX's data source: the Connections page
+// must be able to show excluded accounts without a second round trip or a
+// new secret-exposure surface.
+test('listStoredConnections() attaches excludedAccounts from the same durable store, never from the connector credential', () => {
+  const helper = serverSource.slice(
+    serverSource.indexOf('async function listStoredConnections(user)'),
+    serverSource.indexOf('async function start(provider, request, response)'),
+  )
+  assert.match(helper, /store\.listAccountExclusions\(user, provider\)/)
+  assert.match(helper, /excludedAccounts/)
+})
+
+// Regression guard for the "Restore list disappears after every sync"
+// defect found by a second adversarial-review pass (2026-08-27, same day):
+// ConnectionsPage.tsx's synchronize() unconditionally replaces its whole
+// `connections` array with buildSyncPayload()'s response -- so unless every
+// connection object THAT FUNCTION returns carries excludedAccounts too
+// (not only listStoredConnections()'s mount-only overview), the
+// Connections page's "Removed accounts / Restore" section would silently
+// vanish immediately after any sync, even though the exclusion itself
+// stayed fully enforced server-side. Both the success and the per-provider
+// failure branch must carry it.
+test('buildSyncPayload() attaches excludedAccounts to every connection object it returns, on both the success and failure branch', () => {
+  const helper = serverSource.slice(
+    serverSource.indexOf('async function buildSyncPayload(user)'),
+    serverSource.indexOf('function syncIdempotencyKey'),
+  )
+  const exclusionsFetch = helper.indexOf('const excludedAccounts = await store.listAccountExclusions(user, provider)')
+  const tryBlockStart = helper.indexOf('try {')
+  const successPush = helper.indexOf('results.push({ connection: { ...connection(provider, stored), lastSyncAt, consentExpiresAt: synced.consentExpiresAt, excludedAccounts }')
+  const failurePush = helper.indexOf('results.push({ connection: { ...connection(provider, stored, error instanceof Error ? error.message : \'Synchronization failed.\'), excludedAccounts }')
+  assert.ok(exclusionsFetch >= 0 && successPush >= 0 && failurePush >= 0, 'excludedAccounts must be attached on both the success and failure branch')
+  assert.ok(exclusionsFetch < tryBlockStart, 'excludedAccounts must be fetched outside (before) the try block, so it is available to both branches')
 })

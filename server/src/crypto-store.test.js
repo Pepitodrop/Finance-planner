@@ -60,7 +60,7 @@ test('encrypted store removes every provider and OAuth nonce for one user', asyn
       redirectUri: 'https://app.test/callback', expiresAt: Date.now() + 60_000,
     })
 
-    assert.deepEqual(await store.removeUser('user-1'), { connectorConnections: 2, oauthNonces: 1 })
+    assert.deepEqual(await store.removeUser('user-1'), { connectorConnections: 2, accountExclusions: 0, oauthNonces: 1 })
     assert.equal(store.get('user-1', 'gocardless'), null)
     assert.equal(store.get('user-1', 'licensed-aisp'), null)
     assert.deepEqual(store.get('user-2', 'paypal'), { token: 'other-user' })
@@ -88,6 +88,116 @@ test('encrypted store rejects unsupported envelopes instead of accepting ambiguo
     await writeFile(path, JSON.stringify({ format: 'other-store', version: 2 }), 'utf8')
     const store = new EncryptedStore(path, secret)
     await assert.rejects(store.load(), /could not be opened or recovered/)
+  } finally {
+    await cleanup()
+  }
+})
+
+// Durable account-exclusion methods (2026-08-27, PR #154): found by
+// independent review that the previous excludedStableAccountIds-inside-the-
+// live-credential design lost the exclusion on disconnect/reconnect. These
+// are deliberately independent of connections[userId][provider] -- remove()
+// (disconnect) and removeUser() (account deletion) must have different
+// blast radii.
+const STABLE_ID_A = 'a'.repeat(64)
+const STABLE_ID_B = 'b'.repeat(64)
+
+test('addAccountExclusion persists independently of the connector connection and survives remove() (disconnect)', async () => {
+  const { path, cleanup } = await fixture()
+  try {
+    const store = new EncryptedStore(path, secret)
+    await store.load()
+    await store.set('user-1', 'enablebanking', { sessionId: 'session-1' })
+    await store.addAccountExclusion('user-1', 'enablebanking', STABLE_ID_A, 'Savings account')
+
+    // Disconnect: remove() deletes the connector credential row.
+    await store.remove('user-1', 'enablebanking')
+    assert.equal(store.get('user-1', 'enablebanking'), null)
+
+    // The exclusion must survive disconnect -- this is the exact defect
+    // found live and independently reviewed.
+    const exclusions = await store.listAccountExclusions('user-1', 'enablebanking')
+    assert.deepEqual(exclusions.map((e) => e.stableAccountId), [STABLE_ID_A])
+    assert.equal(exclusions[0].accountName, 'Savings account')
+
+    const reopened = new EncryptedStore(path, secret)
+    await reopened.load()
+    assert.deepEqual((await reopened.listAccountExclusions('user-1', 'enablebanking')).map((e) => e.stableAccountId), [STABLE_ID_A])
+  } finally {
+    await cleanup()
+  }
+})
+
+test('addAccountExclusion is idempotent -- a duplicate add does not create a second entry', async () => {
+  const { path, cleanup } = await fixture()
+  try {
+    const store = new EncryptedStore(path, secret)
+    await store.load()
+    await store.addAccountExclusion('user-1', 'enablebanking', STABLE_ID_A, 'Checking')
+    await store.addAccountExclusion('user-1', 'enablebanking', STABLE_ID_A, 'Checking (renamed)')
+    const exclusions = await store.listAccountExclusions('user-1', 'enablebanking')
+    assert.equal(exclusions.length, 1)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('removeAccountExclusion (Restore) is idempotent and only removes the targeted exclusion', async () => {
+  const { path, cleanup } = await fixture()
+  try {
+    const store = new EncryptedStore(path, secret)
+    await store.load()
+    await store.addAccountExclusion('user-1', 'enablebanking', STABLE_ID_A, 'A')
+    await store.addAccountExclusion('user-1', 'enablebanking', STABLE_ID_B, 'B')
+    await store.removeAccountExclusion('user-1', 'enablebanking', STABLE_ID_A)
+    assert.deepEqual((await store.listAccountExclusions('user-1', 'enablebanking')).map((e) => e.stableAccountId), [STABLE_ID_B])
+    // Removing again (e.g. a retried Restore click) is a no-op, not an error.
+    await store.removeAccountExclusion('user-1', 'enablebanking', STABLE_ID_A)
+    assert.deepEqual((await store.listAccountExclusions('user-1', 'enablebanking')).map((e) => e.stableAccountId), [STABLE_ID_B])
+  } finally {
+    await cleanup()
+  }
+})
+
+test('account exclusions are user- and provider-isolated', async () => {
+  const { path, cleanup } = await fixture()
+  try {
+    const store = new EncryptedStore(path, secret)
+    await store.load()
+    await store.addAccountExclusion('user-1', 'enablebanking', STABLE_ID_A, 'A')
+    await store.addAccountExclusion('user-2', 'enablebanking', STABLE_ID_A, 'Different user, same stable id')
+    await store.addAccountExclusion('user-1', 'gocardless', STABLE_ID_A, 'Different provider, same user+stable id')
+    assert.equal((await store.listAccountExclusions('user-1', 'enablebanking')).length, 1)
+    assert.equal((await store.listAccountExclusions('user-2', 'enablebanking')).length, 1)
+    assert.equal((await store.listAccountExclusions('user-1', 'gocardless')).length, 1)
+    assert.equal((await store.listAccountExclusions('user-2', 'gocardless')).length, 0)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('rejects a malformed stable account id rather than silently persisting it', async () => {
+  const { path, cleanup } = await fixture()
+  try {
+    const store = new EncryptedStore(path, secret)
+    await store.load()
+    await assert.rejects(store.addAccountExclusion('user-1', 'enablebanking', 'not-a-real-stable-id', 'X'))
+  } finally {
+    await cleanup()
+  }
+})
+
+test('removeUser() clears every account exclusion for that user, not other users', async () => {
+  const { path, cleanup } = await fixture()
+  try {
+    const store = new EncryptedStore(path, secret)
+    await store.load()
+    await store.addAccountExclusion('user-1', 'enablebanking', STABLE_ID_A, 'A')
+    await store.addAccountExclusion('user-2', 'enablebanking', STABLE_ID_A, 'A')
+    const deleted = await store.removeUser('user-1')
+    assert.equal(deleted.accountExclusions, 1)
+    assert.equal((await store.listAccountExclusions('user-1', 'enablebanking')).length, 0)
+    assert.equal((await store.listAccountExclusions('user-2', 'enablebanking')).length, 1)
   } finally {
     await cleanup()
   }

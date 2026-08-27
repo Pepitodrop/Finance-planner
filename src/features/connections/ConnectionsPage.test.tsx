@@ -39,6 +39,7 @@ vi.mock('../../connectors', async (importOriginal) => {
     // on navigation) override this per-test.
     fetchStoredConnections: vi.fn(async () => []),
     excludeProviderAccount: vi.fn(async () => undefined),
+    restoreProviderAccount: vi.fn(async () => undefined),
   }
 })
 
@@ -60,7 +61,7 @@ vi.mock('../../manualCreditCard', async (importOriginal) => {
   }
 })
 
-import { disconnectConnector, fetchProviderInstitutions, fetchProviderStatus, fetchStoredConnections, startConnector, synchronizeConnections } from '../../connectors'
+import { disconnectConnector, fetchProviderInstitutions, fetchProviderStatus, fetchStoredConnections, restoreProviderAccount, startConnector, synchronizeConnections } from '../../connectors'
 
 const baseState: AppState = { accounts: [], transactions: [], goals: [] }
 
@@ -1477,5 +1478,92 @@ describe('persisted connections survive page remount (defect: connection disappe
     resolveStored([{ ...STORED_ENABLEBANKING, lastSyncAt: '2026-08-20T00:00:00.000Z' }])
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(screen.getByText('Bank connection')).toBeInTheDocument()
+  })
+})
+
+// Restore ("un-remove") UX (2026-08-27, PR #154, BLOCKER 1 fix): since
+// account exclusions are now durable and survive disconnect/reconnect (see
+// server/src/account-exclusion-store.js), "Remove account" must not be an
+// irreversible hidden tombstone -- the Connections page's "Manage
+// connection" screen lists excluded accounts with an individual Restore
+// action.
+describe('Restore (un-remove) a previously excluded provider account', () => {
+  const STABLE_ID = 'a'.repeat(64)
+  const CONNECTION_WITH_EXCLUSION: ConnectorConnection = {
+    id: 'enablebanking',
+    provider: 'enablebanking',
+    displayName: 'Bank connection',
+    status: 'connected',
+    excludedAccounts: [{ stableAccountId: STABLE_ID, accountName: 'Savings account', createdAt: '2026-08-26T00:00:00.000Z' }],
+  }
+
+  it('lists a removed account with its display name and a Restore action on the Manage connection screen', async () => {
+    ;(fetchStoredConnections as Mock).mockResolvedValueOnce([CONNECTION_WITH_EXCLUSION])
+    renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Bank connection').closest('button')!)
+    expect(screen.getByText('Removed accounts')).toBeInTheDocument()
+    expect(screen.getByText('Savings account')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Restore Savings account' })).toBeInTheDocument()
+  })
+
+  it('clicking Restore calls restoreProviderAccount and removes the row from the list on success', async () => {
+    ;(fetchStoredConnections as Mock).mockResolvedValueOnce([CONNECTION_WITH_EXCLUSION])
+    renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Bank connection').closest('button')!)
+    await user.click(screen.getByRole('button', { name: 'Restore Savings account' }))
+    expect(restoreProviderAccount).toHaveBeenCalledWith('enablebanking', STABLE_ID)
+    await waitFor(() => expect(screen.queryByText('Removed accounts')).not.toBeInTheDocument())
+  })
+
+  it('shows an actionable error and keeps the account listed when restore fails', async () => {
+    ;(fetchStoredConnections as Mock).mockResolvedValueOnce([CONNECTION_WITH_EXCLUSION])
+    ;(restoreProviderAccount as Mock).mockRejectedValueOnce(new Error('network error'))
+    renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Bank connection').closest('button')!)
+    await user.click(screen.getByRole('button', { name: 'Restore Savings account' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('network error')
+    expect(screen.getByText('Savings account')).toBeInTheDocument()
+  })
+
+  it('a connection with no excluded accounts shows no "Removed accounts" section', async () => {
+    ;(fetchStoredConnections as Mock).mockResolvedValueOnce([{ ...CONNECTION_WITH_EXCLUSION, excludedAccounts: [] }])
+    renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Bank connection').closest('button')!)
+    expect(screen.queryByText('Removed accounts')).not.toBeInTheDocument()
+  })
+
+  // Found by a second adversarial-review pass (2026-08-27, same day): a
+  // sync (manual refresh or the automatic post-provider-return sync)
+  // unconditionally replaces the whole `connections` array with
+  // synchronizeConnections()'s result. Unless that result ALSO carries
+  // excludedAccounts (not only the mount-only GET /api/connectors/connections
+  // overview), the "Removed accounts / Restore" section would silently
+  // vanish immediately after any sync, even though the exclusion itself
+  // stayed fully enforced server-side the whole time.
+  it('the Restore list survives a sync, not only a fresh mount', async () => {
+    ;(fetchStoredConnections as Mock).mockResolvedValueOnce([CONNECTION_WITH_EXCLUSION])
+    ;(synchronizeConnections as Mock).mockResolvedValueOnce([{ connection: CONNECTION_WITH_EXCLUSION, accounts: [], transactions: [] }])
+    renderConnections()
+    await waitFor(() => expect(screen.getByText('Bank connection')).toBeInTheDocument())
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /Refresh all/ }))
+    await waitFor(() => expect(synchronizeConnections).toHaveBeenCalled())
+
+    await user.click(screen.getByText('Bank connection').closest('button')!)
+    expect(screen.getByText('Removed accounts')).toBeInTheDocument()
+    expect(screen.getByText('Savings account')).toBeInTheDocument()
   })
 })

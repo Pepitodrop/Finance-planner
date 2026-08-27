@@ -178,4 +178,22 @@ describe('runtime validation', () => {
       goals: [],
     })).toBe(false)
   })
+
+  // stableTransactionId (2026-08-27, PR #154, Blocker 3 fix) -- see the
+  // matching server/src/user-state-store.js validateTransaction() tests.
+  it('accepts a transaction with a stableTransactionId', () => {
+    expect(isAppState({
+      accounts: [{ id: 'a', name: 'Test', type: 'checking', balanceCents: 0, currency: 'EUR' }],
+      transactions: [{ id: 't', accountId: 'a', description: 'REWE', category: 'x', type: 'expense', amountCents: 100, date: '2026-08-27', stableTransactionId: 'b'.repeat(64) }],
+      goals: [],
+    })).toBe(true)
+  })
+
+  it('rejects an empty (present-but-blank) stableTransactionId', () => {
+    expect(isAppState({
+      accounts: [{ id: 'a', name: 'Test', type: 'checking', balanceCents: 0, currency: 'EUR' }],
+      transactions: [{ id: 't', accountId: 'a', description: 'REWE', category: 'x', type: 'expense', amountCents: 100, date: '2026-08-27', stableTransactionId: '' }],
+      goals: [],
+    })).toBe(false)
+  })
 })

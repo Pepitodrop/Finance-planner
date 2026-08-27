@@ -156,33 +156,47 @@ function App({ userId, userName, user, onLockVault, onLogout }: AppProps) {
   }
 
   // Dashboard's "Remove account" -- see accountState.ts's doc comments for
-  // why this never touches the provider connection itself. Provider-linked
-  // accounts (any id in the connector:${provider}:${externalId} shape) get
-  // a best-effort server-side exclusion call so the same economic account
-  // isn't silently re-imported on the connection's next sync (see
-  // buildSyncPreview()'s reconnect reconciliation and applyAccountExclusions()
-  // in server/src/server.js) -- this never blocks or reverts the local
-  // removal if the network call fails, matching this codebase's existing
-  // "local action always wins, remote confirmation is best-effort" pattern
-  // (e.g. provider disconnect revocation). No stableId means the provider
-  // offered no trustworthy cross-session identity for this account, so
-  // there is nothing to exclude by -- the account is still removed locally.
+  // why this never touches the provider connection itself.
   //
-  // Only manual accounts (no provider) get the short-lived Undo toast: a
-  // provider account's removal already made a best-effort, fire-and-forget
-  // server call by the time Undo could be pressed, so restoring local state
-  // alone could not correctly guarantee it staying un-excluded too -- see
-  // restoreAccountToState()'s doc comment.
-  const removeAccount = (accountId: string) => {
-    setState((current) => {
-      const result = removeAccountFromState(current, accountId)
-      const provider = connectorProviderFromAccountId(accountId)
-      if (provider && result.deletedAccount.stableId) {
-        void excludeProviderAccount(provider, result.deletedAccount.stableId).catch(() => {})
-      }
-      if (!provider) setRemovedManualAccount({ account: result.deletedAccount, transactions: result.deletedTransactions })
-      return result.state
-    })
+  // Fixed 2026-08-27 (independent review, BLOCKER 2): removal of a
+  // provider-linked account is now a single COORDINATED, awaited operation,
+  // never fire-and-forget. The confirmation copy promises the account
+  // "will not be automatically re-imported" -- that promise must be true.
+  // Order: persist the durable server-side exclusion FIRST (see
+  // excludeProviderAccount() / migration 011's connector_account_exclusions
+  // table, independent of the live connector credential so it survives
+  // disconnect/reconnect); only once that succeeds does local AppState
+  // change. If the exclusion call fails, local state is untouched -- the
+  // account stays visible, and the caller (Dashboard's confirmation dialog)
+  // shows an actionable error with Retry, never a silent lie. A provider
+  // account with no stableId is refused here defensively (Dashboard's own
+  // pre-check is the primary gate -- see the fail-conservative UX there)
+  // rather than ever removing an account Finance Planner cannot durably
+  // suppress from re-import.
+  //
+  // Manual accounts (no provider) remain synchronous, local-only, and keep
+  // the short-lived Undo toast -- there is no server-side exclusion to
+  // coordinate with.
+  const removeAccount = async (account: Account): Promise<{ ok: true } | { ok: false; error: string }> => {
+    const provider = connectorProviderFromAccountId(account.id)
+    if (!provider) {
+      setState((current) => {
+        const result = removeAccountFromState(current, account.id)
+        setRemovedManualAccount({ account: result.deletedAccount, transactions: result.deletedTransactions })
+        return result.state
+      })
+      return { ok: true }
+    }
+    if (!account.stableId) {
+      return { ok: false, error: 'This connected account cannot currently be removed safely because the bank did not provide a stable account identifier. You can disconnect the bank connection instead.' }
+    }
+    try {
+      await excludeProviderAccount(provider, account.stableId, account.name)
+    } catch (reason) {
+      return { ok: false, error: reason instanceof Error ? reason.message : 'The account could not be removed. Please try again.' }
+    }
+    setState((current) => removeAccountFromState(current, account.id).state)
+    return { ok: true }
   }
 
   const undoRemoveAccount = () => {

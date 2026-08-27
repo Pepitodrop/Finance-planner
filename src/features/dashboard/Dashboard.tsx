@@ -41,7 +41,11 @@ interface DashboardProps {
   onAddTransaction: () => void
   onEditTransaction: (transaction: Transaction) => void
   onNavigate: (destination: DestinationId) => void
-  onRemoveAccount: (accountId: string) => void
+  // Coordinated removal (fixed 2026-08-27, independent review, BLOCKER 2):
+  // returns whether it actually succeeded, so this dialog can show a real
+  // error and let the account stay visible on failure, rather than
+  // optimistically closing and hoping a fire-and-forget call worked.
+  onRemoveAccount: (account: Account) => Promise<{ ok: true } | { ok: false; error: string }>
   referenceDate?: Date
 }
 
@@ -97,8 +101,27 @@ export function Dashboard({ state, userName, onAddTransaction, onEditTransaction
   const categoryTotalCents = model.categories.reduce((sum, category) => sum + category.amountCents, 0)
   const projectedEndCents = Math.round((model.projection.at(-1)?.balance ?? model.totalBalanceCents / 100) * 100)
   const [removeTarget, setRemoveTarget] = useState<Account | null>(null)
+  const [removeBusy, setRemoveBusy] = useState(false)
+  const [removeError, setRemoveError] = useState('')
   const removeTargetTransactionCount = removeTarget ? state.transactions.filter((transaction) => transaction.accountId === removeTarget.id).length : 0
   const removeTargetProvider = removeTarget ? connectorProviderFromAccountId(removeTarget.id) : undefined
+  // Fail-conservative (independent review, BLOCKER 2): a provider account
+  // with no stableId has no trustworthy key Finance Planner can ever
+  // exclude it by, so a "Remove account" that claims to guarantee
+  // permanent removal would be a promise this app cannot keep. Detected
+  // here, before any destructive action is even offered, not after a
+  // failed attempt.
+  const removeTargetCannotBeRemovedSafely = Boolean(removeTargetProvider) && !removeTarget?.stableId
+  const closeRemoveDialog = () => { setRemoveTarget(null); setRemoveBusy(false); setRemoveError('') }
+  const confirmRemove = async () => {
+    if (!removeTarget) return
+    setRemoveBusy(true)
+    setRemoveError('')
+    const result = await onRemoveAccount(removeTarget)
+    setRemoveBusy(false)
+    if (result.ok) setRemoveTarget(null)
+    else setRemoveError(result.error)
+  }
 
   return <div className="dashboard-page" data-dashboard-ready="true" lang="en">
     <header className="dashboard-toolbar">
@@ -225,20 +248,52 @@ export function Dashboard({ state, userName, onAddTransaction, onEditTransaction
       </article>
     </section>
 
-    <ConfirmationDialog
-      open={removeTarget !== null}
-      severity="danger"
-      heading={`Remove "${removeTarget?.name ?? ''}"?`}
-      headingId="dashboard-remove-account-title"
-      confirmLabel="Remove account"
-      onConfirm={() => { if (removeTarget) onRemoveAccount(removeTarget.id); setRemoveTarget(null) }}
-      onClose={() => setRemoveTarget(null)}
-    >
-      <p>This removes the account and its imported/recorded transactions from Finance Planner.</p>
-      <p>{removeTargetTransactionCount === 0
-        ? 'This account has no recorded transactions.'
-        : `This account has ${removeTargetTransactionCount} transaction${removeTargetTransactionCount === 1 ? '' : 's'}. Removing the account will also remove ${removeTargetTransactionCount === 1 ? 'that transaction' : `those ${removeTargetTransactionCount} transactions`}.`}</p>
-      {removeTargetProvider && <p>If this account belongs to a connected bank, the bank connection itself will remain active unless you choose to disconnect it separately. This account will not be automatically re-imported on future syncs of that connection.</p>}
-    </ConfirmationDialog>
+    {removeTargetCannotBeRemovedSafely ? (
+      // Fail-conservative: no destructive action is offered at all when
+      // Finance Planner cannot guarantee the account stays removed (no
+      // stableId to durably exclude by) -- see the doc comment on
+      // removeTargetCannotBeRemovedSafely above.
+      <ConfirmationDialog
+        open={removeTarget !== null}
+        severity="warning"
+        heading={`"${removeTarget?.name ?? ''}" can't be safely removed yet`}
+        headingId="dashboard-remove-account-title"
+        confirmLabel="OK"
+        onConfirm={closeRemoveDialog}
+        onClose={closeRemoveDialog}
+        footer={<button type="button" className="data-tools-link" onClick={() => { closeRemoveDialog(); onNavigate('connections') }}>Go to Connections to disconnect the bank instead</button>}
+      >
+        <p>This connected account cannot currently be removed safely because the bank did not provide a stable account identifier. Finance Planner cannot guarantee it would stay removed after your next sync.</p>
+        <p>You can disconnect the bank connection instead, from Connections.</p>
+      </ConfirmationDialog>
+    ) : (
+      <ConfirmationDialog
+        open={removeTarget !== null}
+        severity="danger"
+        heading={`Remove "${removeTarget?.name ?? ''}"?`}
+        headingId="dashboard-remove-account-title"
+        confirmLabel={removeBusy ? 'Removing account…' : 'Remove account'}
+        busy={removeBusy}
+        onConfirm={() => { void confirmRemove() }}
+        // Found by adversarial review (2026-08-27): ConfirmationDialog's
+        // Escape handler and backdrop click both call onClose
+        // unconditionally, regardless of `busy` -- only the Cancel/Confirm
+        // buttons themselves check it. Without this guard, dismissing the
+        // dialog while confirmRemove() is still in flight would close it
+        // immediately; if that in-flight call later fails, the resulting
+        // setRemoveError() would fire into an already-closed dialog and the
+        // actionable error would be silently lost (no data-integrity impact
+        // -- a success still applies correctly either way -- but a failure
+        // becomes invisible).
+        onClose={() => { if (!removeBusy) closeRemoveDialog() }}
+      >
+        <p>This removes the account and its imported/recorded transactions from Finance Planner.</p>
+        <p>{removeTargetTransactionCount === 0
+          ? 'This account has no recorded transactions.'
+          : `This account has ${removeTargetTransactionCount} transaction${removeTargetTransactionCount === 1 ? '' : 's'}. Removing the account will also remove ${removeTargetTransactionCount === 1 ? 'that transaction' : `those ${removeTargetTransactionCount} transactions`}.`}</p>
+        {removeTargetProvider && <p>If this account belongs to a connected bank, the bank connection itself will remain active unless you choose to disconnect it separately. This account will not be automatically re-imported on future syncs of that connection.</p>}
+        {removeError && <p className="status-message error-message" role="alert">{removeError} You can try again or cancel.</p>}
+      </ConfirmationDialog>
+    )}
   </div>
 }

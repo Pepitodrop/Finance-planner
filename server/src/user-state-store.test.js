@@ -332,3 +332,38 @@ test('rejects an oversized stableId', () => {
     /accounts\[1\]\.stableId/,
   )
 })
+
+// stableTransactionId (2026-08-27, PR #154, Blocker 3 -- reconnect
+// transaction-dedup fix): a server-derived identity for the same real
+// transaction across a reconnect, keyed under the account's own stable
+// identity plus a bank-assigned reference (see stableTransactionId() in
+// providers.js). Bounded the same way externalId already is.
+test('cloud payload accepts a transaction with a stableTransactionId and round-trips it exactly', () => {
+  const transaction = { id: 'connector:enablebanking:acct-1:tx-1', accountId: 'account-1', description: 'REWE', category: 'Lebensmittel', type: 'expense', amountCents: 2000, date: '2026-08-27', stableTransactionId: 'b'.repeat(64) }
+  const normalized = validateCloudPayload({ ...payload, state: { ...payload.state, transactions: [...payload.state.transactions, transaction] } })
+  const imported = normalized.state.transactions.find((entry) => entry.id === transaction.id)
+  assert.deepEqual(imported, transaction)
+  const roundTripped = decryptCloudPayload(encryptCloudPayload(normalized, secret, userId), secret, userId)
+  assert.deepEqual(roundTripped.state.transactions.find((entry) => entry.id === transaction.id), transaction)
+})
+
+test('a transaction with no stableTransactionId still validates -- it is optional', () => {
+  const normalized = validateCloudPayload(payload)
+  assert.ok(!('stableTransactionId' in normalized.state.transactions[0]))
+})
+
+test('rejects an empty (present-but-blank) stableTransactionId', () => {
+  const transaction = { id: 't2', accountId: 'account-1', description: 'REWE', category: 'Lebensmittel', type: 'expense', amountCents: 2000, date: '2026-08-27', stableTransactionId: '' }
+  assert.throws(
+    () => validateCloudPayload({ ...payload, state: { ...payload.state, transactions: [...payload.state.transactions, transaction] } }),
+    /transactions\[1\]\.stableTransactionId/,
+  )
+})
+
+test('rejects an oversized stableTransactionId', () => {
+  const transaction = { id: 't2', accountId: 'account-1', description: 'REWE', category: 'Lebensmittel', type: 'expense', amountCents: 2000, date: '2026-08-27', stableTransactionId: 'a'.repeat(257) }
+  assert.throws(
+    () => validateCloudPayload({ ...payload, state: { ...payload.state, transactions: [...payload.state.transactions, transaction] } }),
+    /transactions\[1\]\.stableTransactionId/,
+  )
+})

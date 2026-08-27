@@ -31,7 +31,11 @@ export interface ConnectorStartContext {
   accountType?: ConnectorAccountType
 }
 
-export interface ConnectorConnection { id: string; provider: ConnectorProvider; displayName: string; status: ConnectorStatus; lastSyncAt?: string; consentExpiresAt?: string; institutionId?: string; error?: string }
+// A previously-excluded stable account, surfaced so "Remove account" is
+// never an irreversible hidden tombstone -- see restoreProviderAccount()
+// and the Connections page's "Removed from Finance Planner [Restore]" row.
+export interface ExcludedAccountSummary { stableAccountId: string; accountName?: string; createdAt: string }
+export interface ConnectorConnection { id: string; provider: ConnectorProvider; displayName: string; status: ConnectorStatus; lastSyncAt?: string; consentExpiresAt?: string; institutionId?: string; error?: string; excludedAccounts?: ExcludedAccountSummary[] }
 // `group` is Enable Banking-specific (ASPSPGroup: cooperative banking
 // networks like "Volksbanken Raiffeisenbanken" or "Sparkassen-Finanzgruppe"
 // share one group.name across many concrete ASPSPs) -- sanitized the same
@@ -61,7 +65,21 @@ export interface ExternalAccount {
   statementDate?: string
   paymentDueDate?: string
 }
-export interface ExternalTransaction { externalId: string; externalAccountId: string; description: string; category?: string; amountCents: number; currency: 'EUR'; bookingDate: string; pending?: boolean }
+export interface ExternalTransaction {
+  externalId: string
+  externalAccountId: string
+  // Server-derived identity for the same real transaction across a
+  // reconnect -- see the matching doc comment on Transaction.stableTransactionId
+  // and stableTransactionId() in server/src/providers.js. Undefined when no
+  // provider-documented bank-assigned reference was available.
+  stableTransactionId?: string
+  description: string
+  category?: string
+  amountCents: number
+  currency: 'EUR'
+  bookingDate: string
+  pending?: boolean
+}
 export interface SyncPayload { connection: ConnectorConnection; accounts: ExternalAccount[]; transactions: ExternalTransaction[] }
 export interface SyncPreview {
   accountsToCreate: Account[]
@@ -164,6 +182,12 @@ export function buildSyncPreview(state: AppState, payload: SyncPayload): SyncPre
   // it -- it falls through to creating its own new account instead, never
   // a merge.
   const claimedAccountIds = new Set<string>()
+  // Which existing Finance Planner account ids were matched via stableId
+  // THIS sync (a genuine reconnect, not a routine same-session re-sync).
+  // Read by the transaction loop below: only for these accounts does the
+  // fuzzy date/amount/description fingerprint fallback get skipped (see
+  // its doc comment there for why).
+  const reconnectedAccountIds = new Set<string>()
   for (const external of payload.accounts) {
     const deterministicId = `connector:${payload.connection.provider}:${external.externalId}`
     const existingById = state.accounts.find((account) => account.id === deterministicId)
@@ -188,6 +212,7 @@ export function buildSyncPreview(state: AppState, payload: SyncPayload): SyncPre
     if (reconnected) {
       accountMap.set(external.externalId, reconnected.id)
       claimedAccountIds.add(reconnected.id)
+      reconnectedAccountIds.add(reconnected.id)
       accountsToUpdate.push({
         ...reconnected,
         externalId: external.externalId,
@@ -214,7 +239,29 @@ export function buildSyncPreview(state: AppState, payload: SyncPayload): SyncPre
       creditCard: normalized.creditCard,
     })
   }
-  const known = new Set(state.transactions.map(transactionFingerprint)); const transactionsToImport: Transaction[] = []; let duplicateCount = 0; let pendingCount = 0; let smartCategorized = 0
+  // Found live 2026-08-27 (PR #154, reconnect-dedup follow-up, independent
+  // review): the pre-existing fuzzy fingerprint (accountId + date +
+  // amountCents + normalized description) was being relied on as the DE
+  // FACTO reconnect-dedup key once a reconnected account's transactions
+  // shared its (reused) account id with history -- but that fingerprint can
+  // collapse two GENUINELY DIFFERENT same-day/same-amount/same-description
+  // transactions (e.g. two identical REWE purchases), which is exactly the
+  // "do not collapse two legitimate transactions" requirement this whole
+  // fix must not violate.
+  //
+  // knownStableIds is checked FIRST and is authoritative when present
+  // (exact match only, never fuzzy) -- see stableTransactionId() in
+  // providers.js. The fuzzy fingerprint fallback is now used ONLY for
+  // accounts that were NOT reconnected this sync (the routine, same-session
+  // case, where account/transaction identity hasn't changed and this
+  // fallback has worked adequately -- pre-existing behavior, unchanged). A
+  // reconnected account's transaction with no stableTransactionId is
+  // imported rather than risking a silent false-duplicate -- conservative
+  // by design, per the explicit requirement to prefer import over silently
+  // losing a real transaction.
+  const knownFingerprints = new Set(state.transactions.map(transactionFingerprint))
+  const knownStableTransactionIds = new Set(state.transactions.filter((transaction) => transaction.stableTransactionId).map((transaction) => transaction.stableTransactionId))
+  const transactionsToImport: Transaction[] = []; let duplicateCount = 0; let pendingCount = 0; let smartCategorized = 0
   for (const external of payload.transactions) {
     if (external.currency !== 'EUR') continue
     if (external.pending) { pendingCount += 1; continue }
@@ -222,10 +269,16 @@ export function buildSyncPreview(state: AppState, payload: SyncPayload): SyncPre
     const description = normalizeDescription(external.description)
     const learned = external.category?.trim() ? null : suggestCategoryFromHistory(description, state.transactions)
     const category = external.category?.trim() || learned?.category || 'Unkategorisiert'
-    const transaction: Transaction = { id: `connector:${payload.connection.provider}:${external.externalId}`, accountId, description, category, type: external.amountCents >= 0 ? 'income' : 'expense', amountCents: Math.abs(external.amountCents), date: external.bookingDate, recurring: false }
-    const fingerprint = transactionFingerprint(transaction)
-    if (known.has(fingerprint) || state.transactions.some((item) => item.id === transaction.id)) { duplicateCount += 1; continue }
-    known.add(fingerprint)
+    const transaction: Transaction = { id: `connector:${payload.connection.provider}:${external.externalId}`, accountId, description, category, type: external.amountCents >= 0 ? 'income' : 'expense', amountCents: Math.abs(external.amountCents), date: external.bookingDate, recurring: false, stableTransactionId: external.stableTransactionId }
+    if (state.transactions.some((item) => item.id === transaction.id)) { duplicateCount += 1; continue }
+    if (external.stableTransactionId) {
+      if (knownStableTransactionIds.has(external.stableTransactionId)) { duplicateCount += 1; continue }
+      knownStableTransactionIds.add(external.stableTransactionId)
+    } else if (!reconnectedAccountIds.has(accountId)) {
+      const fingerprint = transactionFingerprint(transaction)
+      if (knownFingerprints.has(fingerprint)) { duplicateCount += 1; continue }
+      knownFingerprints.add(fingerprint)
+    }
     transactionsToImport.push(transaction)
     if (learned) smartCategorized += 1
   }
@@ -383,17 +436,30 @@ export async function synchronizeConnections(): Promise<SyncPayload[]> { if (act
 export type DisconnectResult = { disconnected: boolean; providerRevoked: boolean; providerRevokeReason: 'confirmed' | 'not_applicable' | 'not_supported' | 'provider_error' }
 export async function disconnectConnector(provider: ConnectorProvider): Promise<DisconnectResult> { return requestJson<DisconnectResult>(`/api/connectors/${provider}`, { method: 'DELETE' }, { idempotent: true }) }
 // Records that this stable account should no longer be re-imported on
-// future syncs of this connection -- see Account.stableId and the
-// server-side applyAccountExclusions() this feeds. Best-effort from the
-// caller's point of view (Dashboard's "Remove account" already removes the
-// account locally regardless of whether this call succeeds): the exclusion
-// stops a FUTURE resurrection, it is not what makes the current removal
-// take effect.
-export async function excludeProviderAccount(provider: ConnectorProvider, stableAccountId: string): Promise<void> {
+// future syncs of this connection -- persisted durably, independent of the
+// live connector credential (see server/src/account-exclusions.js and
+// migration 011), so it survives disconnect/reconnect of the same bank.
+//
+// Fixed 2026-08-27 (independent review, BLOCKER 2): this is now a required,
+// awaited step of removal, never fire-and-forget -- the caller (App.tsx's
+// removeAccount()) MUST await this and only remove the account from local
+// AppState after it resolves. A failure here must propagate (this function
+// deliberately does NOT swallow it) so the caller can keep the account
+// visible and show an actionable error instead of silently promising a
+// removal that a later sync could undo.
+export async function excludeProviderAccount(provider: ConnectorProvider, stableAccountId: string, accountName?: string): Promise<void> {
   await requestJson<{ excluded?: boolean }>(`/api/connectors/${provider}/exclusions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ stableAccountId }),
+    body: JSON.stringify({ stableAccountId, accountName }),
   }, { idempotent: true })
+}
+// Restore ("un-remove") a previously-excluded provider account -- see
+// ExcludedAccountSummary. Only deletes the durable exclusion record; it
+// never resurrects old local transactions by guessing -- a subsequent
+// normal synchronization is what actually brings the account back through
+// the reviewed import path.
+export async function restoreProviderAccount(provider: ConnectorProvider, stableAccountId: string): Promise<void> {
+  await requestJson<{ restored?: boolean }>(`/api/connectors/${provider}/exclusions/${encodeURIComponent(stableAccountId)}`, { method: 'DELETE' }, { idempotent: true })
 }
 export function consentDaysRemaining(connection: ConnectorConnection, now = Date.now()): number | null { if (!connection.consentExpiresAt) return null; const expiresAt = Date.parse(connection.consentExpiresAt); if (!Number.isFinite(expiresAt)) return null; return Math.ceil((expiresAt - now) / 86_400_000) }

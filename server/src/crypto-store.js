@@ -42,7 +42,7 @@ export class EncryptedStore {
     this.path = path
     this.backupPath = `${path}.bak`
     this.key = keyFromSecret(secret)
-    this.data = { connections: {}, oauthNonces: {}, webhookEvents: {} }
+    this.data = { connections: {}, oauthNonces: {}, webhookEvents: {}, accountExclusions: {} }
     this.writeQueue = Promise.resolve()
   }
 
@@ -50,6 +50,7 @@ export class EncryptedStore {
     this.data.connections ??= {}
     this.data.oauthNonces ??= {}
     this.data.webhookEvents ??= {}
+    this.data.accountExclusions ??= {}
   }
 
   decode(contents) {
@@ -162,10 +163,42 @@ export class EncryptedStore {
     })
   }
 
+  // Durable account-exclusion methods (2026-08-27, PR #154): deliberately
+  // NOT part of `connections[userId][provider]` -- disconnecting a provider
+  // calls remove() above, which must never touch these. Mirrors the
+  // Postgres-backed connector_account_exclusions table's contract exactly
+  // (see addAccountExclusionMethods() in database.js): idempotent add,
+  // idempotent remove, list. The write-queue in mutate() already serializes
+  // every call against this store instance, so two near-simultaneous
+  // exclusion writes can't race each other the way a bare read-modify-write
+  // on a single JSON field could.
+  async addAccountExclusion(userId, provider, stableAccountId, accountName) {
+    if (!/^[a-f0-9]{64}$/.test(stableAccountId)) throw new Error('Invalid stable account id.')
+    const name = typeof accountName === 'string' && accountName.trim() ? accountName.trim().slice(0, 160) : undefined
+    return this.mutate(() => {
+      this.data.accountExclusions[userId] ??= {}
+      this.data.accountExclusions[userId][provider] ??= {}
+      this.data.accountExclusions[userId][provider][stableAccountId] = { accountName: name, createdAt: new Date().toISOString() }
+    })
+  }
+
+  async removeAccountExclusion(userId, provider, stableAccountId) {
+    return this.mutate(() => {
+      delete this.data.accountExclusions?.[userId]?.[provider]?.[stableAccountId]
+    })
+  }
+
+  async listAccountExclusions(userId, provider) {
+    const entries = this.data.accountExclusions?.[userId]?.[provider] || {}
+    return Object.entries(entries).map(([stableAccountId, value]) => ({ stableAccountId, accountName: value?.accountName, createdAt: value?.createdAt }))
+  }
+
   async removeUser(userId) {
     return this.mutate(() => {
       const connectorConnections = Object.keys(this.data.connections?.[userId] || {}).length
       delete this.data.connections[userId]
+      const accountExclusions = Object.values(this.data.accountExclusions?.[userId] || {}).reduce((sum, byProvider) => sum + Object.keys(byProvider).length, 0)
+      delete this.data.accountExclusions[userId]
       let oauthNonces = 0
       for (const [key, nonce] of Object.entries(this.data.oauthNonces)) {
         if (nonce?.userId === userId) {
@@ -173,7 +206,7 @@ export class EncryptedStore {
           oauthNonces += 1
         }
       }
-      return { connectorConnections, oauthNonces }
+      return { connectorConnections, accountExclusions, oauthNonces }
     })
   }
 

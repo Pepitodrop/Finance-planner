@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { addExcludedStableAccountId, applyAccountExclusions, isValidStableAccountId } from './account-exclusions.js'
+import { applyAccountExclusions, isValidStableAccountId } from './account-exclusions.js'
 
 const HASH_A = 'a'.repeat(64)
 const HASH_B = 'b'.repeat(64)
@@ -15,31 +15,10 @@ test('isValidStableAccountId only accepts exactly 64 lowercase hex characters', 
   assert.equal(isValidStableAccountId({ stableAccountId: HASH_A }), false)
 })
 
-test('addExcludedStableAccountId appends, dedups, and bounds the list without mutating the input', () => {
-  const original = [HASH_A]
-  const appended = addExcludedStableAccountId(original, HASH_B)
-  assert.deepEqual(appended, [HASH_A, HASH_B])
-  assert.deepEqual(original, [HASH_A], 'must not mutate the input array')
-
-  const deduped = addExcludedStableAccountId(appended, HASH_A)
-  assert.deepEqual(deduped, [HASH_A, HASH_B], 'already-present id is not duplicated')
-
-  const many = Array.from({ length: 200 }, (_, i) => i.toString(16).padStart(64, '0'))
-  const bounded = addExcludedStableAccountId(many, HASH_A)
-  assert.equal(bounded.length, 200, 'bounded at MAX_EXCLUDED_STABLE_ACCOUNT_IDS')
-  assert.ok(bounded.includes(HASH_A))
-  assert.ok(!bounded.includes(many[0]), 'oldest entry drops off once bounded')
-})
-
-test('addExcludedStableAccountId treats a missing/non-array existing list as empty', () => {
-  assert.deepEqual(addExcludedStableAccountId(undefined, HASH_A), [HASH_A])
-  assert.deepEqual(addExcludedStableAccountId(null, HASH_A), [HASH_A])
-})
-
 test('applyAccountExclusions is a no-op when nothing is excluded', () => {
   const accounts = [{ externalId: 'e1', stableId: HASH_A }]
   const transactions = [{ externalAccountId: 'e1' }]
-  const result = applyAccountExclusions({ excludedStableAccountIds: [] }, accounts, transactions)
+  const result = applyAccountExclusions([], accounts, transactions)
   assert.equal(result.accounts, accounts)
   assert.equal(result.transactions, transactions)
 })
@@ -53,7 +32,7 @@ test('applyAccountExclusions filters an excluded account and only its own transa
     { externalAccountId: 'excluded-session-id', description: 'should be filtered' },
     { externalAccountId: 'kept-session-id', description: 'should remain' },
   ]
-  const result = applyAccountExclusions({ excludedStableAccountIds: [HASH_A] }, accounts, transactions)
+  const result = applyAccountExclusions([HASH_A], accounts, transactions)
   assert.deepEqual(result.accounts.map((a) => a.name), ['Kept'])
   assert.deepEqual(result.transactions.map((t) => t.description), ['should remain'])
 })
@@ -66,7 +45,7 @@ test('applyAccountExclusions filters an excluded account and only its own transa
 test('applyAccountExclusions matches by stableId, not externalId, so a reconnect under a new session id is still excluded', () => {
   const accounts = [{ externalId: 'new-session-id-after-reconnect', stableId: HASH_A, name: 'Should stay excluded' }]
   const transactions = [{ externalAccountId: 'new-session-id-after-reconnect' }]
-  const result = applyAccountExclusions({ excludedStableAccountIds: [HASH_A] }, accounts, transactions)
+  const result = applyAccountExclusions([HASH_A], accounts, transactions)
   assert.deepEqual(result.accounts, [])
   assert.deepEqual(result.transactions, [])
 })
@@ -74,15 +53,15 @@ test('applyAccountExclusions matches by stableId, not externalId, so a reconnect
 test('applyAccountExclusions never excludes an account with no stableId, even if a stored exclusion happens to be present -- nothing to key it by', () => {
   const accounts = [{ externalId: 'no-stable-id', name: 'No stable identity available' }]
   const transactions = [{ externalAccountId: 'no-stable-id' }]
-  const result = applyAccountExclusions({ excludedStableAccountIds: [HASH_A] }, accounts, transactions)
+  const result = applyAccountExclusions([HASH_A], accounts, transactions)
   assert.deepEqual(result.accounts, accounts)
   assert.deepEqual(result.transactions, transactions)
 })
 
-test('applyAccountExclusions handles a missing/malformed excludedStableAccountIds field as "nothing excluded"', () => {
+test('applyAccountExclusions handles a missing/malformed exclusion list as "nothing excluded"', () => {
   const accounts = [{ externalId: 'e1', stableId: HASH_A }]
-  assert.deepEqual(applyAccountExclusions({}, accounts, []).accounts, accounts)
-  assert.deepEqual(applyAccountExclusions({ excludedStableAccountIds: 'not-an-array' }, accounts, []).accounts, accounts)
+  assert.deepEqual(applyAccountExclusions(undefined, accounts, []).accounts, accounts)
+  assert.deepEqual(applyAccountExclusions('not-an-array', accounts, []).accounts, accounts)
   assert.deepEqual(applyAccountExclusions(null, accounts, []).accounts, accounts)
 })
 
@@ -92,6 +71,6 @@ test('applyAccountExclusions excludes multiple accounts independently', () => {
     { externalId: 'e2', stableId: HASH_B },
     { externalId: 'e3' },
   ]
-  const result = applyAccountExclusions({ excludedStableAccountIds: [HASH_A, HASH_B] }, accounts, [])
+  const result = applyAccountExclusions([HASH_A, HASH_B], accounts, [])
   assert.deepEqual(result.accounts.map((a) => a.externalId), ['e3'])
 })

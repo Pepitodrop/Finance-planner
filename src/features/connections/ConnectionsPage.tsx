@@ -34,6 +34,7 @@ import {
   fetchProviderStatus,
   fetchStoredConnections,
   providerInstitutionLogoUrl,
+  restoreProviderAccount,
   selectSyncPreviewAccounts,
   startConnector,
   synchronizeConnections,
@@ -42,6 +43,7 @@ import {
   type ConnectorProvider,
   type ConnectorStartContext,
   type ConnectorStartResult,
+  type ExcludedAccountSummary,
   type ProviderDescriptor,
   type ProviderInstitution,
   type SyncPreview,
@@ -221,6 +223,15 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   const [attentionProvider, setAttentionProvider] = useState<ConnectorProvider | null>(null)
   const [attentionError, setAttentionError] = useState('')
   const [disconnectConfirming, setDisconnectConfirming] = useState(false)
+  // Restore ("un-remove") a previously-excluded account (2026-08-27, PR
+  // #154): tracks which single stableAccountId is mid-request (so only
+  // that row's button shows a busy state and duplicate clicks on the SAME
+  // row are prevented) and a per-attempt error message. restoreProviderAccount()
+  // only deletes the durable exclusion record -- it never guesses old local
+  // transactions back into existence; a subsequent normal sync is what
+  // actually re-imports the account through the reviewed path.
+  const [restoringAccountId, setRestoringAccountId] = useState<string | null>(null)
+  const [restoreError, setRestoreError] = useState('')
 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -609,6 +620,21 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
 
   const refreshAll = () => void synchronize(false)
 
+  const restoreAccount = async (provider: ConnectorProvider, stableAccountId: string) => {
+    setRestoringAccountId(stableAccountId)
+    setRestoreError('')
+    try {
+      await restoreProviderAccount(provider, stableAccountId)
+      setConnections((current) => current.map((connection) => connection.provider !== provider
+        ? connection
+        : { ...connection, excludedAccounts: (connection.excludedAccounts ?? []).filter((excluded) => excluded.stableAccountId !== stableAccountId) }))
+    } catch (reason) {
+      setRestoreError(reason instanceof Error ? reason.message : 'The account could not be restored. Please try again.')
+    } finally {
+      setRestoringAccountId(null)
+    }
+  }
+
   const disconnect = async (provider: ConnectorProvider) => {
     setBusy(true)
     setAttentionError('')
@@ -885,8 +911,8 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
   const cancelStatement = () => { setStatementPreview(null); setScreen('overview') }
   const rollback = () => { if (!rollbackState) return; onApply(rollbackState); setRollbackState(null); setMessage('The last import was fully reversed.') }
 
-  const openAttention = (provider: ConnectorProvider) => { setAttentionProvider(provider); setDisconnectConfirming(false); setAttentionError(''); setScreen('attention') }
-  const closeAttention = () => { setAttentionProvider(null); setDisconnectConfirming(false); setAttentionError(''); setScreen('overview') }
+  const openAttention = (provider: ConnectorProvider) => { setAttentionProvider(provider); setDisconnectConfirming(false); setAttentionError(''); setRestoreError(''); setScreen('attention') }
+  const closeAttention = () => { setAttentionProvider(null); setDisconnectConfirming(false); setAttentionError(''); setRestoreError(''); setScreen('overview') }
 
   const setupDialogRef = useDialog<HTMLDivElement>({ open: setupOpen, onClose: closeSetup })
   const manualDialogRef = useDialog<HTMLDivElement>({ open: manualOpen, onClose: closeManualAccount })
@@ -930,6 +956,9 @@ export function ConnectionsPage({ state, onApply, acceptanceMode }: ConnectionsP
       onDisconnectRequest={() => setDisconnectConfirming(true)}
       onDisconnectCancel={() => setDisconnectConfirming(false)}
       onDisconnectConfirm={() => void disconnect(attentionConnection.provider)}
+      restoringAccountId={restoringAccountId}
+      restoreError={restoreError}
+      onRestoreAccount={(stableAccountId) => void restoreAccount(attentionConnection.provider, stableAccountId)}
     />}
 
     {screen === 'statement-preview' && statementPreview && <StatementPreviewScreen
@@ -1595,9 +1624,12 @@ interface AttentionScreenProps {
   onDisconnectRequest: () => void
   onDisconnectCancel: () => void
   onDisconnectConfirm: () => void
+  restoringAccountId: string | null
+  restoreError: string
+  onRestoreAccount: (stableAccountId: string) => void
 }
 
-function AttentionScreen({ connection, reason, busy, confirming, error, onBack, onReconnect, onDisconnectRequest, onDisconnectCancel, onDisconnectConfirm }: AttentionScreenProps) {
+function AttentionScreen({ connection, reason, busy, confirming, error, onBack, onReconnect, onDisconnectRequest, onDisconnectCancel, onDisconnectConfirm, restoringAccountId, restoreError, onRestoreAccount }: AttentionScreenProps) {
   const copy = reason ? ATTENTION_REASON_COPY[reason] : null
   return <div className="connections-attention-screen">
     <header className="connections-subpage-header"><button type="button" className="connections-back" onClick={onBack}><ArrowLeft size={18}/> Back</button><h2>Connections</h2></header>
@@ -1620,6 +1652,27 @@ function AttentionScreen({ connection, reason, busy, confirming, error, onBack, 
     </section>}
     <p className="connections-setup-subtitle">Your previously imported transactions will remain in Finance Planner unless you explicitly remove this account through a supported workflow.</p>
     {error && <p className="status-message error-message" role="alert">{error}</p>}
+
+    {connection.excludedAccounts && connection.excludedAccounts.length > 0 && <section className="connections-reason-section" aria-labelledby="connections-removed-accounts-title">
+      <p id="connections-removed-accounts-title" className="connections-section-label">Removed accounts</p>
+      {restoreError && <p className="status-message error-message" role="alert">{restoreError}</p>}
+      <div className="connections-account-select-list">
+        {connection.excludedAccounts.map((excluded: ExcludedAccountSummary) => <div className="connections-account-select-row connections-account-select-row--static" key={excluded.stableAccountId}>
+          <span className="connections-row-icon"><Landmark size={18}/></span>
+          <span><strong>{excluded.accountName || 'Removed account'}</strong><small>Removed from Finance Planner</small></span>
+          <button
+            type="button"
+            className="secondary"
+            disabled={restoringAccountId === excluded.stableAccountId}
+            onClick={() => onRestoreAccount(excluded.stableAccountId)}
+            aria-label={`Restore ${excluded.accountName || 'removed account'}`}
+          >
+            {restoringAccountId === excluded.stableAccountId ? 'Restoring…' : 'Restore'}
+          </button>
+        </div>)}
+      </div>
+      <p className="connections-scope-footnote">Restoring an account only stops excluding it from future syncs -- it does not guess back old transactions. It reappears the next time this connection syncs.</p>
+    </section>}
 
     {!confirming ? <div className="connections-modal-actions connections-modal-actions--page">
       <button type="button" className="primary" disabled={busy} onClick={onReconnect}><RefreshCw size={17}/> Reconnect</button>

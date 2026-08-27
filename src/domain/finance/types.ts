@@ -48,6 +48,18 @@ export interface Transaction {
   amountCents: number
   date: string
   recurring?: boolean
+  /**
+   * Server-derived identity for the same real economic transaction, keyed
+   * under the account's own stableId (never a session/requisition-scoped
+   * account id) plus a provider's bank-assigned transaction reference
+   * (Enable Banking's entry_reference, GoCardless's transactionId).
+   * Undefined when no such reference was available -- id (this record's
+   * own local identity, provider-session-scoped like Account.externalId)
+   * remains the field for ordinary same-session identity/display; this
+   * field exists specifically for reconnect/history reconciliation. See
+   * buildSyncPreview() in src/connectors.ts.
+   */
+  stableTransactionId?: string
 }
 
 export type SubscriptionSource = 'google' | 'bank' | 'paypal' | 'manual'

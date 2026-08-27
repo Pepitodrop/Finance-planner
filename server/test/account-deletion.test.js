@@ -33,13 +33,18 @@ test('revokes sessions before deleting all PostgreSQL user records transactional
   assert.equal(events[1].sql, 'BEGIN')
   assert.deepEqual(events.filter((entry) => entry.sql.startsWith('DELETE FROM')).map((entry) => entry.sql), [
     'DELETE FROM connector_connections WHERE user_id=$1',
+    // connector_account_exclusions (2026-08-27, PR #154): durable,
+    // independent of connector_connections -- see database.js's
+    // addAccountExclusionMethods() doc comment for why disconnect/reconnect
+    // must never lose it, but a full account deletion must still remove it.
+    'DELETE FROM connector_account_exclusions WHERE user_id=$1',
     'DELETE FROM oauth_nonces WHERE user_id=$1',
     'DELETE FROM user_finance_state WHERE user_id=$1',
     'DELETE FROM user_budget_learning_profiles WHERE user_id=$1',
   ])
   assert.equal(events.at(-2).sql, 'COMMIT')
   assert.equal(events.at(-1).sql, 'RELEASE')
-  assert.deepEqual(result.deleted, { connectorConnections: 1, oauthNonces: 1, financeState: 1, learningProfiles: 1 })
+  assert.deepEqual(result.deleted, { connectorConnections: 1, accountExclusions: 1, oauthNonces: 1, financeState: 1, learningProfiles: 1 })
 })
 
 test('rolls back a failed PostgreSQL deletion after sessions are revoked', async () => {
@@ -70,14 +75,14 @@ test('removes every file-backed connector and OAuth nonce without a provider whi
     store: {
       removeUser: async (userId) => {
         calls.push(userId)
-        return { connectorConnections: 4, oauthNonces: 2 }
+        return { connectorConnections: 4, accountExclusions: 3, oauthNonces: 2 }
       },
     },
     sessionRevocations: { revoke: async () => '2026-08-01T12:00:00.000Z' },
   })
   assert.deepEqual(calls, ['local-user'])
   assert.equal(result.persistence, 'file')
-  assert.deepEqual(result.deleted, { connectorConnections: 4, oauthNonces: 2, financeState: 0, learningProfiles: 0 })
+  assert.deepEqual(result.deleted, { connectorConnections: 4, accountExclusions: 3, oauthNonces: 2, financeState: 0, learningProfiles: 0 })
 })
 
 test('fails closed when a file-backed store cannot delete all provider data', async () => {

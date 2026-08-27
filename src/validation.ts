@@ -123,6 +123,7 @@ function isTransaction(value: unknown): value is Transaction {
     && typeof value.date === 'string'
     && !Number.isNaN(Date.parse(value.date))
     && (value.recurring === undefined || typeof value.recurring === 'boolean')
+    && isOptionalBoundedString(value.stableTransactionId, MAX_EXTERNAL_ID_LENGTH)
 }
 
 function isSavingsGoal(value: unknown): value is SavingsGoal {

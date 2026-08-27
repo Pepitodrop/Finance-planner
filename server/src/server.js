@@ -2,7 +2,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
 import { URL } from 'node:url'
 import { deleteAccountData } from './account-deletion.js'
-import { addExcludedStableAccountId, applyAccountExclusions, isValidStableAccountId } from './account-exclusions.js'
+import { applyAccountExclusions, isValidStableAccountId } from './account-exclusions.js'
 import { createAiRouter } from './ai-router.js'
 import { createAuthRouter } from './auth-router.js'
 import { behaviorEventsFromFinanceState } from './budget-learning.js'
@@ -222,7 +222,16 @@ async function listStoredConnections(user) {
   const results = []
   for (const { id: provider } of providerRegistry.list()) {
     const stored = await store.get(user, provider)
-    if (stored) results.push(connection(provider, stored))
+    if (!stored) continue
+    // excludedAccounts (added 2026-08-27, PR #154): lets the Connections
+    // page render a "Removed from Finance Planner [Restore]" row per
+    // excluded account -- without this, an exclusion is an invisible,
+    // effectively irreversible tombstone once the account itself has been
+    // deleted from local AppState (Finance Planner has no other record of
+    // it). Bounded, secret-free (stableAccountId + an optional display name
+    // captured at removal time, never a raw IBAN/account number).
+    const excludedAccounts = await store.listAccountExclusions(user, provider)
+    results.push({ ...connection(provider, stored), excludedAccounts })
   }
   return results
 }
@@ -281,18 +290,35 @@ async function buildSyncPayload(user) {
   for (const { id: provider } of providerRegistry.list()) {
     const stored = await store.get(user, provider)
     if (!stored) continue
+    // Exclusions now live in a durable store independent of this credential
+    // row (see database.js's addAccountExclusionMethods() / migration 011)
+    // -- fixed 2026-08-27 after independent review found the previous
+    // excludedStableAccountIds-inside-the-credential design lost every
+    // exclusion on disconnect/reconnect. Fetched once per provider, outside
+    // the try block, and attached to EVERY connection object this function
+    // returns (success or failure) -- found by a second review pass the
+    // same day: ConnectionsPage.tsx's synchronize() unconditionally
+    // replaces its whole `connections` array with this function's sync
+    // response, so if `excludedAccounts` were only ever attached by
+    // listStoredConnections() (the mount-only overview fetch), the
+    // Connections page's "Removed accounts / Restore" section would
+    // silently vanish after every single sync -- exactly the moment a user
+    // is most likely to check it -- even though the exclusion itself
+    // remained fully enforced server-side the whole time.
+    const excludedAccounts = await store.listAccountExclusions(user, provider)
     try {
       const adapter = providerAdapter(provider)
       authorizeProviderUser(adapter, user, env)
       const synced = await adapter.sync(stored)
       const lastSyncAt = new Date().toISOString()
-      await store.set(user, provider, { ...synced.credential, consentId: stored.consentId, redirectUri: stored.redirectUri, lastSyncAt, consentExpiresAt: synced.consentExpiresAt, excludedStableAccountIds: stored.excludedStableAccountIds })
+      await store.set(user, provider, { ...synced.credential, consentId: stored.consentId, redirectUri: stored.redirectUri, lastSyncAt, consentExpiresAt: synced.consentExpiresAt })
       metrics.recordBank(provider, 'success')
-      const filtered = applyAccountExclusions(stored, synced.accounts, synced.transactions)
-      results.push({ connection: { ...connection(provider, stored), lastSyncAt, consentExpiresAt: synced.consentExpiresAt }, accounts: filtered.accounts, transactions: filtered.transactions, reconciliation: synced.reconciliation })
+      const excludedStableAccountIds = excludedAccounts.map((exclusion) => exclusion.stableAccountId)
+      const filtered = applyAccountExclusions(excludedStableAccountIds, synced.accounts, synced.transactions)
+      results.push({ connection: { ...connection(provider, stored), lastSyncAt, consentExpiresAt: synced.consentExpiresAt, excludedAccounts }, accounts: filtered.accounts, transactions: filtered.transactions, reconciliation: synced.reconciliation })
     } catch (error) {
       metrics.recordBank(provider, /consent.*expired/i.test(String(error?.message || error)) ? 'expired' : 'failure')
-      results.push({ connection: connection(provider, stored, error instanceof Error ? error.message : 'Synchronization failed.'), accounts: [], transactions: [] })
+      results.push({ connection: { ...connection(provider, stored, error instanceof Error ? error.message : 'Synchronization failed.'), excludedAccounts }, accounts: [], transactions: [] })
     }
   }
   return { connections: results, synchronizedAt: new Date().toISOString() }
@@ -445,9 +471,34 @@ const server = createServer(async (request, response) => {
       const input = await body(request)
       const stableAccountId = String(input.stableAccountId || '')
       if (!isValidStableAccountId(stableAccountId)) throw new HttpError(400, 'invalid_stable_account_id', 'Invalid stable account id.')
-      const excludedStableAccountIds = addExcludedStableAccountId(stored.excludedStableAccountIds, stableAccountId)
-      await store.set(user, provider, { ...stored, excludedStableAccountIds })
+      const accountName = typeof input.accountName === 'string' ? input.accountName : undefined
+      // Durable, connection-independent storage (fixed 2026-08-27, PR #154,
+      // after independent review): addAccountExclusion() persists to
+      // connector_account_exclusions (migration 011) / EncryptedStore's own
+      // accountExclusions, atomically and idempotently -- never a read-
+      // modify-write on this credential row, and never lost by a later
+      // disconnect/reconnect of this same provider.
+      await store.addAccountExclusion(user, provider, stableAccountId, accountName)
       return send(response, 200, { excluded: true })
+    }
+    // Restore ("un-remove") a previously-excluded account -- see the
+    // Connections page's "Removed from Finance Planner [Restore]" row.
+    // Deliberately does NOT require an existing stored connection: a user
+    // may want to restore an exclusion for a provider they haven't
+    // reconnected yet, and the operation is a harmless no-op either way if
+    // the account never resurfaces. A subsequent normal sync (never this
+    // endpoint) is what actually brings the account back through the
+    // reviewed import path -- this never resurrects old local transactions
+    // by guessing.
+    const restoreMatch = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})\/exclusions\/([a-f0-9]{64})$/)
+    if (request.method === 'DELETE' && restoreMatch) {
+      const user = userId(request)
+      const provider = restoreMatch[1]
+      const stableAccountId = restoreMatch[2]
+      const adapter = providerAdapter(provider)
+      authorizeProviderUser(adapter, user, env)
+      await store.removeAccountExclusion(user, provider, stableAccountId)
+      return send(response, 200, { restored: true })
     }
     const institutionsMatch = url.pathname.match(/^\/api\/connectors\/([a-z0-9][a-z0-9-]{1,39})\/institutions$/)
     if (request.method === 'GET' && institutionsMatch) {

@@ -174,13 +174,13 @@ function validateAccount(value, index) {
 
 function validateTransaction(value, index) {
   if (!isPlainRecord(value)) throw new HttpError(400, 'invalid_cloud_state', `transactions[${index}] must be an object.`)
-  exactKeys(value, new Set(['id', 'accountId', 'description', 'category', 'type', 'amountCents', 'date', 'recurring']), `transactions[${index}]`)
+  exactKeys(value, new Set(['id', 'accountId', 'description', 'category', 'type', 'amountCents', 'date', 'recurring', 'stableTransactionId']), `transactions[${index}]`)
   const type = boundedString(value.type, `transactions[${index}].type`, 16)
   if (!TRANSACTION_TYPES.has(type)) throw new HttpError(400, 'invalid_cloud_state', `transactions[${index}].type is invalid.`)
   const date = boundedString(value.date, `transactions[${index}].date`, 10)
   if (!DATE_PATTERN.test(date)) throw new HttpError(400, 'invalid_cloud_state', `transactions[${index}].date is invalid.`)
   if (value.recurring !== undefined && typeof value.recurring !== 'boolean') throw new HttpError(400, 'invalid_cloud_state', `transactions[${index}].recurring must be boolean.`)
-  return {
+  const result = {
     id: boundedString(value.id, `transactions[${index}].id`, 128),
     accountId: boundedString(value.accountId, `transactions[${index}].accountId`, 128),
     description: boundedString(value.description, `transactions[${index}].description`, 160),
@@ -190,6 +190,12 @@ function validateTransaction(value, index) {
     date,
     ...(value.recurring === undefined ? {} : { recurring: value.recurring }),
   }
+  // stableTransactionId (2026-08-27, PR #154 reconnect-dedup fix): same
+  // bound as Account.stableId/externalId -- see stableTransactionId() in
+  // providers.js.
+  const stableTransactionId = optionalBoundedString(value.stableTransactionId, `transactions[${index}].stableTransactionId`, MAX_EXTERNAL_ID_LENGTH)
+  if (stableTransactionId !== undefined) result.stableTransactionId = stableTransactionId
+  return result
 }
 
 function validateGoal(value, index) {
