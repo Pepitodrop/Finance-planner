@@ -20,9 +20,9 @@
     "test-account:clear-data": "node scripts/clear-test-account-data.mjs"
   },
   "dependencies": {
-    "@simplewebauthn/server": "^13.1.2",
+    "@simplewebauthn/server": "^13.3.3",
     "google-auth-library": "^10.9.1",
-    "pg": "^8.16.3"
+    "pg": "^8.23.0"
   },
   "engines": {
     "node": ">=22"
