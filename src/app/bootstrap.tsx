@@ -11,6 +11,7 @@ import { MobileEnhancements } from '../MobileEnhancements'
 import { MobileExperience } from '../MobileExperience'
 import { MobileProductionRuntime } from '../MobileProductionRuntime'
 import { MobileRuntime } from '../MobileRuntime'
+import StartingPage from '../StartingPage'
 import { TestEnrollmentPage } from '../TestEnrollmentPage'
 import { VaultGate } from '../VaultGate'
 import { WebMobileHardening } from '../WebMobileHardening'
@@ -55,23 +56,27 @@ import '../features/planning/planning.css'
 import '../runtime-surfaces/runtime-surfaces.css'
 import '../post-release-fixes.css'
 
-const enrollmentRoute = window.location.pathname === '/test-enrollment'
+const normalizedPath = window.location.pathname.replace(/\/+$/, '') || '/'
+const enrollmentRoute = normalizedPath === '/test-enrollment'
+const startingPageRoute = normalizedPath === '/startingPage'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <AcceptanceCrashTrigger />
-      {enrollmentRoute ? <TestEnrollmentPage /> : <>
-        <RuntimeSurfaceCoordinator>
-        <WebMobileHardening />
-        <FrontendExperience />
-        <MobileProductionRuntime />
-        <MobileRuntime />
-        <MobileConnectivityStatus />
-        <MobileEnhancements />
-        <MobileExperience />
-        <AuthGate>{(user, { logout }) => <VaultGate key={user.id} userId={user.id}>{(lock) => <><App userId={user.id} userName={user.name} user={user} onLockVault={lock} onLogout={logout}/><CloudSyncStatus /><AutomaticTransactionAnalysis /></>}</VaultGate>}</AuthGate>
-        </RuntimeSurfaceCoordinator>
+      {startingPageRoute ? <StartingPage /> : <>
+        <AcceptanceCrashTrigger />
+        {enrollmentRoute ? <TestEnrollmentPage /> : <>
+          <RuntimeSurfaceCoordinator>
+          <WebMobileHardening />
+          <FrontendExperience />
+          <MobileProductionRuntime />
+          <MobileRuntime />
+          <MobileConnectivityStatus />
+          <MobileEnhancements />
+          <MobileExperience />
+          <AuthGate>{(user, { logout }) => <VaultGate key={user.id} userId={user.id}>{(lock) => <><App userId={user.id} userName={user.name} user={user} onLockVault={lock} onLogout={logout}/><CloudSyncStatus /><AutomaticTransactionAnalysis /></>}</VaultGate>}</AuthGate>
+          </RuntimeSurfaceCoordinator>
+        </>}
       </>}
     </ErrorBoundary>
   </React.StrictMode>,
