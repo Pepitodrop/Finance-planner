@@ -102,11 +102,13 @@ describe('ApplicationShell navigation', () => {
   it('logs out directly from both the desktop shell and mobile More menu', async () => {
     const user = userEvent.setup()
     const onLogout = vi.fn().mockResolvedValue(undefined)
-    render(<ApplicationShell activeDestination="dashboard" onNavigate={vi.fn()} onLogout={onLogout}><h1>dashboard</h1></ApplicationShell>)
+    const first = render(<ApplicationShell activeDestination="dashboard" onNavigate={vi.fn()} onLogout={onLogout}><h1>dashboard</h1></ApplicationShell>)
 
     await user.click(within(screen.getByRole('complementary')).getByRole('button', { name: 'Log out of Finance Planner' }))
     expect(onLogout).toHaveBeenCalledTimes(1)
+    first.unmount()
 
+    render(<ApplicationShell activeDestination="dashboard" onNavigate={vi.fn()} onLogout={onLogout}><h1>dashboard</h1></ApplicationShell>)
     await user.click(within(screen.getByRole('navigation', { name: 'Mobile primary navigation' })).getByRole('button', { name: 'More' }))
     await user.click(within(screen.getByRole('dialog', { name: 'More destinations' })).getByRole('button', { name: 'Log out of Finance Planner' }))
     expect(onLogout).toHaveBeenCalledTimes(2)
