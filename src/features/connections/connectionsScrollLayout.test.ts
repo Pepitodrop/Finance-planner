@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it } from 'vitest'
-import '../../styles.css'
-import './connections.css'
-import '../../post-release-fixes.css'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+const connectionCss = readFileSync(resolve('src/features/connections/connections.css'), 'utf8')
+const postReleaseCss = readFileSync(resolve('src/post-release-fixes.css'), 'utf8')
 
 afterEach(() => {
   document.body.innerHTML = ''
@@ -11,6 +13,9 @@ afterEach(() => {
 
 describe('Connections setup modal scroll layout', () => {
   it('keeps long step content in normal flex flow so the content region owns scrolling', () => {
+    const style = document.createElement('style')
+    style.textContent = `${connectionCss}\n${postReleaseCss}`
+    document.head.append(style)
     document.body.innerHTML = `
       <section class="modal connections-setup-modal">
         <div class="connections-setup-content">
