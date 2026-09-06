@@ -123,19 +123,14 @@ to wire up one secret/URL.
 **Priority:** P2
 **Depends on:** None
 
+## Completed
+
 ### Add 'google-subscriptions' to the connector-store provider CHECK constraint
 
-**What:** `connector_connections`/`oauth_nonces`' `provider` CHECK constraint (`server/migrations/001_connector_store.sql`) only allows `gocardless`/`finapi`/`paypal`, but `google-subscriptions-router.js` writes to the same `store` (`server.js` passes the identical `persistence.store` into both) using `provider = 'google-subscriptions'`. On a Postgres-backed deployment this would reject `createConnectionSetup()`/`registerOAuthNonce()` calls for Google Subscriptions outright.
-
-**Why:** A pre-existing latent bug, unrelated to any provider-specific feature work — just never noticed because nobody had touched this exact constraint since it was written.
-
-**Context:** Found 2026-08-20 while adding `'enablebanking'` to the same constraint (migration `009_enable_banking_provider.sql`). Deliberately not bundled into that migration — fixing an unrelated bug while touching the same line is a scope-creep temptation, not a reason. Fix is a one-line addition to a new migration's CHECK constraint value list (same drop-and-re-add pattern `009` already uses, Postgres has no `ALTER CHECK`).
-
-**Effort:** S
-**Priority:** P2
-**Depends on:** None
-
-## Completed
+Fixed 2026-09-06. Migration `010_google_subscriptions_provider.sql` now adds
+`google-subscriptions` to both shared connector provider constraints, with a matching
+rollback and regression coverage. PostgreSQL deployments can therefore persist the
+Google Subscriptions OAuth nonce and connection instead of rejecting the provider.
 
 ### Prevent user enumeration via the passkey authentication-options endpoint
 
@@ -314,4 +309,3 @@ Dismissed via the GitHub API (`dismissed_reason: false positive`) with the dataf
 evidence recorded in the dismissal comment; no code change was made, since replacing the
 derivation would break compatibility with existing encrypted `auth-store` data without a
 migration and address a different threat model than the one actually flagged.
-

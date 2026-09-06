@@ -97,7 +97,8 @@ test('the provider callback route redirects every failure back into the app inst
   assert.ok(consumeCall > missingClaims && pendingFailure > consumeCall)
   // Once state HAS been cryptographically verified, its redirectUri is
   // trusted -- this and every failure branch after this point uses it.
-  assert.match(callbackRoute.slice(pendingFailure, pendingFailure + 200), /redirectWithError\(state\.redirectUri\)/)
+  const pendingFailureEnd = callbackRoute.indexOf('let completed', pendingFailure)
+  assert.match(callbackRoute.slice(pendingFailure, pendingFailureEnd), /redirectWithError\(state\.redirectUri\)/)
 })
 
 test('the provider callback route redirects instead of throwing raw JSON when consumePendingConnectionSetup itself fails (not just returns null)', () => {
@@ -161,7 +162,7 @@ test('the provider callback route never activates a connection until finalizeCon
   assert.ok(finalizeCatch > finalizeCall)
   assert.match(callbackRoute.slice(finalizeCatch, finalizeCatch + 800), /redirectWithError\(state\.redirectUri\)/)
   // The success redirect must come strictly after finalizeConnection, never before it.
-  const successRedirect = callbackRoute.indexOf('const success = new URL(state.redirectUri)')
+  const successRedirect = callbackRoute.indexOf('const success = new URL(state.redirectUri)', finalizeCall)
   assert.ok(successRedirect > finalizeCall)
 })
 
