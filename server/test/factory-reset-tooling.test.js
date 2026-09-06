@@ -29,8 +29,9 @@ test('factory reset clears every application-data table but preserves schema his
     'request_rate_limits',
     'auth_store',
   ]) {
-    assert.match(source, new RegExp(`DELETE FROM ${table}`))
+    assert.match(source, new RegExp(`['\"]${table}['\"]`))
   }
+  assert.match(source, /client\.query\(`DELETE FROM \$\{table\}`\)/)
   assert.doesNotMatch(source, /DELETE FROM schema_migrations|TRUNCATE/i)
   assert.match(source, /schemaMigrationsPreserved/)
   assert.match(source, /verifiedEmpty: true/)
