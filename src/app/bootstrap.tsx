@@ -57,8 +57,10 @@ import '../runtime-surfaces/runtime-surfaces.css'
 import '../post-release-fixes.css'
 
 const normalizedPath = window.location.pathname.replace(/\/+$/, '') || '/'
-const enrollmentRoute = normalizedPath === '/test-enrollment'
 const startingPageRoute = normalizedPath === '/startingPage'
+// Test enrollment is an explicitly non-production bootstrap flow. In production,
+// /startingPage is the only route that may bypass the normal login/auth/vault gates.
+const enrollmentRoute = !import.meta.env.PROD && normalizedPath === '/test-enrollment'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
